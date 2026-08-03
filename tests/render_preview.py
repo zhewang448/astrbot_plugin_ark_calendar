@@ -27,7 +27,7 @@ class PreviewPlugin:
 
     async def html_render(self, template: str, data: dict, options: dict | None = None) -> str:
         html = Environment(autoescape=False).from_string(template).render(**data)
-        name = "calendar-rendered.html" if "方舟日历" in template else "birthday-rendered.html"
+        name = "calendar-rendered.html" if "EVENT TIMELINE" in template else "birthday-rendered.html"
         path = self.output / name
         path.write_text('<!doctype html><html><head><meta charset="utf-8"></head><body>' + html + '</body></html>', "utf-8")
         return str(path)
@@ -41,7 +41,7 @@ async def main() -> None:
         {"show_source_footer": True},
         Logger(),
     )
-    service._now = lambda: datetime(2026, 8, 2, 12, 0, tzinfo=ZoneInfo("Asia/Shanghai"))
+    service._now = lambda: datetime(2026, 8, 3, 12, 0, tzinfo=ZoneInfo("Asia/Shanghai"))
     await service.initialize()
     try:
         snapshot = await service.snapshot()

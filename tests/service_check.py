@@ -35,7 +35,7 @@ async def main() -> None:
         },
         Logger(),
     )
-    service._now = lambda: datetime(2026, 8, 2, 12, 0, tzinfo=ZoneInfo("Asia/Shanghai"))
+    service._now = lambda: datetime(2026, 8, 3, 12, 0, tzinfo=ZoneInfo("Asia/Shanghai"))
     await service.initialize()
     try:
         snapshot = await service.snapshot(force=True)

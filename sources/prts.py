@@ -77,24 +77,33 @@ class PrtsSource:
         return result
 
     async def resolve_avatar_urls(self, names: list[str]) -> dict[str, str]:
-        titles = "|".join(f"File:头像_{name}.png" for name in dict.fromkeys(names) if name)
-        if not titles:
+        unique_names = list(dict.fromkeys(name for name in names if name))
+        if not unique_names:
             return {}
-        data = await self.http.json(self.api_url, params={
-            "action": "query", "titles": titles, "prop": "imageinfo",
-            "iiprop": "url", "format": "json", "formatversion": "2",
-        })
         result: dict[str, str] = {}
-        for page in data.get("query", {}).get("pages", []):
-            infos = page.get("imageinfo") or []
-            if not infos:
-                continue
-            url = infos[0].get("url", "")
-            file_name = unquote(PurePosixPath(urlparse(url).path).name)
-            match = re.match(r"头像_(.+)\.png$", file_name, re.I)
-            if match:
-                result[match.group(1)] = url
+        # MediaWiki 对单次 titles 数量有限制，分批请求也可避免 URL 过长。
+        for offset in range(0, len(unique_names), 20):
+            batch = unique_names[offset:offset + 20]
+            titles = "|".join(f"File:头像_{name}.png" for name in batch)
+            data = await self.http.json(self.api_url, params={
+                "action": "query", "titles": titles, "prop": "imageinfo",
+                "iiprop": "url", "format": "json", "formatversion": "2",
+            })
+            for page in data.get("query", {}).get("pages", []):
+                infos = page.get("imageinfo") or []
+                if not infos:
+                    continue
+                url = infos[0].get("url", "")
+                name = self._avatar_name_from_url(url)
+                if name:
+                    result[name] = url
         return result
+
+    @staticmethod
+    def _avatar_name_from_url(url: str) -> str:
+        file_name = unquote(PurePosixPath(urlparse(url).path).name)
+        match = re.match(r"头像_(.+)\.png$", file_name, re.I)
+        return match.group(1) if match else ""
 
     async def event_detail(self, name: str) -> dict:
         data = await self.http.json(self.api_url, params={

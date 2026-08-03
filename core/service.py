@@ -387,8 +387,6 @@ class CalendarService:
         info = self._operator_index.get(name, {})
         urls = avatar_urls or await self._safe_avatar_urls([name])
         avatar = await self.assets.data_uri(urls.get(name, ""))
-        if not avatar:
-            avatar = await self.assets.data_uri(self._local_avatar(name))
         return Operator(
             name=name,
             birthday_month=birthday.get("month"),
@@ -397,18 +395,6 @@ class CalendarService:
             rarity=info.get("rarity"),
             avatar=avatar,
         )
-
-    def _local_avatar(self, name: str) -> str:
-        files = {
-            "卡缇": "operator-cardigan.png",
-            "安洁莉娜": "operator-angelina.png",
-            "森蚺": "operator-eunectes.png",
-            "远牙": "operator-fartooth.png",
-            "嘉辛塔": "operator-jacinta.png",
-            "时隙": "operator-timeslot.png",
-        }
-        file_name = files.get(name)
-        return str(self.plugin_dir / "assets" / file_name) if file_name else ""
 
     async def _safe_avatar_urls(self, names: list[str]) -> dict[str, str]:
         assert self.prts

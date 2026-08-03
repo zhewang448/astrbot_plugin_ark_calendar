@@ -1,6 +1,6 @@
 # astrbot_plugin_ark_calendar
 
-明日方舟活动日历插件。聚合 PRTS、anything-ics 与 ArknightsGachaData，生成 1440px 宽的活动/寻访长图。
+罗德岛行动日历是一款明日方舟信息聚合插件。聚合 PRTS、anything-ics 与 ArknightsGachaData，生成 1440px 宽的活动/寻访长图。
 
 ## 指令
 
@@ -19,6 +19,14 @@
 ## 安装
 
 将插件目录放入 AstrBot 的 `data/plugins/`，在 WebUI 安装依赖后启用插件。需要 AstrBot 支持最新的插件配置注入和 `html_render()` API。
+
+## 图片资源策略
+
+- 干员头像通过 PRTS MediaWiki API 的 `imageinfo` 动态解析。
+- 活动标题图通过 PRTS 活动页面与文件 API 动态解析。
+- 卡池图优先使用 PRTS 卡池一览；缺少正式卡池图时，使用 PRTS API 获取六星 UP 干员头像进行组合。
+- 插件不会维护逐干员头像表；网络图片仅下载到 AstrBot 插件数据目录作为运行时缓存。
+- 插件包内只保留字体、资源图标和通用占位背景。
 
 ## 缓存
 

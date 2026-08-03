@@ -22,7 +22,7 @@ class ArkCalendarPlugin(Star):
 
     async def initialize(self) -> None:
         await self.service.initialize()
-        logger.info("明日方舟活动日历插件已初始化。")
+        logger.info("罗德岛行动日历插件已初始化。")
 
     @filter.command("方舟日历")
     async def calendar_command(self, event: AstrMessageEvent):

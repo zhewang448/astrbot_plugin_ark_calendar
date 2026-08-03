@@ -1,6 +1,6 @@
 name: astrbot_plugin_ark_calendar
-display_name: 明日方舟活动日历
-desc: 聚合 PRTS、anything-ics 与卡池数据，生成明日方舟风格活动日历长图。
+display_name: 罗德岛行动日历
+desc: 聚合 PRTS、anything-ics 与卡池数据，生成罗德岛风格的活动、寻访与生日行动日历。
 version: v0.2.0
 author: 34948
 repo: https://github.com/34948/astrbot_plugin_ark_calendar
