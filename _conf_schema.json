@@ -1,48 +1,336 @@
 {
-  "timeline_days": {
-    "description": "日历时间轴展示天数",
-    "type": "int",
-    "default": 28,
-    "hint": "建议保持 28 天。"
+  "basic": {
+    "description": "基础显示与交互",
+    "type": "object",
+    "items": {
+      "timeline_days": {
+        "description": "日历时间轴展示天数",
+        "type": "int",
+        "default": 28,
+        "hint": "建议保持 28 天。"
+      },
+      "include_recent_operators": {
+        "description": "显示近期新增干员",
+        "type": "bool",
+        "default": true
+      },
+      "include_long_term": {
+        "description": "显示长期活动",
+        "type": "bool",
+        "default": true
+      },
+      "show_source_footer": {
+        "description": "显示数据来源页脚",
+        "type": "bool",
+        "default": true
+      }
+    },
+    "hint": "调整日历内容展示；一般保持默认即可。"
   },
-  "cache_ttl_minutes": {
-    "description": "数据缓存时间（分钟）",
-    "type": "int",
-    "default": 30
+  "scheduled_report": {
+    "description": "自动方舟日报",
+    "type": "object",
+    "items": {
+      "enabled": {
+        "description": "启用定时日报",
+        "type": "bool",
+        "default": false,
+        "hint": "按下方指定星期和时间发送；不会补发插件启动前错过的任务。"
+      },
+      "weekdays": {
+        "description": "每周发送日期",
+        "type": "list",
+        "options": [
+          "mon",
+          "tue",
+          "wed",
+          "thu",
+          "fri",
+          "sat",
+          "sun"
+        ],
+        "labels": [
+          "星期一",
+          "星期二",
+          "星期三",
+          "星期四",
+          "星期五",
+          "星期六",
+          "星期日"
+        ],
+        "default": [
+          "mon",
+          "tue",
+          "wed",
+          "thu",
+          "fri",
+          "sat",
+          "sun"
+        ],
+        "hint": "可多选，按中国标准时间（Asia/Shanghai）执行。"
+      },
+      "times": {
+        "description": "每日发送时间",
+        "type": "list",
+        "default": [
+          "08:00"
+        ],
+        "hint": "可填写多个 24 小时制时间，每项使用 HH:MM，例如 08:00、18:30。"
+      },
+      "target_sid_list": {
+        "description": "日报目标 SID 列表",
+        "type": "list",
+        "default": [],
+        "hint": "日报将发送到这些会话；可在对应会话使用 /sid 获取 SID。"
+      },
+      "refresh_data_before_send": {
+        "description": "发送前强制刷新数据源",
+        "type": "bool",
+        "default": true,
+        "hint": "重新请求活动、卡池和作战信息；不会默认清空已缓存的头像与活动图片。"
+      }
+    },
+    "hint": "按指定星期和时间发送行动日历，默认关闭且不会补发错过的任务。"
   },
-  "request_timeout": {
-    "description": "网络请求超时（秒）",
-    "type": "int",
-    "default": 15
+  "cache_and_render": {
+    "description": "缓存与图片渲染",
+    "type": "object",
+    "items": {
+      "data_cache_ttl_minutes": {
+        "description": "数据快照缓存时间（分钟）",
+        "type": "int",
+        "default": 30,
+        "hint": "数据快照有效期；跨北京时间零点会自动失效。"
+      },
+      "final_image_cache_enabled": {
+        "description": "复用最终日历图片",
+        "type": "bool",
+        "default": true,
+        "hint": "数据与展示配置未变化时，直接发送已生成图片，无需再次调用 T2I。"
+      },
+      "final_image_cache_max_age_minutes": {
+        "description": "最终图片最长复用时间（分钟）",
+        "type": "int",
+        "default": 30,
+        "hint": "实际不会超过数据快照缓存时间。"
+      },
+      "final_image_cache_keep_count": {
+        "description": "保留最终图片数量",
+        "type": "int",
+        "default": 3,
+        "hint": "用于异常时回退到最近一次可用日历图片。"
+      },
+      "send_rendering_notice": {
+        "description": "渲染前发送提示",
+        "type": "bool",
+        "default": true,
+        "hint": "仅在最终图片缓存未命中时发送“正在生成”提示。"
+      },
+      "slow_render_warning_seconds": {
+        "description": "慢渲染日志阈值（秒）",
+        "type": "int",
+        "default": 15,
+        "hint": "超过该时间会记录警告日志。"
+      }
+    },
+    "hint": "推荐保持默认。开启最终图片缓存可减少重复 T2I 渲染。"
   },
-  "include_recent_operators": {
-    "description": "显示近期新增干员",
-    "type": "bool",
-    "default": true
+  "messages": {
+    "description": "消息文案与风格",
+    "type": "object",
+    "items": {
+      "profile": {
+        "description": "默认消息风格",
+        "type": "string",
+        "options": [
+          "rhodes_catgirl",
+          "plain",
+          "custom"
+        ],
+        "labels": [
+          "罗德岛轻度猫娘（默认）",
+          "极简正式",
+          "自定义文案"
+        ],
+        "default": "rhodes_catgirl",
+        "hint": "轻度猫娘仅用于普通交互；状态和管理员告警仍保持清晰正式。"
+      },
+      "rhodes_catgirl_preview": {
+        "description": "内置文案预览",
+        "type": "text",
+        "readonly": true,
+        "default": "【开始渲染】\n收到，正在为博士整理行动日程并绘制日历，稍等一下喵～\n\n【强制刷新】\n收到，正在重新核对活动、寻访和作战信息，新的行动日历很快送达喵～\n\n【定时日报】\n博士，今日罗德岛行动日历送达，请查收喵～\n\n【生日查询成功】\n博士，干员「卡缇」的生日是 7 月 15 日喵。\n\n【渲染失败】\n唔……日历终端这次没能完成绘制，已经记录问题并通知管理员。请博士稍后再试喵。",
+        "hint": "内置“罗德岛轻度猫娘”文案预览；此项仅用于查看，实际文案不可通过这里修改。",
+        "condition": {
+          "profile": "rhodes_catgirl"
+        }
+      },
+      "plain_preview": {
+        "description": "内置文案预览",
+        "type": "text",
+        "readonly": true,
+        "default": "【开始渲染】\n正在生成方舟日历，请稍候……\n\n【强制刷新】\n正在强制刷新方舟日历数据并重新生成图片，请稍候……\n\n【定时日报】\n今日罗德岛行动日历，请查收。\n\n【生日查询成功】\n干员「卡缇」的生日是 7 月 15 日。\n\n【渲染失败】\n方舟日历生成失败，已记录问题并通知管理员，请稍后重试。",
+        "hint": "内置“极简正式”文案预览；此项仅用于查看，实际文案不可通过这里修改。",
+        "condition": {
+          "profile": "plain"
+        }
+      },
+      "custom_messages": {
+        "description": "自定义消息模板",
+        "type": "dict",
+        "default": {},
+        "hint": "选择“自定义文案”后可编辑。留空的项目会回退到罗德岛轻度猫娘默认文案。可用变量：{name}、{birthday}、{details}、{candidates}。",
+        "condition": {
+          "profile": "custom"
+        },
+        "template_schema": {
+          "rendering_started": {
+            "title": "开始渲染",
+            "type": "string",
+            "default": "",
+            "hint": "手动执行 /方舟日历 且最终图片缓存未命中、即将获取数据或调用渲染器时发送。"
+          },
+          "force_refresh_started": {
+            "title": "强制刷新开始",
+            "type": "string",
+            "default": "",
+            "hint": "管理员执行 /方舟日历刷新 后，在强制刷新数据源和重新渲染前发送。"
+          },
+          "scheduled_report_caption": {
+            "title": "定时日报标题",
+            "type": "string",
+            "default": "",
+            "hint": "定时日报成功发送时，作为日历图片前的说明文字发送到目标 SID。"
+          },
+          "cached_fallback_notice": {
+            "title": "缓存降级提示",
+            "type": "string",
+            "default": "",
+            "hint": "数据刷新或图片渲染失败、改为发送最近一次保存的日历图片时发送。"
+          },
+          "render_failed": {
+            "title": "渲染失败提示",
+            "type": "string",
+            "default": "",
+            "hint": "没有可用的最终图片缓存，且日历生成或渲染最终失败时发送给命令发起者。"
+          },
+          "birthday_missing_query": {
+            "title": "未填写干员名称",
+            "type": "string",
+            "default": "",
+            "hint": "用户执行 /方舟生日 但未填写干员名称时发送。"
+          },
+          "birthday_found": {
+            "title": "生日查询成功",
+            "type": "string",
+            "default": "",
+            "hint": "成功查询到干员生日时发送。可用 {name}、{birthday}、{details}。"
+          },
+          "birthday_unknown": {
+            "title": "生日未公开",
+            "type": "string",
+            "default": "",
+            "hint": "找到干员但生日尚未公开或数据源未记录时发送。可用 {name}、{details}。"
+          },
+          "birthday_not_found": {
+            "title": "未找到干员",
+            "type": "string",
+            "default": "",
+            "hint": "未找到匹配干员时发送。可用 {name}。"
+          },
+          "birthday_candidates": {
+            "title": "多个候选干员",
+            "type": "string",
+            "default": "",
+            "hint": "模糊匹配到多个干员、需要用户补全名称时发送。可用 {candidates}。"
+          }
+        }
+      }
+    },
+    "hint": "选择内置风格时可查看全部文案预览；选择“自定义文案”后才显示可编辑的消息模板。"
   },
-  "include_long_term": {
-    "description": "显示长期活动",
-    "type": "bool",
-    "default": true
+  "admin_notification": {
+    "description": "管理员通知与状态",
+    "type": "object",
+    "items": {
+      "enabled": {
+        "description": "启用管理员异常通知",
+        "type": "bool",
+        "default": false,
+        "hint": "数据源降级、刷新失败、渲染失败或日报发送失败时通知管理员。"
+      },
+      "admin_sid_list": {
+        "description": "管理员 SID 列表",
+        "type": "list",
+        "default": [],
+        "hint": "可在对应会话使用 /sid 获取 SID。"
+      },
+      "refresh_status_mode": {
+        "description": "定时刷新后的状态通知",
+        "type": "string",
+        "options": [
+          "off",
+          "abnormal_only",
+          "all"
+        ],
+        "labels": [
+          "关闭",
+          "仅异常时（推荐）",
+          "每次刷新后都发送"
+        ],
+        "default": "abnormal_only"
+      },
+      "notify_on_recovery": {
+        "description": "异常恢复后通知管理员",
+        "type": "bool",
+        "default": true
+      },
+      "cooldown_minutes": {
+        "description": "相同异常通知冷却时间（分钟）",
+        "type": "int",
+        "default": 60,
+        "hint": "同一来源持续异常时，冷却期内不会重复刷屏。"
+      }
+    },
+    "hint": "设置管理员 SID 与异常通知规则；仅在需要运维告警时启用。"
   },
-  "show_source_footer": {
-    "description": "显示数据来源页脚",
-    "type": "bool",
-    "default": true
-  },
-  "anything_ics_base_url": {
-    "description": "anything-ics 镜像地址",
-    "type": "string",
-    "default": "https://proxy.avgt.ink/ics"
-  },
-  "prts_base_url": {
-    "description": "PRTS 地址",
-    "type": "string",
-    "default": "https://prts.wiki"
-  },
-  "gacha_data_url": {
-    "description": "ArknightsGachaData 地址",
-    "type": "string",
-    "default": "https://raw.githubusercontent.com/s-yh-china/ArknightsGachaData/master/data/pool_info.json"
+  "data_sources": {
+    "description": "数据源与网络",
+    "type": "object",
+    "items": {
+      "request_timeout_seconds": {
+        "description": "网络请求超时（秒）",
+        "type": "int",
+        "default": 15
+      },
+      "http_proxy": {
+        "description": "插件 HTTP 代理",
+        "type": "string",
+        "default": "",
+        "hint": "留空则尝试使用 AstrBot 全局 HTTP 代理。"
+      },
+      "anything_ics_base_url": {
+        "description": "anything-ics 活动与生日数据地址",
+        "type": "string",
+        "default": "https://proxy.avgt.ink/ics",
+        "hint": "非必要不要修改。该地址负责活动时间与干员生日数据；修改为不可用地址可能导致活动和生日信息无法更新。",
+        "obvious_hint": true
+      },
+      "prts_base_url": {
+        "description": "PRTS Wiki 数据地址",
+        "type": "string",
+        "default": "https://prts.wiki",
+        "hint": "非必要不要修改。该地址负责首页作战信息、活动详情、干员资料和图片解析；修改后可能导致大量数据源异常。",
+        "obvious_hint": true
+      },
+      "gacha_data_url": {
+        "description": "ArknightsGachaData 卡池数据地址",
+        "type": "string",
+        "default": "https://raw.githubusercontent.com/s-yh-china/ArknightsGachaData/master/data/pool_info.json",
+        "hint": "非必要不要修改。该地址负责卡池时间、类型和卡池 ID；修改为不兼容的数据地址可能导致寻访时间轴无法生成。",
+        "obvious_hint": true
+      }
+    },
+    "hint": "仅在数据源不可访问、需要代理或使用镜像时修改。"
   }
 }

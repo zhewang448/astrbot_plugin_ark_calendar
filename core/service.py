@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import difflib
 import hashlib
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Awaitable, Callable
@@ -12,6 +13,7 @@ import aiohttp
 
 from .assets import AssetCache
 from .cache import JsonCache
+from .config import config_value
 from .models import BirthdayGroup, CalendarSnapshot, Operator, SourceState, TimelineItem, TodayInfo, parse_iso
 from ..sources.anything_ics import AnythingIcsSource
 from ..sources.gacha import GachaSource
@@ -38,9 +40,12 @@ class CalendarService:
         self._birthdays: list[dict] = []
         self._operator_index: dict[str, dict] = {}
         self.last_snapshot: CalendarSnapshot | None = None
+        self.last_refresh_error = ""
+        self.last_refresh_used_cache = False
+        self.last_refresh_finished_at = ""
 
     async def initialize(self) -> None:
-        timeout = aiohttp.ClientTimeout(total=max(5, int(self.config.get("request_timeout", 15))))
+        timeout = aiohttp.ClientTimeout(total=max(5, int(self.value("data_sources", "request_timeout_seconds", 15, "request_timeout"))))
         proxy = self._http_proxy()
         self.session = aiohttp.ClientSession(
             timeout=timeout,
@@ -56,17 +61,19 @@ class CalendarService:
             self.logger.info("方舟日历网络请求已启用 AstrBot HTTP 代理。")
         self.anything = AnythingIcsSource(
             self.http,
-            self.config.get("anything_ics_base_url", "https://proxy.avgt.ink/ics"),
+            self.value("data_sources", "anything_ics_base_url", "https://proxy.avgt.ink/ics", "anything_ics_base_url"),
         )
         self.prts = PrtsSource(
             self.http,
-            self.config.get("prts_base_url", "https://prts.wiki"),
+            self.value("data_sources", "prts_base_url", "https://prts.wiki", "prts_base_url"),
         )
         self.gacha = GachaSource(
             self.http,
-            self.config.get(
+            self.value(
+                "data_sources",
                 "gacha_data_url",
                 "https://raw.githubusercontent.com/s-yh-china/ArknightsGachaData/master/data/pool_info.json",
+                "gacha_data_url",
             ),
         )
         cached = self.cache.load("snapshot.json")
@@ -77,7 +84,7 @@ class CalendarService:
                 self.logger.warning("无法读取日历快照缓存。", exc_info=True)
 
     def _http_proxy(self) -> str:
-        plugin_proxy = str(self.config.get("http_proxy", "") or "").strip()
+        plugin_proxy = str(self.value("data_sources", "http_proxy", "", "http_proxy") or "").strip()
         if plugin_proxy:
             return plugin_proxy
         try:
@@ -91,21 +98,42 @@ class CalendarService:
         if self.session and not self.session.closed:
             await self.session.close()
 
+    def value(self, section: str, key: str, default: Any, legacy_key: str | None = None) -> Any:
+        return config_value(self.config, section, key, default, legacy_key)
+
+    def cache_ttl(self) -> timedelta:
+        return timedelta(minutes=max(1, int(self.value("cache_and_render", "data_cache_ttl_minutes", 30, "cache_ttl_minutes"))))
+
+    def snapshot_is_fresh(self) -> bool:
+        return self._snapshot_is_fresh(self.cache_ttl())
+
     async def snapshot(self, force: bool = False) -> CalendarSnapshot:
-        ttl = timedelta(minutes=max(1, int(self.config.get("cache_ttl_minutes", 30))))
+        ttl = self.cache_ttl()
         if not force and self._snapshot_is_fresh(ttl):
+            self.logger.debug("方舟日历快照缓存命中。")
             return self.last_snapshot  # type: ignore[return-value]
         async with self.refresh_lock:
             if not force and self._snapshot_is_fresh(ttl):
+                self.logger.debug("方舟日历快照缓存已由并发请求刷新。")
                 return self.last_snapshot  # type: ignore[return-value]
+            started = time.monotonic()
+            self.logger.info(f"开始{'强制刷新' if force else '刷新'}方舟日历数据。")
             try:
                 result = await self._build_snapshot()
                 self.last_snapshot = result
                 self.cache.save("snapshot.json", result.to_dict())
+                self.last_refresh_error = ""
+                self.last_refresh_used_cache = False
+                self.last_refresh_finished_at = self._now().isoformat()
+                self.logger.info(f"方舟日历数据刷新完成，耗时 {time.monotonic() - started:.2f} 秒。")
                 return result
-            except Exception:
-                self.logger.error("方舟日历刷新失败。", exc_info=True)
+            except Exception as exc:
+                self.last_refresh_error = self._short_error(exc)
+                self.last_refresh_used_cache = self.last_snapshot is not None
+                self.last_refresh_finished_at = self._now().isoformat()
+                self.logger.error(f"方舟日历刷新失败：{self.last_refresh_error}", exc_info=True)
                 if self.last_snapshot:
+                    self.logger.warning("方舟日历将继续使用上一次快照。")
                     return self.last_snapshot
                 raise
 
@@ -116,7 +144,8 @@ class CalendarService:
             generated = parse_iso(self.last_snapshot.generated_at).astimezone(CN_TZ)
         except (TypeError, ValueError):
             return False
-        return self._now() - generated < ttl
+        now = self._now()
+        return now.date() == generated.date() and now - generated < ttl
 
     async def find_operator(self, query: str) -> tuple[Operator | None, list[str]]:
         await self._ensure_reference_data()
@@ -124,7 +153,7 @@ class CalendarService:
         by_name = {self.normalize_name(item["name"]): item for item in self._birthdays}
         record = by_name.get(normalized)
         if record:
-            return await self._operator_from_record(record), []
+            return self._operator_summary(record), []
         candidates = [
             item["name"]
             for item in self._birthdays
@@ -139,8 +168,20 @@ class CalendarService:
             )
         if len(candidates) == 1:
             record = next(item for item in self._birthdays if item["name"] == candidates[0])
-            return await self._operator_from_record(record), []
+            return self._operator_summary(record), []
         return None, candidates[:8]
+
+    def _operator_summary(self, record: dict) -> Operator:
+        birthday = record.get("birthday") or {}
+        name = record["name"]
+        info = self._operator_index.get(name, {})
+        return Operator(
+            name=name,
+            birthday_month=birthday.get("month"),
+            birthday_day=birthday.get("day"),
+            profession=info.get("profession", ""),
+            rarity=info.get("rarity"),
+        )
 
     async def _ensure_reference_data(self) -> None:
         assert self.anything and self.prts
@@ -167,7 +208,7 @@ class CalendarService:
         assert self.anything and self.prts and self.gacha and self.assets
         now = self._now()
         start = (now - timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
-        end = start + timedelta(days=max(7, int(self.config.get("timeline_days", 28))))
+        end = start + timedelta(days=max(7, int(self.value("basic", "timeline_days", 28, "timeline_days"))))
 
         source_results = await asyncio.gather(
             self._fetch_cached(
@@ -223,7 +264,7 @@ class CalendarService:
         today_birthdays = [await self._operator_from_record(item, avatar_urls) for item in today_records]
 
         recent_operators: list[Operator] = []
-        if self.config.get("include_recent_operators", True):
+        if self.value("basic", "include_recent_operators", True, "include_recent_operators"):
             for item in home.get("recent", [])[:6]:
                 name = item.get("name", "")
                 if not name:
@@ -263,7 +304,7 @@ class CalendarService:
             recent_operators=recent_operators,
             events=event_items,
             gacha_pools=gacha_items,
-            long_term_events=long_items if self.config.get("include_long_term", True) else [],
+            long_term_events=long_items if self.value("basic", "include_long_term", True, "include_long_term") else [],
             source_states=source_states,
         )
 

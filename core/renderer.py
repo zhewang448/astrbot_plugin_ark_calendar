@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from .models import CalendarSnapshot, Operator, parse_iso
+from .models import CalendarSnapshot, parse_iso
 
 CN_TZ = ZoneInfo("Asia/Shanghai")
 
@@ -16,7 +16,6 @@ class CalendarRenderer:
         self.plugin = plugin
         self.service = service
         self.template = (Path(__file__).parent.parent / "templates" / "calendar.html").read_text("utf-8")
-        self.birthday_template = (Path(__file__).parent.parent / "templates" / "birthday.html").read_text("utf-8")
 
     async def calendar(self, snapshot: CalendarSnapshot) -> str:
         start, end = parse_iso(snapshot.timeline_start), parse_iso(snapshot.timeline_end)
@@ -38,27 +37,10 @@ class CalendarRenderer:
             "today_left": max(0, min(100, (now-start).total_seconds()/(end-start).total_seconds()*100)),
             "date_cn": now.strftime("%Y / %m / %d"), "generated_text": now.astimezone(CN_TZ).strftime("%Y-%m-%d %H:%M"),
             "weekday": "星期" + "一二三四五六日"[now.weekday()],
-            "hero": hero, "static": static, "show_footer": self.service.config.get("show_source_footer", True),
+            "hero": hero, "static": static,
+            "show_footer": self.service.value("basic", "show_source_footer", True, "show_source_footer"),
         }
         return await self._html_render(self.template, data, options={"type": "png", "full_page": True, "animations": "disabled", "scale": "css", "timeout": 30000})
-
-    async def birthday(self, operator: Operator) -> str:
-        now = self.service._now()
-        if operator.birthday_month and operator.birthday_day:
-            next_date = datetime(now.year, operator.birthday_month, operator.birthday_day, tzinfo=CN_TZ)
-            if next_date.date() < now.date():
-                next_date = next_date.replace(year=now.year + 1)
-            days = (next_date.date() - now.date()).days
-            birthday = f"{operator.birthday_month}月{operator.birthday_day}日"
-            status = "今天生日" if days == 0 else f"距离下次生日 {days} 天"
-        else:
-            birthday, status = "未公开", "当前数据源未记录生日"
-        static = await self._static_assets()
-        return await self._html_render(
-            self.birthday_template,
-            {"operator": operator, "birthday": birthday, "status": status, "font": static["font"]},
-            options={"type": "png", "full_page": True, "animations": "disabled", "scale": "css"},
-        )
 
     async def _html_render(self, template: str, data: dict, options: dict) -> str:
         return await self.plugin.html_render(
