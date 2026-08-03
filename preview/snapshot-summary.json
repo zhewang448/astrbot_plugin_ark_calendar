@@ -1,12 +1,24 @@
 {
-  "generated_at": "2026-08-03T16:00:00+08:00",
+  "generated_at": "2026-08-03T16:30:00+08:00",
+  "today_birthdays": [
+    "野鬃"
+  ],
+  "open_resources": [
+    "作战记录",
+    "采购凭证",
+    "碳&家具零件"
+  ],
+  "open_chips": [
+    "术师&狙击",
+    "医疗&重装"
+  ],
   "gacha": [
     {
       "name": "永不落幕-复刻",
       "six": [
         "酒神"
       ],
-      "banner_image": true,
+      "official_banner": true,
       "portrait_fallback_count": 0
     },
     {
@@ -15,7 +27,7 @@
         "安洁莉娜",
         "黑"
       ],
-      "banner_image": true,
+      "official_banner": true,
       "portrait_fallback_count": 0
     },
     {
@@ -24,7 +36,7 @@
         "琳琅诗怀雅",
         "缇缇"
       ],
-      "banner_image": true,
+      "official_banner": true,
       "portrait_fallback_count": 0
     },
     {
@@ -33,7 +45,7 @@
         "予愿安洁莉娜",
         "珊比"
       ],
-      "banner_image": true,
+      "official_banner": true,
       "portrait_fallback_count": 0
     },
     {
@@ -42,7 +54,7 @@
         "森蚺",
         "远牙"
       ],
-      "banner_image": true,
+      "official_banner": false,
       "portrait_fallback_count": 2
     }
   ],
