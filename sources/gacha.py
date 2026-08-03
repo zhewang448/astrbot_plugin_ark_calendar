@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -66,7 +67,7 @@ class GachaSource:
                 continue
             server = server_map.get(pool.get("id"), {})
             six, weighted = self._up_names(server, character_table)
-            match = self._match_overview(pool_start, pool_end, overview)
+            match = self._match_overview(pool_start, pool_end, overview, pool.get("name", ""))
             if match and match.get("six"):
                 six = match["six"]
             result.append({
@@ -81,17 +82,41 @@ class GachaSource:
             })
         return sorted(result, key=lambda item: (item["start"], item["end"]))
 
-    @staticmethod
-    def _match_overview(start: datetime, end: datetime, rows: list[dict]) -> dict | None:
+    @classmethod
+    def _match_overview(
+        cls,
+        start: datetime,
+        end: datetime,
+        rows: list[dict],
+        pool_name: str = "",
+    ) -> dict | None:
+        parsed: list[tuple[dict, datetime, datetime]] = []
         for row in rows:
             try:
                 row_start = datetime.strptime(row["start"], "%Y-%m-%d %H:%M").replace(tzinfo=CN_TZ)
                 row_end = datetime.strptime(row["end"], "%Y-%m-%d %H:%M").replace(tzinfo=CN_TZ)
             except (KeyError, ValueError):
                 continue
+            parsed.append((row, row_start, row_end))
             if abs((row_start - start).total_seconds()) <= 120 and abs((row_end - end).total_seconds()) <= 120:
                 return row
+
+        normalized = cls._normalize_pool_name(pool_name)
+        if normalized:
+            for row, row_start, row_end in parsed:
+                row_name = cls._normalize_pool_name(row.get("name", ""))
+                if not row_name or not (row_name == normalized or row_name in normalized or normalized in row_name):
+                    continue
+                # PRTS 与服务器数据偶尔会对同日开放时间采用不同口径；名称一致且结束时间接近时仍可安全匹配。
+                if abs((row_end - end).total_seconds()) <= 6 * 3600:
+                    return row
+                if row_start.date() == start.date() and row_end.date() == end.date():
+                    return row
         return None
+
+    @staticmethod
+    def _normalize_pool_name(name: str) -> str:
+        return re.sub(r"[\s·・\-—_【】『』「」]", "", name or "").lower()
 
     @staticmethod
     def _up_names(server: dict, characters: dict) -> tuple[list[str], list[str]]:

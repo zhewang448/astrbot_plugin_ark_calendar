@@ -330,6 +330,7 @@ class PrtsSource:
             if not header_row:
                 continue
             headers = [cell.get_text(" ", strip=True) for cell in header_row.find_all(["th", "td"], recursive=False)]
+            name_index = self._header_index(headers, ("卡池一览", "卡池名称", "寻访名称"))
             time_index = self._header_index(headers, ("开启时间", "开放时间", "寻访时间"))
             six_index = self._header_index(headers, ("6星", "六星"))
             if time_index is None or six_index is None:
@@ -344,12 +345,23 @@ class PrtsSource:
                     continue
                 six = [a.get("title", "").strip() for a in cells[six_index].select("a[title]")]
                 six = list(dict.fromkeys(x for x in six if x and not x.startswith(("文件:", "File:"))))
-                image = row.select_one("img")
+                name_cell = cells[name_index] if name_index is not None and name_index < len(cells) else cells[0]
+                raw_name = name_cell.get_text(" ", strip=True)
+                pool_name = self._gacha_name(raw_name)
+                image = name_cell.select_one("img") or row.select_one("img")
                 rows.append({
+                    "name": pool_name, "raw_name": raw_name,
                     "start": times[0], "end": times[1], "six": six,
                     "image": urljoin(self.base_url, image.get("src", "")) if image else "",
                 })
         return rows
+
+    @staticmethod
+    def _gacha_name(text: str) -> str:
+        """Extract the formal pool name from a PRTS table cell."""
+        # PRTS may prefix a formal pool title with a bracketed category.
+        # The suffix is the pool name shared by the other data sources.
+        return re.sub(r"^[【『「][^】』」]+[】』」]\s*", "", text.strip()).strip()
 
     @staticmethod
     def _header_index(headers: list[str], candidates: tuple[str, ...]) -> int | None:

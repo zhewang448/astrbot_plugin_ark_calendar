@@ -21,6 +21,27 @@ class ParserTests(unittest.TestCase):
         )
         self.assertEqual(found["six"], ["琳琅诗怀雅", "缇缇"])
 
+    def test_gacha_name_discards_prts_category_prefix(self):
+        self.assertEqual(
+            PrtsSource._gacha_name("【限定寻访·夏季】车辙与风的归所"),
+            "车辙与风的归所",
+        )
+
+    def test_match_gacha_overview_by_name_when_start_time_differs(self):
+        tz = ZoneInfo("Asia/Shanghai")
+        row = {
+            "name": "车辙与风的归所",
+            "start": "2026-08-01 12:00",
+            "end": "2026-08-15 03:59",
+            "image": "https://media.prts.wiki/banner.jpg",
+        }
+        found = GachaSource._match_overview(
+            datetime(2026, 8, 1, 7, 0, tzinfo=tz),
+            datetime(2026, 8, 15, 3, 59, tzinfo=tz),
+            [row],
+            "车辙与风的归所",
+        )
+        self.assertEqual(found["image"], "https://media.prts.wiki/banner.jpg")
     def test_avatar_name_from_prts_media_url(self):
         url = "https://media.prts.wiki/8/87/%E5%A4%B4%E5%83%8F_%E5%8D%A1%E7%BC%87.png"
         self.assertEqual(PrtsSource._avatar_name_from_url(url), "卡缇")
