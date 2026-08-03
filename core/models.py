@@ -53,6 +53,11 @@ class TodayInfo:
     supplies: list[str] = field(default_factory=list)
     chips: list[str] = field(default_factory=list)
     alerts: list[dict[str, str]] = field(default_factory=list)
+    resource_schedule: list[dict[str, Any]] = field(default_factory=list)
+    chip_schedule: list[dict[str, Any]] = field(default_factory=list)
+    voucher_exchange: list[dict[str, Any]] = field(default_factory=list)
+    new_skins: list[dict[str, Any]] = field(default_factory=list)
+    new_modules: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass(slots=True)

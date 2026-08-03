@@ -1,147 +1,178 @@
 {
-  "generated_at": "2026-08-03T12:00:00+08:00",
-  "today_birthdays": [
-    "野鬃"
-  ],
-  "upcoming_birthdays": [
-    {
-      "date": "08-06",
-      "operators": [
-        "贝洛内"
-      ]
-    },
-    {
-      "date": "08-07",
-      "operators": [
-        "风絮"
-      ]
-    },
-    {
-      "date": "08-08",
-      "operators": [
-        "雷狼龙S空爆",
-        "空爆"
-      ]
-    },
-    {
-      "date": "08-10",
-      "operators": [
-        "食铁兽"
-      ]
-    }
-  ],
-  "supplies": [
+  "generated_at": "2026-08-03T14:20:00+08:00",
+  "open_resources": [
     "作战记录",
     "采购凭证",
     "碳&家具零件"
   ],
-  "chips": [
-    "医疗",
-    "重装",
-    "术师",
-    "狙击"
-  ],
-  "alerts": [
+  "resource_schedule": [
     {
-      "kind": "保全派驻",
-      "name": "保全派驻 #11 追溯安保派驻",
-      "time": "08.19 03:59"
+      "name": "作战记录",
+      "weekdays_label": "常驻",
+      "always_open": true,
+      "all_open": false,
+      "open": true
     },
     {
-      "kind": "网页活动",
-      "name": "网页活动『 信使的工作 』",
-      "time": "08.25 03:59"
+      "name": "技巧概要",
+      "weekdays_label": "二三五日",
+      "always_open": false,
+      "all_open": false,
+      "open": false
+    },
+    {
+      "name": "龙门币",
+      "weekdays_label": "二四六日",
+      "always_open": false,
+      "all_open": false,
+      "open": false
+    },
+    {
+      "name": "采购凭证",
+      "weekdays_label": "一四六日",
+      "always_open": false,
+      "all_open": false,
+      "open": true
+    },
+    {
+      "name": "碳&家具零件",
+      "weekdays_label": "一三五六",
+      "always_open": false,
+      "all_open": false,
+      "open": true
     }
   ],
-  "recent_operators": [
-    "珊比",
-    "予愿安洁莉娜",
-    "时隙",
-    "嘉辛塔"
+  "open_chips": [
+    "术师&狙击",
+    "医疗&重装"
+  ],
+  "chip_schedule": [
+    {
+      "name": "术师&狙击",
+      "weekdays_label": "一二五六",
+      "all_open": false,
+      "open": true
+    },
+    {
+      "name": "先锋&辅助",
+      "weekdays_label": "二三六日",
+      "all_open": false,
+      "open": false
+    },
+    {
+      "name": "医疗&重装",
+      "weekdays_label": "一四五日",
+      "all_open": false,
+      "open": true
+    },
+    {
+      "name": "近卫&特种",
+      "weekdays_label": "三四六日",
+      "all_open": false,
+      "open": false
+    }
+  ],
+  "voucher_exchange": [
+    {
+      "name": "琳琅诗怀雅",
+      "subtitle": ""
+    },
+    {
+      "name": "子月",
+      "subtitle": ""
+    },
+    {
+      "name": "安洁莉娜",
+      "subtitle": ""
+    },
+    {
+      "name": "乌有",
+      "subtitle": ""
+    }
+  ],
+  "new_skins": [
+    {
+      "name": "纯烬艾雅法拉",
+      "subtitle": ""
+    },
+    {
+      "name": "蒂比",
+      "subtitle": ""
+    },
+    {
+      "name": "绮良",
+      "subtitle": ""
+    },
+    {
+      "name": "斩业星熊",
+      "subtitle": ""
+    }
+  ],
+  "new_modules": [
+    {
+      "name": "珊比",
+      "subtitle": "出发的勇气"
+    },
+    {
+      "name": "嘉辛塔",
+      "subtitle": "弹射起步"
+    },
+    {
+      "name": "时隙",
+      "subtitle": "突发性创造思维"
+    },
+    {
+      "name": "菲亚梅塔",
+      "subtitle": "菲亚梅塔特限证章"
+    },
+    {
+      "name": "百炼嘉维尔",
+      "subtitle": "百炼嘉维尔特限证章"
+    }
+  ],
+  "today_birthdays": [
+    "野鬃"
   ],
   "events": [
-    {
-      "name": "奇象巡展",
-      "start": "2026-08-08T16:00:00+08:00",
-      "end": "2026-09-04T03:59:00+08:00",
-      "type": "其他活动",
-      "long": false
-    },
-    {
-      "name": "直到大地变成一颗酸橙",
-      "start": "2026-08-01T12:00:00+08:00",
-      "end": "2026-08-22T03:59:00+08:00",
-      "type": "支线故事",
-      "long": false
-    },
-    {
-      "name": "透明信笺",
-      "start": "2026-08-01T12:00:00+08:00",
-      "end": "2026-08-15T03:59:00+08:00",
-      "type": "登录活动",
-      "long": false
-    },
-    {
-      "name": "重启锚点",
-      "start": "2026-05-15T16:00:00+08:00",
-      "end": "2027-05-15T03:59:00+08:00",
-      "type": "生息演算",
-      "long": true
-    },
-    {
-      "name": "沉沦者的黑流树海",
-      "start": "2026-07-17T16:00:00+08:00",
-      "end": "2027-03-10T16:00:00+08:00",
-      "type": "集成战略",
-      "long": true
-    }
+    "奇象巡展",
+    "直到大地变成一颗酸橙",
+    "透明信笺"
+  ],
+  "long_term_events": [
+    "重启锚点",
+    "沉沦者的黑流树海"
   ],
   "gacha": [
     {
       "name": "永不落幕-复刻",
-      "start": "2026-07-20T16:00:00+08:00",
-      "end": "2026-08-03T03:59:59+08:00",
-      "type": "单人寻访",
-      "six": [
+      "six_star_up": [
         "酒神"
       ]
     },
     {
       "name": "中坚寻访-第七十一期",
-      "start": "2026-07-23T04:00:00+08:00",
-      "end": "2026-08-06T03:59:59+08:00",
-      "type": "中坚寻访",
-      "six": [
+      "six_star_up": [
         "安洁莉娜",
         "黑"
       ]
     },
     {
       "name": "常驻标准寻访-第一百九十期",
-      "start": "2026-07-30T04:00:00+08:00",
-      "end": "2026-08-13T03:59:59+08:00",
-      "type": "标准寻访",
-      "six": [
+      "six_star_up": [
         "琳琅诗怀雅",
         "缇缇"
       ]
     },
     {
       "name": "车辙与风的归所",
-      "start": "2026-08-01T07:00:00+08:00",
-      "end": "2026-08-15T03:59:59+08:00",
-      "type": "限定寻访",
-      "six": [
+      "six_star_up": [
         "予愿安洁莉娜",
         "珊比"
       ]
     },
     {
       "name": "中坚寻访-第七十二期",
-      "start": "2026-08-06T04:00:00+08:00",
-      "end": "2026-08-20T03:59:59+08:00",
-      "type": "中坚寻访",
-      "six": [
+      "six_star_up": [
         "森蚺",
         "远牙"
       ]
@@ -150,43 +181,43 @@
   "source_states": [
     {
       "name": "anything-ics / 生日",
-      "ok": true,
-      "message": ""
+      "ok": false,
+      "message": "实时更新失败，已使用缓存：offline https://proxy.avgt.ink/ics/ark-birthday.json"
     },
     {
       "name": "anything-ics / 活动",
-      "ok": true,
-      "message": ""
+      "ok": false,
+      "message": "实时更新失败，已使用缓存：offline https://proxy.avgt.ink/ics/ark-event.json"
     },
     {
       "name": "PRTS / 首页",
-      "ok": true,
-      "message": ""
+      "ok": false,
+      "message": "实时更新失败，已使用缓存：offline https://prts.wiki/"
     },
     {
       "name": "PRTS / 干员一览",
-      "ok": true,
-      "message": ""
+      "ok": false,
+      "message": "实时更新失败，已使用缓存：offline https://prts.wiki/w/%E5%B9%B2%E5%91%98%E4%B8%80%E8%A7%88"
     },
     {
       "name": "PRTS / 卡池一览",
-      "ok": true,
-      "message": ""
+      "ok": false,
+      "message": "实时更新失败，已使用缓存：offline https://prts.wiki/api.php"
     },
     {
       "name": "ArknightsGachaData",
-      "ok": true,
-      "message": ""
+      "ok": false,
+      "message": "实时更新失败，已使用缓存：offline https://raw.githubusercontent.com/s-yh-china/ArknightsGachaData/master/data/pool_info.json"
     },
     {
       "name": "PRTS Gacha Server Data",
-      "ok": true,
-      "message": ""
+      "ok": false,
+      "message": "实时更新失败，已使用缓存：offline https://weedy.prts.wiki/gacha_table.json"
     },
     {
       "name": "明日方舟角色数据",
-      "ok": true,
-      "message": ""
+      "ok": false,
+      "message": "实时更新失败，已使用缓存：offline https://torappu.prts.wiki/gamedata/latest/excel/character_table.json"
     }
   ]
 }

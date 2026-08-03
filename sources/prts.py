@@ -19,12 +19,20 @@ class PrtsSource:
         self.base_url = base_url.rstrip("/")
         self.api_url = f"{self.base_url}/api.php"
 
-    async def home(self) -> dict:
+    async def home(self, now: datetime | None = None) -> dict:
         html = await self.http.text(f"{self.base_url}/")
         soup = BeautifulSoup(html, "html.parser")
         compact = soup.get_text(" ", strip=True)
-        supplies = self._between(compact, "物资筹备 分区：", "芯片搜索 分区：")
-        chips = self._between(compact, "芯片搜索 分区：", "职业芯片")
+        resource_schedule = self._resource_schedule(soup, (now or datetime.now(CN_TZ)).weekday(), self.base_url)
+        chip_schedule = self._chip_schedule(soup, (now or datetime.now(CN_TZ)).weekday(), self.base_url)
+        supplies = [item["name"] for item in resource_schedule if item.get("open")]
+        chips = [item["name"] for item in chip_schedule if item.get("open")]
+        if not supplies:
+            supplies_text = self._between(compact, "物资筹备 分区：", "芯片搜索 分区：")
+            supplies = self._slash_items(supplies_text)
+        if not chips:
+            chips_text = self._between(compact, "芯片搜索 分区：", "职业芯片")
+            chips = self._slash_items(chips_text.replace("&", "/"))
         alerts: list[dict[str, str]] = []
         seen_alerts: set[tuple[str, str]] = set()
         for span in soup.select("span[data-time]"):
@@ -54,12 +62,194 @@ class PrtsSource:
             name = re.sub(r"将于.*", "", text).strip(" 。")
             alerts.append({"kind": kind, "name": name, "time": end_text})
         return {
-            "supplies": self._slash_items(supplies),
-            "chips": self._slash_items(chips.replace("&", "/")),
+            "supplies": supplies,
+            "chips": chips,
             "alerts": alerts[:6],
+            "resource_schedule": resource_schedule,
+            "chip_schedule": chip_schedule,
             "recent": self._operator_section(soup, "近期新增"),
             "birthday": self._operator_section(soup, "今天生日"),
+            "voucher_exchange": self._highlight_section(soup, "凭证兑换", self.base_url),
+            "new_skins": self._highlight_section(soup, "新增时装", self.base_url),
+            "new_modules": self._highlight_section(soup, "新增模组", self.base_url, split_subtitle=True),
         }
+
+    @classmethod
+    def _resource_schedule(cls, soup: BeautifulSoup, weekday: int, base_url: str) -> list[dict]:
+        table = cls._resource_table(soup)
+        if table is None:
+            return []
+        rows = table.find_all("tr")
+        if len(rows) < 4:
+            return []
+        resource_cells = cls._direct_cells(rows[0])
+        resource_days = cls._direct_cells(rows[1])
+        chip_cells = cls._direct_cells(rows[2])
+        chip_days = cls._direct_cells(rows[3])
+        result: list[dict] = []
+        for cell, day_cell in zip(resource_cells, resource_days):
+            image = cell.select_one("img[src]")
+            if not image:
+                continue
+            src = urljoin(base_url, image.get("src", ""))
+            file_name = cls._file_name(src)
+            name = cls._resource_name(file_name)
+            if not name:
+                continue
+            day_text = day_cell.get_text(" ", strip=True)
+            always_open, allowed = cls._days_from_label(day_text)
+            style_open = cls._style_is_open(cell.get("style", ""))
+            result.append({
+                "name": name,
+                "image": src,
+                "weekdays": allowed,
+                "weekdays_label": day_text,
+                "always_open": always_open,
+                "style_open": style_open,
+                "open": always_open or weekday in allowed or style_open,
+            })
+        all_open = bool(result) and all(item.get("style_open") for item in result)
+        for item in result:
+            item["all_open"] = all_open
+        return result
+
+    @classmethod
+    def _chip_schedule(cls, soup: BeautifulSoup, weekday: int, base_url: str) -> list[dict]:
+        table = cls._resource_table(soup)
+        if table is None:
+            return []
+        rows = table.find_all("tr")
+        if len(rows) < 4:
+            return []
+        cells = cls._direct_cells(rows[2])
+        day_cells = cls._direct_cells(rows[3])
+        result: list[dict] = []
+        chip_names = ["术师&狙击", "先锋&辅助", "医疗&重装", "近卫&特种"]
+        for index, (cell, day_cell) in enumerate(zip(cells, day_cells)):
+            image = cell.select_one("img[src]")
+            if not image:
+                continue
+            src = urljoin(base_url, image.get("src", ""))
+            file_name = cls._file_name(src)
+            stage_key = cls._chip_stage_key(file_name)
+            name = cls._chip_name(stage_key) or (chip_names[index] if index < len(chip_names) else f"芯片组 {index + 1}")
+            day_text = day_cell.get_text(" ", strip=True)
+            always_open, allowed = cls._days_from_label(day_text)
+            style_open = cls._style_is_open(cell.get("style", ""))
+            result.append({
+                "name": name,
+                "image": src,
+                "stage": stage_key,
+                "weekdays": allowed,
+                "weekdays_label": day_text,
+                "always_open": always_open,
+                "style_open": style_open,
+                "open": always_open or weekday in allowed or style_open,
+            })
+        all_open = bool(result) and all(item.get("style_open") for item in result)
+        for item in result:
+            item["all_open"] = all_open
+        return result
+
+    @staticmethod
+    def _resource_table(soup: BeautifulSoup):
+        for table in soup.find_all("table"):
+            text = table.get_text(" ", strip=True)
+            if "常驻" in text and "二三五日" in text and "一四六日" in text:
+                rows = table.find_all("tr")
+                if len(rows) >= 4 and sum(len(row.select("img[src]")) for row in rows[:3]) >= 5:
+                    return table
+        return None
+
+    @staticmethod
+    def _direct_cells(row) -> list:
+        return row.find_all(["td", "th"], recursive=False)
+
+    @staticmethod
+    def _file_name(url: str) -> str:
+        return unquote(PurePosixPath(urlparse(url).path).name).removeprefix("80px-")
+
+    @staticmethod
+    def _resource_name(file_name: str) -> str:
+        if "高级作战记录" in file_name:
+            return "作战记录"
+        if "技巧概要" in file_name:
+            return "技巧概要"
+        if "龙门币" in file_name:
+            return "龙门币"
+        if "采购凭证" in file_name:
+            return "采购凭证"
+        if "碳素" in file_name:
+            return "碳&家具零件"
+        return ""
+
+    @staticmethod
+    def _chip_stage_key(file_name: str) -> str:
+        for key in ("摧枯拉朽", "身先士卒", "固若金汤", "势不可挡"):
+            if key in file_name:
+                return key
+        return ""
+
+    @staticmethod
+    def _chip_name(stage_key: str) -> str:
+        return {
+            "摧枯拉朽": "术师&狙击",
+            "身先士卒": "先锋&辅助",
+            "固若金汤": "医疗&重装",
+            "势不可挡": "近卫&特种",
+        }.get(stage_key, "")
+
+    @staticmethod
+    def _days_from_label(label: str) -> tuple[bool, list[int]]:
+        compact = re.sub(r"\s+", "", label)
+        if any(token in compact for token in ("常驻", "全开放", "每日")):
+            return True, list(range(7))
+        mapping = {"一": 0, "二": 1, "三": 2, "四": 3, "五": 4, "六": 5, "日": 6}
+        return False, list(dict.fromkeys(mapping[ch] for ch in compact if ch in mapping))
+
+    @staticmethod
+    def _style_is_open(style: str) -> bool:
+        colors = re.findall(r"#[0-9a-fA-F]{6}", style)
+        if not colors:
+            return False
+        color = colors[-1].lower()
+        if color in {"#343434", "#484848"}:
+            return False
+        if color in {"#585858", "#808080", "#324c65", "#3e5f84"}:
+            return True
+        try:
+            rgb = tuple(int(color[index:index + 2], 16) for index in (1, 3, 5))
+            return sum(rgb) / 3 >= 82
+        except ValueError:
+            return False
+
+    @staticmethod
+    def _highlight_section(soup: BeautifulSoup, title: str, base_url: str, split_subtitle: bool = False) -> list[dict]:
+        for node in soup.find_all(string=lambda value: value and title in value):
+            section = node.find_parent(class_="mp-operators-content")
+            if not section:
+                continue
+            result = []
+            for anchor in section.select("a[title]"):
+                image = anchor.select_one("img#charicon")
+                name = anchor.get("title", "").strip()
+                if not name or not image:
+                    continue
+                subtitle = ""
+                if split_subtitle and "#" in name:
+                    name, subtitle = name.split("#", 1)
+                result.append({
+                    "name": name,
+                    "subtitle": subtitle,
+                    "image": urljoin(base_url, image.get("src", "")),
+                    "href": urljoin(base_url, anchor.get("href", "")),
+                })
+            if result:
+                seen = {}
+                for item in result:
+                    seen[(item["name"], item["subtitle"])] = item
+                return list(seen.values())
+        return []
 
     async def operator_index(self) -> dict[str, dict]:
         html = await self.http.text(f"{self.base_url}/w/{quote('干员一览')}")

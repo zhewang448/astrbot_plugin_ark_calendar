@@ -161,8 +161,8 @@ class CalendarService:
                 lambda value: isinstance(value, list) and bool(value),
             ),
             self._fetch_cached(
-                "prts_home.json", "PRTS / 首页", self.prts.home(), {},
-                lambda value: isinstance(value, dict) and bool(value.get("supplies")),
+                "prts_home.json", "PRTS / 首页", self.prts.home(now), {},
+                lambda value: isinstance(value, dict) and bool(value.get("resource_schedule") or value.get("supplies")),
             ),
             self._fetch_cached(
                 "operators.json", "PRTS / 干员一览", self.prts.operator_index(), {},
@@ -177,6 +177,8 @@ class CalendarService:
         source_states = [item[1] for item in source_results]
         self._birthdays = birthdays
         self._operator_index = operator_index
+        home = self._refresh_home_status(home, now)
+        home = await self._hydrate_home_highlights(home)
 
         today_records = [
             item for item in birthdays
@@ -226,6 +228,11 @@ class CalendarService:
             home.get("supplies", []),
             home.get("chips", []),
             home.get("alerts", []),
+            home.get("resource_schedule", []),
+            home.get("chip_schedule", []),
+            home.get("voucher_exchange", []),
+            home.get("new_skins", []),
+            home.get("new_modules", []),
         )
         return CalendarSnapshot(
             generated_at=now.isoformat(),
@@ -241,6 +248,39 @@ class CalendarService:
             long_term_events=long_items if self.config.get("include_long_term", True) else [],
             source_states=source_states,
         )
+
+    @staticmethod
+    def _refresh_home_status(home: dict, now: datetime) -> dict:
+        result = dict(home)
+        for key in ("resource_schedule", "chip_schedule"):
+            schedules = []
+            for item in home.get(key, []) or []:
+                current = dict(item)
+                allowed = current.get("weekdays", []) or []
+                current["open"] = bool(
+                    current.get("always_open")
+                    or current.get("all_open")
+                    or now.weekday() in allowed
+                )
+                schedules.append(current)
+            result[key] = schedules
+        if result.get("resource_schedule"):
+            result["supplies"] = [item["name"] for item in result["resource_schedule"] if item.get("open")]
+        if result.get("chip_schedule"):
+            result["chips"] = [item["name"] for item in result["chip_schedule"] if item.get("open")]
+        return result
+
+    async def _hydrate_home_highlights(self, home: dict) -> dict:
+        assert self.assets
+        result = dict(home)
+        for key in ("resource_schedule", "chip_schedule", "voucher_exchange", "new_skins", "new_modules"):
+            hydrated = []
+            for item in home.get(key, []) or []:
+                current = dict(item)
+                current["image"] = await self.assets.data_uri(current.get("image", ""))
+                hydrated.append(current)
+            result[key] = hydrated
+        return result
 
     async def _build_events(
         self,

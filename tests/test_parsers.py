@@ -53,5 +53,38 @@ class AsyncParserTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(http.calls), 1)
 
 
+class HomeParserTests(unittest.TestCase):
+    def test_resource_schedule_uses_weekday_and_brightness(self):
+        from bs4 import BeautifulSoup
+        from astrbot_plugin.sources.prts import PrtsSource
+
+        html = """
+        <table><tbody>
+          <tr><td style='background:#324c65'><img src='https://media.prts.wiki/x/高级作战记录.png'></td><td style='background:#343434'><img src='https://media.prts.wiki/x/技巧概要·卷3.png'></td><td style='background:#343434'><img src='https://media.prts.wiki/x/龙门币.png'></td><td style='background:#585858'><img src='https://media.prts.wiki/x/采购凭证.png'></td><td style='background:#585858'><img src='https://media.prts.wiki/x/碳素.png'></td></tr>
+          <tr><td>常驻</td><td>二三五日</td><td>二四六日</td><td>一四六日</td><td>一三五六</td></tr>
+          <tr><td style='background:#585858'><img src='https://media.prts.wiki/x/摧枯拉朽.png'></td><td style='background:#343434'><img src='https://media.prts.wiki/x/身先士卒.png'></td><td style='background:#585858'><img src='https://media.prts.wiki/x/固若金汤.png'></td><td style='background:#343434'><img src='https://media.prts.wiki/x/势不可挡.png'></td></tr>
+          <tr><td>一二五六</td><td>二三六日</td><td>一四五日</td><td>三四六日</td></tr>
+        </tbody></table>
+        """
+        soup = BeautifulSoup(html, "html.parser")
+        resources = PrtsSource._resource_schedule(soup, 0, "https://prts.wiki")
+        chips = PrtsSource._chip_schedule(soup, 0, "https://prts.wiki")
+        self.assertEqual([x["name"] for x in resources if x["open"]], ["作战记录", "采购凭证", "碳&家具零件"])
+        self.assertEqual([x["name"] for x in chips if x["open"]], ["术师&狙击", "医疗&重装"])
+
+    def test_home_highlight_section_splits_module_name(self):
+        from bs4 import BeautifulSoup
+        from astrbot_plugin.sources.prts import PrtsSource
+
+        soup = BeautifulSoup("""
+          <div class='mp-operators-content'><div class='mp-operators-title'>新增模组</div>
+            <a title='珊比#出发的勇气' href='/w/珊比#出发的勇气'><img id='charicon' src='https://media.prts.wiki/avatar.png'></a>
+          </div>
+        """, "html.parser")
+        items = PrtsSource._highlight_section(soup, "新增模组", "https://prts.wiki", split_subtitle=True)
+        self.assertEqual(items[0]["name"], "珊比")
+        self.assertEqual(items[0]["subtitle"], "出发的勇气")
+
+
 if __name__ == "__main__":
     unittest.main()

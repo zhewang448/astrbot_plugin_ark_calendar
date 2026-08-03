@@ -1,6 +1,15 @@
-# astrbot_plugin_ark_calendar
+# 罗德岛行动日历 `astrbot_plugin_ark_calendar`
 
-罗德岛行动日历是一款明日方舟信息聚合插件。聚合 PRTS、anything-ics 与 ArknightsGachaData，生成 1440px 宽的活动/寻访长图。
+## v0.2.0
+
+罗德岛行动日历是一款明日方舟信息聚合插件，聚合 PRTS、anything-ics 与 ArknightsGachaData，生成 1440px 宽的活动、寻访、生日与今日作战信息长图。
+
+## ✨ 功能特点
+
+- **今日作战信息**：按 PRTS 首页元素状态判断物资、芯片副本是否开放，支持活动期间全开放。
+- **首页亮点同步**：显示凭证兑换、新增时装和新增模组，并复用 PRTS 首页图片。
+- **动态寻访时间轴**：显示精确时间与六星 UP。
+- **缓存降级**：数据源或图片接口暂时不可用时，优先使用运行时缓存。
 
 ## 指令
 
