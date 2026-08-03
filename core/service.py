@@ -41,12 +41,19 @@ class CalendarService:
 
     async def initialize(self) -> None:
         timeout = aiohttp.ClientTimeout(total=max(5, int(self.config.get("request_timeout", 15))))
+        proxy = self._http_proxy()
         self.session = aiohttp.ClientSession(
             timeout=timeout,
-            headers={"User-Agent": "AstrBot-ArkCalendar/0.2"},
+            trust_env=True,
+            headers={
+                "User-Agent": "AstrBot-ArkCalendar/0.2",
+                "Accept-Encoding": "identity",
+            },
         )
-        self.http = HttpClient(self.session)
-        self.assets = AssetCache(self.data_dir / "assets", self.session)
+        self.http = HttpClient(self.session, proxy=proxy)
+        self.assets = AssetCache(self.data_dir / "assets", self.session, proxy=proxy)
+        if proxy:
+            self.logger.info("方舟日历网络请求已启用 AstrBot HTTP 代理。")
         self.anything = AnythingIcsSource(
             self.http,
             self.config.get("anything_ics_base_url", "https://proxy.avgt.ink/ics"),
@@ -68,6 +75,17 @@ class CalendarService:
                 self.last_snapshot = CalendarSnapshot.from_dict(cached)
             except Exception:
                 self.logger.warning("无法读取日历快照缓存。", exc_info=True)
+
+    def _http_proxy(self) -> str:
+        plugin_proxy = str(self.config.get("http_proxy", "") or "").strip()
+        if plugin_proxy:
+            return plugin_proxy
+        try:
+            from astrbot.core import astrbot_config
+
+            return str(astrbot_config.get("http_proxy", "") or "").strip()
+        except Exception:
+            return ""
 
     async def close(self) -> None:
         if self.session and not self.session.closed:

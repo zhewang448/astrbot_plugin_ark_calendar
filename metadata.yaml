@@ -2,7 +2,7 @@ name: astrbot_plugin_ark_calendar
 display_name: 罗德岛行动日历
 desc: 聚合 PRTS、anything-ics 与卡池数据，生成罗德岛风格的活动、寻访与生日行动日历。
 short_desc: 汇总今日副本、生日、活动、寻访、凭证、时装与模组信息。
-version: v0.2.0
+version: v0.2.1
 author: bushikq
 repo: https://github.com/zhewang448/astrbot_plugin_ark_calendar
 astrbot_version: ">=4.17.0"

@@ -10,10 +10,13 @@ import aiohttp
 
 
 class AssetCache:
-    def __init__(self, root: Path, session: aiohttp.ClientSession):
+    def __init__(
+        self, root: Path, session: aiohttp.ClientSession, proxy: str = ""
+    ):
         self.root = root
         self.root.mkdir(parents=True, exist_ok=True)
         self.session = session
+        self.proxy = proxy.strip()
 
     async def data_uri(self, source: str) -> str:
         if not source:
@@ -38,7 +41,8 @@ class AssetCache:
         target = self.root / f"{hashlib.sha256(url.encode()).hexdigest()}{suffix}"
         if target.exists() and target.stat().st_size:
             return target
-        async with self.session.get(url) as resp:
+        request_kwargs = {"proxy": self.proxy} if self.proxy else {}
+        async with self.session.get(url, **request_kwargs) as resp:
             resp.raise_for_status()
             payload = await resp.read()
             temp = target.with_suffix(target.suffix + ".tmp")

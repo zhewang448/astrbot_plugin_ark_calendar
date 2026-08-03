@@ -37,7 +37,7 @@ class CalendarRenderer:
             "weekday": "星期" + "一二三四五六日"[now.weekday()],
             "hero": hero, "static": static, "show_footer": self.service.config.get("show_source_footer", True),
         }
-        return await self.plugin.html_render(self.template, data, options={"type": "png", "full_page": True, "animations": "disabled", "scale": "css", "timeout": 30000})
+        return await self._html_render(self.template, data, options={"type": "png", "full_page": True, "animations": "disabled", "scale": "css", "timeout": 30000})
 
     async def birthday(self, operator: Operator) -> str:
         now = self.service._now()
@@ -51,10 +51,15 @@ class CalendarRenderer:
         else:
             birthday, status = "未公开", "当前数据源未记录生日"
         static = await self._static_assets()
-        return await self.plugin.html_render(
+        return await self._html_render(
             self.birthday_template,
             {"operator": operator, "birthday": birthday, "status": status, "font": static["font"]},
             options={"type": "png", "full_page": True, "animations": "disabled", "scale": "css"},
+        )
+
+    async def _html_render(self, template: str, data: dict, options: dict) -> str:
+        return await self.plugin.html_render(
+            template, data, return_url=False, options=options
         )
 
     def _timeline(self, item, start, end, now):
