@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import re
 import zipfile
@@ -8,16 +8,27 @@ ROOT = Path(__file__).resolve().parents[1]
 DIST = ROOT / "dist"
 PACKAGE_NAME = "astrbot_plugin_ark_calendar"
 
-ROOT_FILES = {
+RUNTIME_FILES = {
     "__init__.py",
     "main.py",
     "metadata.yaml",
     "_conf_schema.json",
     "requirements.txt",
-    "README.md",
+    "core/__init__.py",
+    "core/assets.py",
+    "core/cache.py",
+    "core/models.py",
+    "core/renderer.py",
+    "core/service.py",
+    "sources/__init__.py",
+    "sources/anything_ics.py",
+    "sources/gacha.py",
+    "sources/http.py",
+    "sources/prts.py",
+    "templates/birthday.html",
+    "templates/calendar.html",
+    "assets/SourceHanSerifCN-Medium-6.otf",
 }
-SOURCE_DIRS = {"core", "sources", "templates"}
-EXCLUDED_PARTS = {"__pycache__", ".testdeps", "preview", "tests", "tools", "dist", ".git"}
 
 
 def version() -> str:
@@ -27,19 +38,7 @@ def version() -> str:
 
 
 def include(path: Path) -> bool:
-    relative = path.relative_to(ROOT)
-    if any(part in EXCLUDED_PARTS for part in relative.parts):
-        return False
-    if path.suffix in {".pyc", ".pyo"}:
-        return False
-    if len(relative.parts) == 1:
-        return relative.name in ROOT_FILES
-    if relative.parts[0] in SOURCE_DIRS:
-        return True
-    if relative.parts[0] == "assets":
-        # 干员头像全部通过 PRTS API 获取，发布包不携带逐干员头像。
-        return not relative.name.startswith("operator-")
-    return False
+    return path.relative_to(ROOT).as_posix() in RUNTIME_FILES
 
 
 def main() -> None:

@@ -325,8 +325,6 @@ class CalendarService:
         for (raw, item_start, item_end), detail_result in zip(selected, details):
             detail = detail_result if isinstance(detail_result, dict) else {}
             image = await self.assets.data_uri(detail.get("image_url", ""))
-            if not image:
-                image = await self.assets.data_uri(str(self._event_fallback(raw["name"])))
             duration = item_end - item_start
             model = TimelineItem(
                 id=str(raw.get("id", raw["name"])),
@@ -396,14 +394,6 @@ class CalendarService:
 
     async def _build_gacha_items(self, pools_raw: list[dict]) -> list[TimelineItem]:
         assert self.prts and self.gacha and self.assets
-        fallback_map = {
-            "LIMITED": "gacha-limited.jpg",
-            "LINKAGE": "gacha-limited.jpg",
-            "SINGLE": "gacha-rerun.jpg",
-            "DOUBLE": "gacha-standard.png",
-            "CLASSIC_DOUBLE": "gacha-kernel.jpg",
-            "CLASSIC": "gacha-kernel.jpg",
-        }
         previous = {item.id: item for item in self.last_snapshot.gacha_pools} if self.last_snapshot else {}
         result: list[TimelineItem] = []
         for pool in pools_raw:
@@ -416,9 +406,6 @@ class CalendarService:
                 urls = await self._safe_avatar_urls(six[:2])
                 images = [await self.assets.data_uri(urls.get(name, "")) for name in six[:2]]
                 images = [item for item in images if item]
-            if not image:
-                local = self.plugin_dir / "assets" / fallback_map.get(pool.get("type", ""), "gacha-kernel.jpg")
-                image = await self.assets.data_uri(str(local))
             result.append(TimelineItem(
                 id=pool.get("id", ""),
                 name=pool.get("name", ""),
@@ -504,21 +491,6 @@ class CalendarService:
             if cached is not None and (validator is None or validator(cached)):
                 return cached, SourceState(label, False, now_text, f"实时更新失败，已使用缓存：{message}")
             return default, SourceState(label, False, now_text, f"当前不可用且无缓存：{message}")
-
-    def _event_fallback(self, name: str) -> Path:
-        assets = self.plugin_dir / "assets"
-        mappings = {
-            "黑流树海": "event-blackforest.png",
-            "重启锚点": "event-relaunch.jpg",
-            "信使": "event-letter.jpg",
-            "展览": "event-exhibition.jpg",
-        }
-        for keyword, file_name in mappings.items():
-            if keyword in name:
-                return assets / file_name
-        choices = ["event-orange.jpg", "event-relaunch.jpg", "event-letter.jpg", "event-exhibition.jpg"]
-        index = hashlib.sha256(name.encode("utf-8")).digest()[0] % len(choices)
-        return assets / choices[index]
 
     def _now(self) -> datetime:
         return datetime.now(CN_TZ)

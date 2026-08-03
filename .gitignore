@@ -1,4 +1,4 @@
-__pycache__/
+﻿__pycache__/
 *.py[cod]
 *.pyo
 .testdeps/
@@ -7,3 +7,25 @@ __pycache__/
 dist/
 preview/runtime_data/
 preview/*-rendered.html
+# 本地预览与设计产物
+/preview/
+/arknights-calendar-final.png
+/arknights-calendar-today.html
+
+# 运行时动态获取的干员头像
+/assets/operator-*.png
+
+# AstrBot 运行数据（若在仓库内启动）
+/data/
+/plugin_data/
+
+# 本地日志和编辑器文件
+*.log
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# 本地图片资源；发布包只保留字体
+/assets/*
+!/assets/SourceHanSerifCN-Medium-6.otf

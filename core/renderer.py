@@ -25,7 +25,10 @@ class CalendarRenderer:
         pools = [self._timeline(x, start, end, now) for x in snapshot.gacha_pools]
         longs = [self._timeline(x, start, end, now) for x in snapshot.long_term_events]
         static = await self._static_assets()
-        hero = next((x["image"] for x in items if x["image"]), static["hero"])
+        hero = next(
+            (x["image"] for x in [*items, *pools, *longs] if x["image"]),
+            "",
+        )
         ticks = []
         for offset in (0, 1, 7, 14, 21, 28):
             day = start + timedelta(days=offset)
@@ -87,5 +90,5 @@ class CalendarRenderer:
     async def _static_assets(self):
         assert self.service.assets
         base = Path(__file__).parent.parent / "assets"
-        names = {"font":"SourceHanSerifCN-Medium-6.otf", "hero":"event-orange.jpg", "exp":"item-exp.png", "voucher":"item-voucher.png", "lmd":"item-lmd.png", "skill":"item-skill.png", "medic":"chip-medic.png", "defender":"chip-defender.png"}
-        return {key: await self.service.assets.data_uri(str(base/name)) for key,name in names.items()}
+        font = base / "SourceHanSerifCN-Medium-6.otf"
+        return {"font": await self.service.assets.data_uri(str(font))}
