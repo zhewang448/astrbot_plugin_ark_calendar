@@ -18,7 +18,7 @@
 
 ## 安装
 
-将插件目录放入 AstrBot 的 `data/plugins/`，在 WebUI 安装依赖后启用插件。需要 AstrBot 支持最新的插件配置注入和 `html_render()` API。
+将插件目录放入 AstrBot 的 `data/plugins/`，在 WebUI 安装依赖后启用插件。要求 AstrBot `>=4.17.0`。
 
 ## 图片资源策略
 
@@ -35,6 +35,16 @@
 `data/plugin_data/astrbot_plugin_ark_calendar/`
 
 插件升级不会覆盖运行时缓存。
+
+## 构建发布包
+
+运行：
+
+```bash
+python tools/build_release.py
+```
+
+发布 ZIP 会生成到 `dist/`。构建脚本只打包插件运行文件，不包含设计原型、测试、运行时缓存或逐干员本地头像。
 
 ## 说明
 

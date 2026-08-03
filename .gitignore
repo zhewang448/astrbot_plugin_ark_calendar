@@ -1,0 +1,9 @@
+__pycache__/
+*.py[cod]
+*.pyo
+.testdeps/
+.pytest_cache/
+.venv/
+dist/
+preview/runtime_data/
+preview/*-rendered.html

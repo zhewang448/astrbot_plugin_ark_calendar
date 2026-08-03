@@ -260,8 +260,7 @@ class CalendarService:
                 continue
             selected.append((raw, item_start, item_end))
         details = await asyncio.gather(
-            *(self.prts.event_detail(raw["name"]) for raw, _, _ in selected),
-            return_exceptions=True,
+            *(self._event_detail(raw["name"]) for raw, _, _ in selected),
         )
         event_items: list[TimelineItem] = []
         long_items: list[TimelineItem] = []
@@ -398,11 +397,33 @@ class CalendarService:
 
     async def _safe_avatar_urls(self, names: list[str]) -> dict[str, str]:
         assert self.prts
+        unique_names = list(dict.fromkeys(name for name in names if name))
+        cached = self.cache.load("avatar_urls.json")
+        cached = cached if isinstance(cached, dict) else {}
+        missing = [name for name in unique_names if not cached.get(name)]
+        if missing:
+            try:
+                resolved = await self.prts.resolve_avatar_urls(missing)
+                if resolved:
+                    cached.update(resolved)
+                    self.cache.save("avatar_urls.json", cached)
+            except Exception:
+                self.logger.warning("获取干员头像地址失败，已尝试使用缓存。", exc_info=True)
+        return {name: cached[name] for name in unique_names if cached.get(name)}
+
+    async def _event_detail(self, name: str) -> dict:
+        assert self.prts
+        digest = hashlib.sha256(name.encode("utf-8")).hexdigest()[:20]
+        cache_name = f"event_detail_{digest}.json"
         try:
-            return await self.prts.resolve_avatar_urls(names)
+            detail = await self.prts.event_detail(name)
+            if isinstance(detail, dict) and detail:
+                self.cache.save(cache_name, detail)
+                return detail
         except Exception:
-            self.logger.warning("获取干员头像地址失败。", exc_info=True)
-            return {}
+            self.logger.warning(f"获取活动“{name}”详情失败，已尝试使用缓存。", exc_info=True)
+        cached = self.cache.load(cache_name)
+        return cached if isinstance(cached, dict) else {}
 
     async def _fetch_cached(
         self,
