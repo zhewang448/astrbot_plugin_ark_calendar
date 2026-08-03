@@ -1,0 +1,48 @@
+{
+  "timeline_days": {
+    "description": "日历时间轴展示天数",
+    "type": "int",
+    "default": 28,
+    "hint": "建议保持 28 天。"
+  },
+  "cache_ttl_minutes": {
+    "description": "数据缓存时间（分钟）",
+    "type": "int",
+    "default": 30
+  },
+  "request_timeout": {
+    "description": "网络请求超时（秒）",
+    "type": "int",
+    "default": 15
+  },
+  "include_recent_operators": {
+    "description": "显示近期新增干员",
+    "type": "bool",
+    "default": true
+  },
+  "include_long_term": {
+    "description": "显示长期活动",
+    "type": "bool",
+    "default": true
+  },
+  "show_source_footer": {
+    "description": "显示数据来源页脚",
+    "type": "bool",
+    "default": true
+  },
+  "anything_ics_base_url": {
+    "description": "anything-ics 镜像地址",
+    "type": "string",
+    "default": "https://proxy.avgt.ink/ics"
+  },
+  "prts_base_url": {
+    "description": "PRTS 地址",
+    "type": "string",
+    "default": "https://prts.wiki"
+  },
+  "gacha_data_url": {
+    "description": "ArknightsGachaData 地址",
+    "type": "string",
+    "default": "https://raw.githubusercontent.com/s-yh-china/ArknightsGachaData/master/data/pool_info.json"
+  }
+}

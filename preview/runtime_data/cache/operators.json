@@ -1,0 +1,1710 @@
+{
+  "12F": {
+    "profession": "术师",
+    "rarity": 2
+  },
+  "Castle-3": {
+    "profession": "近卫",
+    "rarity": 1
+  },
+  "CONFESS-47": {
+    "profession": "先锋",
+    "rarity": 1
+  },
+  "Friston-3": {
+    "profession": "重装",
+    "rarity": 1
+  },
+  "GALLUS²": {
+    "profession": "术师",
+    "rarity": 1
+  },
+  "Lancet-2": {
+    "profession": "医疗",
+    "rarity": 1
+  },
+  "Miss.Christine": {
+    "profession": "术师",
+    "rarity": 5
+  },
+  "Mon3tr": {
+    "profession": "医疗",
+    "rarity": 6
+  },
+  "PhonoR-0": {
+    "profession": "辅助",
+    "rarity": 1
+  },
+  "THRM-EX": {
+    "profession": "特种",
+    "rarity": 1
+  },
+  "U-Official": {
+    "profession": "辅助",
+    "rarity": 1
+  },
+  "W": {
+    "profession": "狙击",
+    "rarity": 6
+  },
+  "万顷": {
+    "profession": "先锋",
+    "rarity": 5
+  },
+  "三角初华": {
+    "profession": "辅助",
+    "rarity": 5
+  },
+  "丰川祥子": {
+    "profession": "近卫",
+    "rarity": 6
+  },
+  "临光": {
+    "profession": "重装",
+    "rarity": 5
+  },
+  "乌啾": {
+    "profession": "医疗",
+    "rarity": 5
+  },
+  "乌尔比安": {
+    "profession": "近卫",
+    "rarity": 6
+  },
+  "乌有": {
+    "profession": "特种",
+    "rarity": 5
+  },
+  "九色鹿": {
+    "profession": "辅助",
+    "rarity": 5
+  },
+  "予愿安洁莉娜": {
+    "profession": "特种",
+    "rarity": 6
+  },
+  "云迹": {
+    "profession": "特种",
+    "rarity": 4
+  },
+  "亚叶": {
+    "profession": "医疗",
+    "rarity": 5
+  },
+  "仇白": {
+    "profession": "近卫",
+    "rarity": 6
+  },
+  "令": {
+    "profession": "辅助",
+    "rarity": 6
+  },
+  "伊内丝": {
+    "profession": "先锋",
+    "rarity": 6
+  },
+  "伊桑": {
+    "profession": "特种",
+    "rarity": 4
+  },
+  "伊芙利特": {
+    "profession": "术师",
+    "rarity": 6
+  },
+  "休谟斯": {
+    "profession": "近卫",
+    "rarity": 4
+  },
+  "伯塔尼": {
+    "profession": "辅助",
+    "rarity": 5
+  },
+  "伺夜": {
+    "profession": "先锋",
+    "rarity": 6
+  },
+  "但书": {
+    "profession": "辅助",
+    "rarity": 5
+  },
+  "余": {
+    "profession": "重装",
+    "rarity": 6
+  },
+  "佩佩": {
+    "profession": "近卫",
+    "rarity": 6
+  },
+  "佩德洛": {
+    "profession": "辅助",
+    "rarity": 5
+  },
+  "信仰搅拌机": {
+    "profession": "重装",
+    "rarity": 6
+  },
+  "假日威龙陈": {
+    "profession": "狙击",
+    "rarity": 6
+  },
+  "傀影": {
+    "profession": "特种",
+    "rarity": 6
+  },
+  "克洛丝": {
+    "profession": "狙击",
+    "rarity": 3
+  },
+  "八幡海铃": {
+    "profession": "特种",
+    "rarity": 5
+  },
+  "冬时": {
+    "profession": "先锋",
+    "rarity": 4
+  },
+  "冰酿": {
+    "profession": "狙击",
+    "rarity": 5
+  },
+  "凛冬": {
+    "profession": "先锋",
+    "rarity": 5
+  },
+  "凛御银灰": {
+    "profession": "先锋",
+    "rarity": 6
+  },
+  "凛视": {
+    "profession": "辅助",
+    "rarity": 5
+  },
+  "凯尔希": {
+    "profession": "医疗",
+    "rarity": 6
+  },
+  "凯尔希·思衡托": {
+    "profession": "医疗",
+    "rarity": 6
+  },
+  "凯瑟琳": {
+    "profession": "辅助",
+    "rarity": 5
+  },
+  "初雪": {
+    "profession": "辅助",
+    "rarity": 5
+  },
+  "刺玫": {
+    "profession": "医疗",
+    "rarity": 5
+  },
+  "刻俄柏": {
+    "profession": "术师",
+    "rarity": 6
+  },
+  "刻刀": {
+    "profession": "近卫",
+    "rarity": 4
+  },
+  "医生": {
+    "profession": "近卫",
+    "rarity": 5
+  },
+  "华法琳": {
+    "profession": "医疗",
+    "rarity": 5
+  },
+  "协律": {
+    "profession": "术师",
+    "rarity": 4
+  },
+  "卡夫卡": {
+    "profession": "特种",
+    "rarity": 5
+  },
+  "卡涅利安": {
+    "profession": "术师",
+    "rarity": 6
+  },
+  "卡缇": {
+    "profession": "重装",
+    "rarity": 3
+  },
+  "卡达": {
+    "profession": "术师",
+    "rarity": 4
+  },
+  "历阵锐枪芬": {
+    "profession": "先锋",
+    "rarity": 5
+  },
+  "双月": {
+    "profession": "特种",
+    "rarity": 5
+  },
+  "古米": {
+    "profession": "重装",
+    "rarity": 4
+  },
+  "可露希尔": {
+    "profession": "先锋",
+    "rarity": 6
+  },
+  "可颂": {
+    "profession": "重装",
+    "rarity": 5
+  },
+  "史尔特尔": {
+    "profession": "近卫",
+    "rarity": 6
+  },
+  "史都华德": {
+    "profession": "术师",
+    "rarity": 3
+  },
+  "号角": {
+    "profession": "重装",
+    "rarity": 6
+  },
+  "司霆惊蛰": {
+    "profession": "近卫",
+    "rarity": 6
+  },
+  "吉星": {
+    "profession": "狙击",
+    "rarity": 5
+  },
+  "吽": {
+    "profession": "重装",
+    "rarity": 5
+  },
+  "和弦": {
+    "profession": "术师",
+    "rarity": 5
+  },
+  "哈洛德": {
+    "profession": "医疗",
+    "rarity": 5
+  },
+  "哈蒂娅": {
+    "profession": "近卫",
+    "rarity": 5
+  },
+  "响石": {
+    "profession": "重装",
+    "rarity": 5
+  },
+  "嘉维尔": {
+    "profession": "医疗",
+    "rarity": 4
+  },
+  "嘉辛塔": {
+    "profession": "先锋",
+    "rarity": 5
+  },
+  "四月": {
+    "profession": "狙击",
+    "rarity": 5
+  },
+  "因陀罗": {
+    "profession": "近卫",
+    "rarity": 5
+  },
+  "图耶": {
+    "profession": "医疗",
+    "rarity": 5
+  },
+  "圣约送葬人": {
+    "profession": "近卫",
+    "rarity": 6
+  },
+  "圣聆初雪": {
+    "profession": "术师",
+    "rarity": 6
+  },
+  "地灵": {
+    "profession": "辅助",
+    "rarity": 4
+  },
+  "坚雷": {
+    "profession": "重装",
+    "rarity": 4
+  },
+  "埃拉托": {
+    "profession": "狙击",
+    "rarity": 5
+  },
+  "塑心": {
+    "profession": "辅助",
+    "rarity": 6
+  },
+  "塞雷娅": {
+    "profession": "重装",
+    "rarity": 6
+  },
+  "复奏": {
+    "profession": "术师",
+    "rarity": 5
+  },
+  "夏栎": {
+    "profession": "辅助",
+    "rarity": 5
+  },
+  "夕": {
+    "profession": "术师",
+    "rarity": 6
+  },
+  "多萝西": {
+    "profession": "特种",
+    "rarity": 6
+  },
+  "夜刀": {
+    "profession": "先锋",
+    "rarity": 2
+  },
+  "夜半": {
+    "profession": "先锋",
+    "rarity": 5
+  },
+  "夜烟": {
+    "profession": "术师",
+    "rarity": 4
+  },
+  "夜莺": {
+    "profession": "医疗",
+    "rarity": 6
+  },
+  "夜魔": {
+    "profession": "术师",
+    "rarity": 5
+  },
+  "天火": {
+    "profession": "术师",
+    "rarity": 5
+  },
+  "天空盒": {
+    "profession": "狙击",
+    "rarity": 5
+  },
+  "奥斯塔": {
+    "profession": "狙击",
+    "rarity": 5
+  },
+  "奥达": {
+    "profession": "近卫",
+    "rarity": 5
+  },
+  "妮芙": {
+    "profession": "术师",
+    "rarity": 6
+  },
+  "娜仁图亚": {
+    "profession": "狙击",
+    "rarity": 6
+  },
+  "娜斯提": {
+    "profession": "辅助",
+    "rarity": 6
+  },
+  "子月": {
+    "profession": "狙击",
+    "rarity": 5
+  },
+  "孑": {
+    "profession": "特种",
+    "rarity": 4
+  },
+  "守林人": {
+    "profession": "狙击",
+    "rarity": 5
+  },
+  "安哲拉": {
+    "profession": "狙击",
+    "rarity": 5
+  },
+  "安德切尔": {
+    "profession": "狙击",
+    "rarity": 3
+  },
+  "安比尔": {
+    "profession": "狙击",
+    "rarity": 4
+  },
+  "安洁莉娜": {
+    "profession": "辅助",
+    "rarity": 6
+  },
+  "安赛尔": {
+    "profession": "医疗",
+    "rarity": 3
+  },
+  "宴": {
+    "profession": "近卫",
+    "rarity": 4
+  },
+  "寒檀": {
+    "profession": "术师",
+    "rarity": 5
+  },
+  "寒芒克洛丝": {
+    "profession": "狙击",
+    "rarity": 5
+  },
+  "寻澜": {
+    "profession": "先锋",
+    "rarity": 5
+  },
+  "导火索": {
+    "profession": "近卫",
+    "rarity": 5
+  },
+  "小满": {
+    "profession": "辅助",
+    "rarity": 5
+  },
+  "山": {
+    "profession": "近卫",
+    "rarity": 6
+  },
+  "崖心": {
+    "profession": "特种",
+    "rarity": 5
+  },
+  "嵯峨": {
+    "profession": "先锋",
+    "rarity": 6
+  },
+  "巡林者": {
+    "profession": "狙击",
+    "rarity": 2
+  },
+  "左乐": {
+    "profession": "近卫",
+    "rarity": 6
+  },
+  "巫恋": {
+    "profession": "辅助",
+    "rarity": 5
+  },
+  "布丁": {
+    "profession": "术师",
+    "rarity": 4
+  },
+  "布洛卡": {
+    "profession": "近卫",
+    "rarity": 5
+  },
+  "帕拉斯": {
+    "profession": "近卫",
+    "rarity": 6
+  },
+  "年": {
+    "profession": "重装",
+    "rarity": 6
+  },
+  "幽灵鲨": {
+    "profession": "近卫",
+    "rarity": 5
+  },
+  "异客": {
+    "profession": "术师",
+    "rarity": 6
+  },
+  "弑君者": {
+    "profession": "特种",
+    "rarity": 6
+  },
+  "引星棘刺": {
+    "profession": "特种",
+    "rarity": 6
+  },
+  "归溟幽灵鲨": {
+    "profession": "特种",
+    "rarity": 6
+  },
+  "录武官": {
+    "profession": "医疗",
+    "rarity": 5
+  },
+  "微风": {
+    "profession": "医疗",
+    "rarity": 5
+  },
+  "德克萨斯": {
+    "profession": "先锋",
+    "rarity": 5
+  },
+  "忍冬": {
+    "profession": "先锋",
+    "rarity": 6
+  },
+  "怒潮凛冬": {
+    "profession": "近卫",
+    "rarity": 6
+  },
+  "惊蛰": {
+    "profession": "术师",
+    "rarity": 5
+  },
+  "慑砂": {
+    "profession": "狙击",
+    "rarity": 5
+  },
+  "慕斯": {
+    "profession": "近卫",
+    "rarity": 4
+  },
+  "战车": {
+    "profession": "近卫",
+    "rarity": 5
+  },
+  "截云": {
+    "profession": "狙击",
+    "rarity": 5
+  },
+  "戴菲恩": {
+    "profession": "术师",
+    "rarity": 5
+  },
+  "承曦格雷伊": {
+    "profession": "狙击",
+    "rarity": 5
+  },
+  "折光": {
+    "profession": "术师",
+    "rarity": 5
+  },
+  "折桠": {
+    "profession": "重装",
+    "rarity": 5
+  },
+  "拉普兰德": {
+    "profession": "近卫",
+    "rarity": 5
+  },
+  "拜松": {
+    "profession": "重装",
+    "rarity": 5
+  },
+  "掠风": {
+    "profession": "辅助",
+    "rarity": 5
+  },
+  "推进之王": {
+    "profession": "先锋",
+    "rarity": 6
+  },
+  "提丰": {
+    "profession": "狙击",
+    "rarity": 6
+  },
+  "摆渡人": {
+    "profession": "近卫",
+    "rarity": 5
+  },
+  "摩根": {
+    "profession": "近卫",
+    "rarity": 5
+  },
+  "撷英调香师": {
+    "profession": "辅助",
+    "rarity": 5
+  },
+  "斑点": {
+    "profession": "重装",
+    "rarity": 3
+  },
+  "斥罪": {
+    "profession": "重装",
+    "rarity": 6
+  },
+  "斩业星熊": {
+    "profession": "重装",
+    "rarity": 6
+  },
+  "断崖": {
+    "profession": "近卫",
+    "rarity": 5
+  },
+  "断罪者": {
+    "profession": "近卫",
+    "rarity": 4
+  },
+  "斯卡蒂": {
+    "profession": "近卫",
+    "rarity": 6
+  },
+  "新约能天使": {
+    "profession": "特种",
+    "rarity": 6
+  },
+  "早露": {
+    "profession": "狙击",
+    "rarity": 6
+  },
+  "时隙": {
+    "profession": "术师",
+    "rarity": 5
+  },
+  "明椒": {
+    "profession": "医疗",
+    "rarity": 5
+  },
+  "星极": {
+    "profession": "近卫",
+    "rarity": 5
+  },
+  "星源": {
+    "profession": "术师",
+    "rarity": 5
+  },
+  "星熊": {
+    "profession": "重装",
+    "rarity": 6
+  },
+  "晓歌": {
+    "profession": "先锋",
+    "rarity": 5
+  },
+  "普罗旺斯": {
+    "profession": "狙击",
+    "rarity": 5
+  },
+  "暗索": {
+    "profession": "特种",
+    "rarity": 4
+  },
+  "暮落": {
+    "profession": "重装",
+    "rarity": 5
+  },
+  "暴行": {
+    "profession": "近卫",
+    "rarity": 5
+  },
+  "暴雨": {
+    "profession": "重装",
+    "rarity": 5
+  },
+  "月禾": {
+    "profession": "辅助",
+    "rarity": 5
+  },
+  "月见夜": {
+    "profession": "近卫",
+    "rarity": 3
+  },
+  "望": {
+    "profession": "特种",
+    "rarity": 6
+  },
+  "末药": {
+    "profession": "医疗",
+    "rarity": 4
+  },
+  "机械师": {
+    "profession": "重装",
+    "rarity": 6
+  },
+  "杏仁": {
+    "profession": "特种",
+    "rarity": 5
+  },
+  "杜宾": {
+    "profession": "近卫",
+    "rarity": 4
+  },
+  "杜林": {
+    "profession": "术师",
+    "rarity": 2
+  },
+  "杰克": {
+    "profession": "近卫",
+    "rarity": 4
+  },
+  "杰西卡": {
+    "profession": "狙击",
+    "rarity": 4
+  },
+  "松果": {
+    "profession": "狙击",
+    "rarity": 4
+  },
+  "松桐": {
+    "profession": "先锋",
+    "rarity": 5
+  },
+  "极光": {
+    "profession": "重装",
+    "rarity": 5
+  },
+  "极境": {
+    "profession": "先锋",
+    "rarity": 5
+  },
+  "林": {
+    "profession": "术师",
+    "rarity": 6
+  },
+  "柏喙": {
+    "profession": "近卫",
+    "rarity": 5
+  },
+  "格劳克斯": {
+    "profession": "辅助",
+    "rarity": 5
+  },
+  "格拉尼": {
+    "profession": "先锋",
+    "rarity": 5
+  },
+  "格雷伊": {
+    "profession": "术师",
+    "rarity": 4
+  },
+  "桃金娘": {
+    "profession": "先锋",
+    "rarity": 4
+  },
+  "桑葚": {
+    "profession": "医疗",
+    "rarity": 5
+  },
+  "梅": {
+    "profession": "狙击",
+    "rarity": 4
+  },
+  "梅尔": {
+    "profession": "辅助",
+    "rarity": 5
+  },
+  "梓兰": {
+    "profession": "辅助",
+    "rarity": 3
+  },
+  "棘刺": {
+    "profession": "近卫",
+    "rarity": 6
+  },
+  "森蚺": {
+    "profession": "重装",
+    "rarity": 6
+  },
+  "森西": {
+    "profession": "重装",
+    "rarity": 5
+  },
+  "槐琥": {
+    "profession": "特种",
+    "rarity": 5
+  },
+  "歌蕾蒂娅": {
+    "profession": "特种",
+    "rarity": 6
+  },
+  "止颂": {
+    "profession": "近卫",
+    "rarity": 6
+  },
+  "正义骑士号": {
+    "profession": "狙击",
+    "rarity": 1
+  },
+  "死芒": {
+    "profession": "术师",
+    "rarity": 6
+  },
+  "水月": {
+    "profession": "特种",
+    "rarity": 6
+  },
+  "水灯心": {
+    "profession": "狙击",
+    "rarity": 5
+  },
+  "泡普卡": {
+    "profession": "近卫",
+    "rarity": 3
+  },
+  "泡泡": {
+    "profession": "重装",
+    "rarity": 4
+  },
+  "波卜": {
+    "profession": "辅助",
+    "rarity": 5
+  },
+  "波登可": {
+    "profession": "辅助",
+    "rarity": 4
+  },
+  "泥岩": {
+    "profession": "重装",
+    "rarity": 6
+  },
+  "泰拉大陆调查团": {
+    "profession": "狙击",
+    "rarity": 1
+  },
+  "洋灰": {
+    "profession": "重装",
+    "rarity": 5
+  },
+  "洛洛": {
+    "profession": "术师",
+    "rarity": 5
+  },
+  "流明": {
+    "profession": "医疗",
+    "rarity": 6
+  },
+  "流星": {
+    "profession": "狙击",
+    "rarity": 4
+  },
+  "浊心斯卡蒂": {
+    "profession": "辅助",
+    "rarity": 6
+  },
+  "海沫": {
+    "profession": "近卫",
+    "rarity": 5
+  },
+  "海蒂": {
+    "profession": "辅助",
+    "rarity": 5
+  },
+  "海霓": {
+    "profession": "辅助",
+    "rarity": 5
+  },
+  "涤火杰西卡": {
+    "profession": "重装",
+    "rarity": 6
+  },
+  "淬羽赫默": {
+    "profession": "辅助",
+    "rarity": 6
+  },
+  "深巡": {
+    "profession": "重装",
+    "rarity": 5
+  },
+  "深律": {
+    "profession": "重装",
+    "rarity": 5
+  },
+  "深海色": {
+    "profession": "辅助",
+    "rarity": 4
+  },
+  "深靛": {
+    "profession": "术师",
+    "rarity": 4
+  },
+  "清流": {
+    "profession": "医疗",
+    "rarity": 4
+  },
+  "清道夫": {
+    "profession": "先锋",
+    "rarity": 4
+  },
+  "渡桥": {
+    "profession": "先锋",
+    "rarity": 5
+  },
+  "温米": {
+    "profession": "术师",
+    "rarity": 5
+  },
+  "温蒂": {
+    "profession": "特种",
+    "rarity": 6
+  },
+  "溯光星源": {
+    "profession": "辅助",
+    "rarity": 6
+  },
+  "澄闪": {
+    "profession": "术师",
+    "rarity": 6
+  },
+  "濯尘芙蓉": {
+    "profession": "医疗",
+    "rarity": 5
+  },
+  "火哨": {
+    "profession": "重装",
+    "rarity": 5
+  },
+  "火神": {
+    "profession": "重装",
+    "rarity": 5
+  },
+  "火龙S黑角": {
+    "profession": "近卫",
+    "rarity": 5
+  },
+  "灰喉": {
+    "profession": "狙击",
+    "rarity": 5
+  },
+  "灰毫": {
+    "profession": "重装",
+    "rarity": 5
+  },
+  "灰烬": {
+    "profession": "狙击",
+    "rarity": 6
+  },
+  "灵知": {
+    "profession": "辅助",
+    "rarity": 6
+  },
+  "炎客": {
+    "profession": "近卫",
+    "rarity": 5
+  },
+  "炎熔": {
+    "profession": "术师",
+    "rarity": 3
+  },
+  "炎狱炎熔": {
+    "profession": "术师",
+    "rarity": 5
+  },
+  "烈夏": {
+    "profession": "近卫",
+    "rarity": 5
+  },
+  "烛煌": {
+    "profession": "术师",
+    "rarity": 6
+  },
+  "焰尾": {
+    "profession": "先锋",
+    "rarity": 6
+  },
+  "焰影苇草": {
+    "profession": "医疗",
+    "rarity": 6
+  },
+  "焰狐龙梓兰": {
+    "profession": "狙击",
+    "rarity": 6
+  },
+  "煌": {
+    "profession": "近卫",
+    "rarity": 6
+  },
+  "熔泉": {
+    "profession": "狙击",
+    "rarity": 5
+  },
+  "燧石": {
+    "profession": "近卫",
+    "rarity": 5
+  },
+  "爱丽丝": {
+    "profession": "术师",
+    "rarity": 5
+  },
+  "特克诺": {
+    "profession": "术师",
+    "rarity": 5
+  },
+  "特米米": {
+    "profession": "术师",
+    "rarity": 5
+  },
+  "狮蝎": {
+    "profession": "特种",
+    "rarity": 5
+  },
+  "猎蜂": {
+    "profession": "近卫",
+    "rarity": 4
+  },
+  "玛恩纳": {
+    "profession": "近卫",
+    "rarity": 6
+  },
+  "玛露西尔": {
+    "profession": "术师",
+    "rarity": 6
+  },
+  "玫兰莎": {
+    "profession": "近卫",
+    "rarity": 3
+  },
+  "玫拉": {
+    "profession": "狙击",
+    "rarity": 5
+  },
+  "珊比": {
+    "profession": "重装",
+    "rarity": 6
+  },
+  "琳琅诗怀雅": {
+    "profession": "特种",
+    "rarity": 6
+  },
+  "琴柳": {
+    "profession": "先锋",
+    "rarity": 6
+  },
+  "瑕光": {
+    "profession": "重装",
+    "rarity": 6
+  },
+  "瑰盐": {
+    "profession": "医疗",
+    "rarity": 5
+  },
+  "电弧": {
+    "profession": "辅助",
+    "rarity": 6
+  },
+  "白金": {
+    "profession": "狙击",
+    "rarity": 5
+  },
+  "白铁": {
+    "profession": "辅助",
+    "rarity": 6
+  },
+  "白雪": {
+    "profession": "狙击",
+    "rarity": 4
+  },
+  "白面鸮": {
+    "profession": "医疗",
+    "rarity": 5
+  },
+  "百炼嘉维尔": {
+    "profession": "近卫",
+    "rarity": 6
+  },
+  "真理": {
+    "profession": "辅助",
+    "rarity": 5
+  },
+  "真言": {
+    "profession": "术师",
+    "rarity": 6
+  },
+  "矩": {
+    "profession": "狙击",
+    "rarity": 5
+  },
+  "石棉": {
+    "profession": "重装",
+    "rarity": 5
+  },
+  "石英": {
+    "profession": "近卫",
+    "rarity": 4
+  },
+  "砾": {
+    "profession": "特种",
+    "rarity": 4
+  },
+  "祐天寺若麦": {
+    "profession": "近卫",
+    "rarity": 5
+  },
+  "稀音": {
+    "profession": "辅助",
+    "rarity": 5
+  },
+  "空": {
+    "profession": "辅助",
+    "rarity": 5
+  },
+  "空弦": {
+    "profession": "狙击",
+    "rarity": 6
+  },
+  "空构": {
+    "profession": "特种",
+    "rarity": 5
+  },
+  "空爆": {
+    "profession": "狙击",
+    "rarity": 3
+  },
+  "米格鲁": {
+    "profession": "重装",
+    "rarity": 3
+  },
+  "絮雨": {
+    "profession": "医疗",
+    "rarity": 5
+  },
+  "红": {
+    "profession": "特种",
+    "rarity": 5
+  },
+  "红云": {
+    "profession": "狙击",
+    "rarity": 4
+  },
+  "红豆": {
+    "profession": "先锋",
+    "rarity": 4
+  },
+  "红隼": {
+    "profession": "先锋",
+    "rarity": 5
+  },
+  "纯烬艾雅法拉": {
+    "profession": "医疗",
+    "rarity": 6
+  },
+  "绮良": {
+    "profession": "特种",
+    "rarity": 5
+  },
+  "维什戴尔": {
+    "profession": "狙击",
+    "rarity": 6
+  },
+  "维伊": {
+    "profession": "术师",
+    "rarity": 6
+  },
+  "维娜·维多利亚": {
+    "profession": "近卫",
+    "rarity": 6
+  },
+  "维荻": {
+    "profession": "特种",
+    "rarity": 4
+  },
+  "缄默德克萨斯": {
+    "profession": "特种",
+    "rarity": 6
+  },
+  "缇缇": {
+    "profession": "医疗",
+    "rarity": 6
+  },
+  "缠丸": {
+    "profession": "近卫",
+    "rarity": 4
+  },
+  "缪尔赛思": {
+    "profession": "先锋",
+    "rarity": 6
+  },
+  "罗宾": {
+    "profession": "特种",
+    "rarity": 5
+  },
+  "罗小黑": {
+    "profession": "近卫",
+    "rarity": 4
+  },
+  "罗德岛隐秘队": {
+    "profession": "先锋",
+    "rarity": 1
+  },
+  "罗比菈塔": {
+    "profession": "辅助",
+    "rarity": 4
+  },
+  "羽毛笔": {
+    "profession": "近卫",
+    "rarity": 5
+  },
+  "翎羽": {
+    "profession": "先锋",
+    "rarity": 3
+  },
+  "耀骑士临光": {
+    "profession": "近卫",
+    "rarity": 6
+  },
+  "老鲤": {
+    "profession": "特种",
+    "rarity": 6
+  },
+  "耶拉": {
+    "profession": "术师",
+    "rarity": 5
+  },
+  "聆音": {
+    "profession": "近卫",
+    "rarity": 5
+  },
+  "能天使": {
+    "profession": "狙击",
+    "rarity": 6
+  },
+  "至简": {
+    "profession": "术师",
+    "rarity": 5
+  },
+  "艾丝黛尔": {
+    "profession": "近卫",
+    "rarity": 4
+  },
+  "艾丽妮": {
+    "profession": "近卫",
+    "rarity": 6
+  },
+  "艾拉": {
+    "profession": "特种",
+    "rarity": 6
+  },
+  "艾雅法拉": {
+    "profession": "术师",
+    "rarity": 6
+  },
+  "芙兰卡": {
+    "profession": "近卫",
+    "rarity": 5
+  },
+  "芙蓉": {
+    "profession": "医疗",
+    "rarity": 3
+  },
+  "芬": {
+    "profession": "先锋",
+    "rarity": 3
+  },
+  "芳汀": {
+    "profession": "近卫",
+    "rarity": 4
+  },
+  "苇草": {
+    "profession": "先锋",
+    "rarity": 5
+  },
+  "苍苔": {
+    "profession": "近卫",
+    "rarity": 5
+  },
+  "苏苏洛": {
+    "profession": "医疗",
+    "rarity": 4
+  },
+  "若叶睦": {
+    "profession": "特种",
+    "rarity": 5
+  },
+  "苦艾": {
+    "profession": "术师",
+    "rarity": 5
+  },
+  "荒芜拉普兰德": {
+    "profession": "术师",
+    "rarity": 6
+  },
+  "莎草": {
+    "profession": "医疗",
+    "rarity": 5
+  },
+  "莫斯提马": {
+    "profession": "术师",
+    "rarity": 6
+  },
+  "莱伊": {
+    "profession": "狙击",
+    "rarity": 6
+  },
+  "莱恩哈特": {
+    "profession": "术师",
+    "rarity": 5
+  },
+  "莱欧斯": {
+    "profession": "近卫",
+    "rarity": 5
+  },
+  "菲亚梅塔": {
+    "profession": "狙击",
+    "rarity": 6
+  },
+  "菲莱": {
+    "profession": "重装",
+    "rarity": 5
+  },
+  "蒂比": {
+    "profession": "特种",
+    "rarity": 5
+  },
+  "蓝毒": {
+    "profession": "狙击",
+    "rarity": 5
+  },
+  "蕾缪安": {
+    "profession": "狙击",
+    "rarity": 6
+  },
+  "薄绿": {
+    "profession": "术师",
+    "rarity": 5
+  },
+  "薇薇安娜": {
+    "profession": "近卫",
+    "rarity": 6
+  },
+  "蚀清": {
+    "profession": "术师",
+    "rarity": 5
+  },
+  "蛇屠箱": {
+    "profession": "重装",
+    "rarity": 4
+  },
+  "蜜莓": {
+    "profession": "医疗",
+    "rarity": 5
+  },
+  "蜜蜡": {
+    "profession": "术师",
+    "rarity": 5
+  },
+  "行箸": {
+    "profession": "辅助",
+    "rarity": 5
+  },
+  "衡沙": {
+    "profession": "辅助",
+    "rarity": 5
+  },
+  "裁度": {
+    "profession": "特种",
+    "rarity": 5
+  },
+  "裂响": {
+    "profession": "重装",
+    "rarity": 5
+  },
+  "褐果": {
+    "profession": "医疗",
+    "rarity": 4
+  },
+  "见行者": {
+    "profession": "特种",
+    "rarity": 5
+  },
+  "角峰": {
+    "profession": "重装",
+    "rarity": 4
+  },
+  "讯使": {
+    "profession": "先锋",
+    "rarity": 4
+  },
+  "诗怀雅": {
+    "profession": "近卫",
+    "rarity": 5
+  },
+  "诺威尔": {
+    "profession": "医疗",
+    "rarity": 5
+  },
+  "调香师": {
+    "profession": "医疗",
+    "rarity": 4
+  },
+  "谜图": {
+    "profession": "先锋",
+    "rarity": 5
+  },
+  "谬因": {
+    "profession": "术师",
+    "rarity": 6
+  },
+  "豆苗": {
+    "profession": "先锋",
+    "rarity": 4
+  },
+  "贝娜": {
+    "profession": "特种",
+    "rarity": 5
+  },
+  "贝洛内": {
+    "profession": "近卫",
+    "rarity": 6
+  },
+  "贾维": {
+    "profession": "先锋",
+    "rarity": 5
+  },
+  "赤冬": {
+    "profession": "近卫",
+    "rarity": 5
+  },
+  "赤刃明霄陈": {
+    "profession": "近卫",
+    "rarity": 6
+  },
+  "赫德雷": {
+    "profession": "近卫",
+    "rarity": 6
+  },
+  "赫拉格": {
+    "profession": "近卫",
+    "rarity": 6
+  },
+  "赫默": {
+    "profession": "医疗",
+    "rarity": 5
+  },
+  "跃跃": {
+    "profession": "狙击",
+    "rarity": 4
+  },
+  "车尔尼": {
+    "profession": "重装",
+    "rarity": 5
+  },
+  "达格达": {
+    "profession": "近卫",
+    "rarity": 5
+  },
+  "远山": {
+    "profession": "术师",
+    "rarity": 4
+  },
+  "远牙": {
+    "profession": "狙击",
+    "rarity": 6
+  },
+  "迷迭香": {
+    "profession": "狙击",
+    "rarity": 6
+  },
+  "送葬人": {
+    "profession": "狙击",
+    "rarity": 5
+  },
+  "逻各斯": {
+    "profession": "术师",
+    "rarity": 6
+  },
+  "遥": {
+    "profession": "辅助",
+    "rarity": 6
+  },
+  "酒神": {
+    "profession": "辅助",
+    "rarity": 6
+  },
+  "酸糖": {
+    "profession": "狙击",
+    "rarity": 4
+  },
+  "重岳": {
+    "profession": "近卫",
+    "rarity": 6
+  },
+  "野鬃": {
+    "profession": "先锋",
+    "rarity": 5
+  },
+  "钼铅": {
+    "profession": "特种",
+    "rarity": 5
+  },
+  "铃兰": {
+    "profession": "辅助",
+    "rarity": 6
+  },
+  "铅踝": {
+    "profession": "狙击",
+    "rarity": 4
+  },
+  "铎铃": {
+    "profession": "近卫",
+    "rarity": 5
+  },
+  "银灰": {
+    "profession": "近卫",
+    "rarity": 6
+  },
+  "铸铁": {
+    "profession": "近卫",
+    "rarity": 5
+  },
+  "锏": {
+    "profession": "近卫",
+    "rarity": 6
+  },
+  "锡人": {
+    "profession": "特种",
+    "rarity": 5
+  },
+  "锡兰": {
+    "profession": "医疗",
+    "rarity": 5
+  },
+  "闪击": {
+    "profession": "重装",
+    "rarity": 5
+  },
+  "闪灵": {
+    "profession": "医疗",
+    "rarity": 6
+  },
+  "阿": {
+    "profession": "特种",
+    "rarity": 6
+  },
+  "阿兰娜": {
+    "profession": "辅助",
+    "rarity": 5
+  },
+  "阿斯卡纶": {
+    "profession": "特种",
+    "rarity": 6
+  },
+  "阿消": {
+    "profession": "特种",
+    "rarity": 4
+  },
+  "阿米娅": {
+    "profession": "术师",
+    "rarity": 5
+  },
+  "阿米娅(医疗)": {
+    "profession": "医疗",
+    "rarity": 5
+  },
+  "阿米娅(近卫)": {
+    "profession": "近卫",
+    "rarity": 5
+  },
+  "阿罗玛": {
+    "profession": "术师",
+    "rarity": 5
+  },
+  "陈": {
+    "profession": "近卫",
+    "rarity": 6
+  },
+  "陨星": {
+    "profession": "狙击",
+    "rarity": 5
+  },
+  "隐德来希": {
+    "profession": "近卫",
+    "rarity": 6
+  },
+  "隐现": {
+    "profession": "狙击",
+    "rarity": 5
+  },
+  "雪猎": {
+    "profession": "狙击",
+    "rarity": 5
+  },
+  "雪绒": {
+    "profession": "术师",
+    "rarity": 5
+  },
+  "雪雉": {
+    "profession": "特种",
+    "rarity": 5
+  },
+  "雷狼龙S空爆": {
+    "profession": "近卫",
+    "rarity": 5
+  },
+  "雷蛇": {
+    "profession": "重装",
+    "rarity": 5
+  },
+  "霍尔海雅": {
+    "profession": "术师",
+    "rarity": 6
+  },
+  "霜华": {
+    "profession": "特种",
+    "rarity": 5
+  },
+  "霜叶": {
+    "profession": "近卫",
+    "rarity": 4
+  },
+  "露托": {
+    "profession": "重装",
+    "rarity": 4
+  },
+  "青枳": {
+    "profession": "先锋",
+    "rarity": 5
+  },
+  "鞭刃": {
+    "profession": "近卫",
+    "rarity": 5
+  },
+  "风丸": {
+    "profession": "特种",
+    "rarity": 5
+  },
+  "风笛": {
+    "profession": "先锋",
+    "rarity": 6
+  },
+  "风絮": {
+    "profession": "医疗",
+    "rarity": 5
+  },
+  "食铁兽": {
+    "profession": "特种",
+    "rarity": 5
+  },
+  "香草": {
+    "profession": "先锋",
+    "rarity": 3
+  },
+  "骋风": {
+    "profession": "近卫",
+    "rarity": 4
+  },
+  "魔王": {
+    "profession": "辅助",
+    "rarity": 6
+  },
+  "鸿雪": {
+    "profession": "狙击",
+    "rarity": 6
+  },
+  "麒麟R夜刀": {
+    "profession": "特种",
+    "rarity": 6
+  },
+  "麦哲伦": {
+    "profession": "辅助",
+    "rarity": 6
+  },
+  "黍": {
+    "profession": "重装",
+    "rarity": 6
+  },
+  "黑": {
+    "profession": "狙击",
+    "rarity": 6
+  },
+  "黑角": {
+    "profession": "重装",
+    "rarity": 2
+  },
+  "黑键": {
+    "profession": "术师",
+    "rarity": 6
+  },
+  "齐尔查克": {
+    "profession": "先锋",
+    "rarity": 5
+  },
+  "龙舌兰": {
+    "profession": "近卫",
+    "rarity": 5
+  }
+}

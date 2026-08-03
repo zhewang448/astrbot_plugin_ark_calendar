@@ -1,0 +1,66 @@
+[
+  {
+    "id": "SINGLE_75_0_3",
+    "name": "永不落幕-复刻",
+    "type": "SINGLE",
+    "start": "2026-07-20T16:00:00+08:00",
+    "end": "2026-08-03T03:59:59+08:00",
+    "six": [
+      "酒神"
+    ],
+    "weighted": [],
+    "image": "https://media.prts.wiki/thumb/d/d5/%E6%B0%B8%E4%B8%8D%E8%90%BD%E5%B9%95_%E5%A4%8D%E5%88%BB.jpg/400px-%E6%B0%B8%E4%B8%8D%E8%90%BD%E5%B9%95_%E5%A4%8D%E5%88%BB.jpg?v=oxmv5jxn17wqzcos12atzckm0jmlcwj"
+  },
+  {
+    "id": "CLASSIC_DOUBLE_75_0_1",
+    "name": "中坚寻访-第七十一期",
+    "type": "CLASSIC_DOUBLE",
+    "start": "2026-07-23T04:00:00+08:00",
+    "end": "2026-08-06T03:59:59+08:00",
+    "six": [
+      "安洁莉娜",
+      "黑"
+    ],
+    "weighted": [],
+    "image": "https://media.prts.wiki/thumb/b/b0/%E4%B8%AD%E5%9D%9A%E5%B9%B2%E5%91%98%E8%BD%AE%E6%8D%A2%E5%8D%A1%E6%B1%A071.jpg/400px-%E4%B8%AD%E5%9D%9A%E5%B9%B2%E5%91%98%E8%BD%AE%E6%8D%A2%E5%8D%A1%E6%B1%A071.jpg?v=22nmojc1ynwexxs6udw8uzda69akqpg"
+  },
+  {
+    "id": "DOUBLE_75_0_4",
+    "name": "常驻标准寻访-第一百九十期",
+    "type": "DOUBLE",
+    "start": "2026-07-30T04:00:00+08:00",
+    "end": "2026-08-13T03:59:59+08:00",
+    "six": [
+      "琳琅诗怀雅",
+      "缇缇"
+    ],
+    "weighted": [],
+    "image": "https://media.prts.wiki/thumb/3/3d/%E5%B9%B2%E5%91%98%E8%BD%AE%E6%8D%A2%E5%8D%A1%E6%B1%A0190.png/400px-%E5%B9%B2%E5%91%98%E8%BD%AE%E6%8D%A2%E5%8D%A1%E6%B1%A0190.png?v=axyab88pxb85lvj29ur6rv4acjxuw9b"
+  },
+  {
+    "id": "LIMITED_76_0_1",
+    "name": "车辙与风的归所",
+    "type": "LIMITED",
+    "start": "2026-08-01T07:00:00+08:00",
+    "end": "2026-08-15T03:59:59+08:00",
+    "six": [
+      "予愿安洁莉娜",
+      "珊比"
+    ],
+    "weighted": [],
+    "image": ""
+  },
+  {
+    "id": "CLASSIC_DOUBLE_76_0_1",
+    "name": "中坚寻访-第七十二期",
+    "type": "CLASSIC_DOUBLE",
+    "start": "2026-08-06T04:00:00+08:00",
+    "end": "2026-08-20T03:59:59+08:00",
+    "six": [
+      "森蚺",
+      "远牙"
+    ],
+    "weighted": [],
+    "image": ""
+  }
+]
