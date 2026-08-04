@@ -14,7 +14,7 @@ from astrbot.api.event import AstrMessageEvent, MessageChain, filter
 from astrbot.api.star import Context, Star
 from astrbot.core.utils.astrbot_path import get_astrbot_plugin_data_path
 
-from .core.config import config_strings, config_value
+from .core.config import config_strings, config_value, sync_builtin_message_previews
 from .core.messages import MessageCatalog
 from .core.render_cache import CalendarImageCache
 from .core.renderer import CalendarRenderer
@@ -29,6 +29,9 @@ class ArkCalendarPlugin(Star):
         super().__init__(context)
         self.config = config
         self.plugin_dir = Path(__file__).resolve().parent
+        if sync_builtin_message_previews(config, self.plugin_dir / "_conf_schema.json"):
+            self.config.save_config()
+            logger.info("已同步内置文案预览到当前插件配置。")
         self.data_dir = Path(get_astrbot_plugin_data_path()) / "astrbot_plugin_ark_calendar"
         self.service = CalendarService(self.plugin_dir, self.data_dir, config, logger)
         self.renderer = CalendarRenderer(self, self.service)
