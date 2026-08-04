@@ -26,9 +26,13 @@ CN_TZ = ZoneInfo("Asia/Shanghai")
 
 
 class CalendarService:
-    SNAPSHOT_SCHEMA_VERSION = 2
+    SNAPSHOT_SCHEMA_VERSION = 3
+    SOURCE_CACHE_SCHEMA_VERSION = 1
+    SOURCE_CACHE_KIND = "ark_calendar_source_cache"
     MIN_TIMELINE_DAYS = 7
     MAX_TIMELINE_DAYS = 90
+    EVENT_DETAIL_TTL = timedelta(hours=12)
+    EVENT_DETAIL_MAX_STALE = timedelta(days=7)
 
     def __init__(self, plugin_dir: Path, data_dir: Path, config: dict, logger):
         self.plugin_dir = plugin_dir
@@ -123,6 +127,9 @@ class CalendarService:
             "timeline_days": self.timeline_days(),
             "include_recent_operators": bool(self.value("basic", "include_recent_operators", True, "include_recent_operators")),
             "include_long_term": bool(self.value("basic", "include_long_term", True, "include_long_term")),
+            "anything_ics_base_url": str(self.value("data_sources", "anything_ics_base_url", "", "anything_ics_base_url") or ""),
+            "prts_base_url": str(self.value("data_sources", "prts_base_url", "", "prts_base_url") or ""),
+            "gacha_data_url": str(self.value("data_sources", "gacha_data_url", "", "gacha_data_url") or ""),
         }
 
     def _data_config_hash(self) -> str:
@@ -136,6 +143,124 @@ class CalendarService:
             return match.group(1) if match else "dev"
         except OSError:
             return "dev"
+
+    def snapshot_fallback_max_age(self) -> timedelta:
+        try:
+            hours = int(self.value("cache_and_render", "snapshot_fallback_max_age_hours", 12))
+        except (TypeError, ValueError):
+            hours = 12
+        return timedelta(hours=max(1, hours))
+
+    def _can_use_snapshot(self, snapshot: CalendarSnapshot | None, max_age: timedelta) -> bool:
+        if not snapshot:
+            return False
+        try:
+            generated = parse_iso(snapshot.generated_at).astimezone(CN_TZ)
+        except (TypeError, ValueError):
+            return False
+        now = self._now()
+        return (
+            snapshot.schema_version == self.SNAPSHOT_SCHEMA_VERSION
+            and snapshot.data_config_hash == self._data_config_hash()
+            and generated <= now
+            and now.date() == generated.date()
+            and now - generated <= max_age
+        )
+
+    def _save_source_cache(self, cache_name: str, data: Any, fetched_at: datetime | None = None) -> None:
+        fetched = fetched_at or self._now()
+        self.cache.save(cache_name, {
+            "_cache_kind": self.SOURCE_CACHE_KIND,
+            "schema_version": self.SOURCE_CACHE_SCHEMA_VERSION,
+            "fetched_at": fetched.isoformat(),
+            "data": data,
+        })
+
+    def _load_source_cache(self, cache_name: str) -> tuple[Any | None, datetime | None]:
+        stored = self.cache.load(cache_name)
+        if isinstance(stored, dict) and stored.get("_cache_kind") == self.SOURCE_CACHE_KIND:
+            try:
+                fetched_at = parse_iso(str(stored.get("fetched_at", ""))).astimezone(CN_TZ)
+            except (TypeError, ValueError):
+                return stored.get("data"), None
+            return stored.get("data"), fetched_at
+        if stored is None:
+            return None, None
+        try:
+            fetched_at = datetime.fromtimestamp(self.cache.path(cache_name).stat().st_mtime, CN_TZ)
+        except OSError:
+            fetched_at = None
+        return stored, fetched_at
+
+    @staticmethod
+    def _cache_age_text(age: timedelta) -> str:
+        seconds = max(0, int(age.total_seconds()))
+        if seconds < 3600:
+            return f"{max(1, seconds // 60)} 分钟"
+        if seconds < 86400:
+            return f"{seconds // 3600} 小时"
+        return f"{seconds // 86400} 天"
+
+    @staticmethod
+    def _valid_birthdays(data: Any) -> bool:
+        if not isinstance(data, list) or len(data) < 100:
+            return False
+        valid = 0
+        for item in data:
+            birthday = item.get("birthday") if isinstance(item, dict) else None
+            if not isinstance(item, dict) or not isinstance(item.get("name"), str) or not item["name"].strip() or not isinstance(birthday, dict):
+                continue
+            month, day = birthday.get("month"), birthday.get("day")
+            if isinstance(month, int) and isinstance(day, int) and 1 <= month <= 12 and 1 <= day <= 31:
+                valid += 1
+        return valid >= 100 and valid / len(data) >= 0.9
+
+    @staticmethod
+    def _valid_events(data: Any) -> bool:
+        if not isinstance(data, list) or not data:
+            return False
+        valid = 0
+        for item in data:
+            try:
+                if not isinstance(item, dict) or not isinstance(item.get("name"), str) or not item["name"].strip():
+                    continue
+                if parse_iso(str(item["end"])) < parse_iso(str(item["start"])):
+                    continue
+                valid += 1
+            except (KeyError, TypeError, ValueError):
+                continue
+        return valid > 0 and valid / len(data) >= 0.8
+
+    @staticmethod
+    def _valid_home(data: Any) -> bool:
+        if not isinstance(data, dict):
+            return False
+        supplies = data.get("supplies")
+        schedule = data.get("resource_schedule")
+        return isinstance(supplies, list) or (isinstance(schedule, list) and bool(schedule))
+
+    @staticmethod
+    def _valid_operator_index(data: Any) -> bool:
+        if not isinstance(data, dict) or len(data) < 100:
+            return False
+        valid = sum(1 for name, info in data.items() if isinstance(name, str) and name.strip() and isinstance(info, dict))
+        return valid / len(data) >= 0.9
+
+    @staticmethod
+    def _valid_gacha_overview(data: Any) -> bool:
+        if not isinstance(data, list) or not data:
+            return False
+        valid = 0
+        for item in data:
+            try:
+                if not isinstance(item, dict) or not str(item.get("name", "")).strip():
+                    continue
+                if datetime.strptime(str(item["end"]), "%Y-%m-%d %H:%M") < datetime.strptime(str(item["start"]), "%Y-%m-%d %H:%M"):
+                    continue
+                valid += 1
+            except (KeyError, TypeError, ValueError):
+                continue
+        return valid > 0 and valid / len(data) >= 0.8
 
     def snapshot_is_fresh(self) -> bool:
         return self._snapshot_is_fresh(self.cache_ttl())
@@ -165,25 +290,13 @@ class CalendarService:
                 self.last_refresh_used_cache = self.last_snapshot is not None
                 self.last_refresh_finished_at = self._now().isoformat()
                 self.logger.error(f"方舟日历刷新失败：{self.last_refresh_error}", exc_info=True)
-                if self.last_snapshot:
-                    self.logger.warning("方舟日历将继续使用上一次快照。")
-                    return self.last_snapshot
+                if self._can_use_snapshot(self.last_snapshot, self.snapshot_fallback_max_age()):
+                    self.logger.warning("方舟日历刷新失败，已在允许陈旧期限内使用上一次快照。")
+                    return self.last_snapshot  # type: ignore[return-value]
                 raise
 
     def _snapshot_is_fresh(self, ttl: timedelta) -> bool:
-        if not self.last_snapshot:
-            return False
-        try:
-            generated = parse_iso(self.last_snapshot.generated_at).astimezone(CN_TZ)
-        except (TypeError, ValueError):
-            return False
-        now = self._now()
-        return (
-            self.last_snapshot.schema_version == self.SNAPSHOT_SCHEMA_VERSION
-            and self.last_snapshot.data_config_hash == self._data_config_hash()
-            and now.date() == generated.date()
-            and now - generated < ttl
-        )
+        return self._can_use_snapshot(self.last_snapshot, ttl)
 
     async def find_operator(self, query: str) -> tuple[Operator | None, list[str]]:
         await self._ensure_reference_data()
@@ -225,20 +338,14 @@ class CalendarService:
         assert self.anything and self.prts
         if not self._birthdays:
             data, _ = await self._fetch_cached(
-                "birthdays.json",
-                "anything-ics / 生日",
-                self.anything.birthdays(),
-                [],
-                lambda value: isinstance(value, list) and len(value) > 100,
+                "birthdays.json", "anything-ics / 生日", self.anything.birthdays(), [],
+                self._valid_birthdays, timedelta(days=7),
             )
             self._birthdays = data
         if not self._operator_index:
             data, _ = await self._fetch_cached(
-                "operators.json",
-                "PRTS / 干员一览",
-                self.prts.operator_index(),
-                {},
-                lambda value: isinstance(value, dict) and len(value) > 100,
+                "operators.json", "PRTS / 干员一览", self.prts.operator_index(), {},
+                self._valid_operator_index, timedelta(days=7),
             )
             self._operator_index = data
 
@@ -249,26 +356,11 @@ class CalendarService:
         end = start + timedelta(days=self.timeline_days())
 
         source_results = await asyncio.gather(
-            self._fetch_cached(
-                "birthdays.json", "anything-ics / 生日", self.anything.birthdays(), [],
-                lambda value: isinstance(value, list) and len(value) > 100,
-            ),
-            self._fetch_cached(
-                "events.json", "anything-ics / 活动", self.anything.events(), [],
-                lambda value: isinstance(value, list) and bool(value),
-            ),
-            self._fetch_cached(
-                "prts_home.json", "PRTS / 首页", self.prts.home(now), {},
-                lambda value: isinstance(value, dict) and bool(value.get("resource_schedule") or value.get("supplies")),
-            ),
-            self._fetch_cached(
-                "operators.json", "PRTS / 干员一览", self.prts.operator_index(), {},
-                lambda value: isinstance(value, dict) and len(value) > 100,
-            ),
-            self._fetch_cached(
-                "gacha_overview.json", "PRTS / 卡池一览", self.prts.gacha_overview(), [],
-                lambda value: isinstance(value, list) and bool(value),
-            ),
+            self._fetch_cached("birthdays.json", "anything-ics / 生日", self.anything.birthdays(), [], self._valid_birthdays, timedelta(days=7)),
+            self._fetch_cached("events.json", "anything-ics / 活动", self.anything.events(), [], self._valid_events, timedelta(hours=24)),
+            self._fetch_cached("prts_home.json", "PRTS / 首页", self.prts.home(now), {}, self._valid_home, timedelta(hours=6)),
+            self._fetch_cached("operators.json", "PRTS / 干员一览", self.prts.operator_index(), {}, self._valid_operator_index, timedelta(days=7)),
+            self._fetch_cached("gacha_overview.json", "PRTS / 卡池一览", self.prts.gacha_overview(), [], self._valid_gacha_overview, timedelta(hours=24)),
         )
         birthdays, events_raw, home, operator_index, overview = [item[0] for item in source_results]
         source_states = [item[1] for item in source_results]
@@ -421,6 +513,35 @@ class CalendarService:
             (long_items if model.is_long_term else event_items).append(model)
         return event_items, long_items
 
+    async def historical_schedule(self, start: datetime, end: datetime) -> dict[str, Any]:
+        """Fetch a past time window without reading or overwriting normal snapshot caches."""
+        assert self.anything and self.prts and self.gacha
+        if start > end:
+            raise ValueError("开始日期不能晚于结束日期")
+        events_raw, overview = await asyncio.gather(
+            self.anything.events(),
+            self.prts.gacha_overview(),
+        )
+        if not self._valid_events(events_raw):
+            raise ValueError("anything-ics 活动数据格式异常")
+        if not self._valid_gacha_overview(overview):
+            raise ValueError("PRTS 卡池一览数据格式异常")
+        events: list[dict[str, Any]] = []
+        for raw in events_raw:
+            try:
+                item_start = parse_iso(str(raw["start"])).astimezone(CN_TZ)
+                item_end = parse_iso(str(raw["end"])).astimezone(CN_TZ)
+            except (KeyError, TypeError, ValueError):
+                continue
+            if item_end >= start and item_start <= end:
+                events.append({"name": str(raw["name"]), "start": item_start, "end": item_end})
+        pools = await self.gacha.pools(start, end, overview)
+        return {
+            "events": sorted(events, key=lambda item: (item["start"], item["end"], item["name"])),
+            "pools": pools,
+            "gacha_source_states": list(self.gacha.last_source_states),
+        }
+
     async def _load_gacha_pools(
         self,
         start: datetime,
@@ -428,34 +549,24 @@ class CalendarService:
         overview: list[dict],
     ) -> tuple[list[dict], list[SourceState]]:
         assert self.gacha
-        now_text = self._now().isoformat()
+        now = self._now()
         try:
             pools = await self.gacha.pools(start, end, overview)
-            self.cache.save("gacha_pools.json", [self._serialize_pool(item) for item in pools])
+            self._save_source_cache("gacha_pools.json", [self._serialize_pool(item) for item in pools], now)
             states = [
-                SourceState(
-                    name=item["name"],
-                    ok=item["ok"],
-                    updated_at=now_text,
-                    message=item.get("message", ""),
-                )
+                SourceState(name=item["name"], ok=item["ok"], updated_at=now.isoformat(), message=item.get("message", ""))
                 for item in self.gacha.last_source_states
             ]
             return pools, states
         except Exception as exc:
             states = [
-                SourceState(
-                    name=item["name"],
-                    ok=item["ok"],
-                    updated_at=now_text,
-                    message=item.get("message", ""),
-                )
+                SourceState(name=item["name"], ok=item["ok"], updated_at=now.isoformat(), message=item.get("message", ""))
                 for item in self.gacha.last_source_states
             ]
             if not states:
-                states.append(SourceState("ArknightsGachaData", False, now_text, self._short_error(exc)))
-            cached = self.cache.load("gacha_pools.json")
-            if isinstance(cached, list):
+                states.append(SourceState("ArknightsGachaData", False, now.isoformat(), self._short_error(exc)))
+            cached, fetched_at = self._load_source_cache("gacha_pools.json")
+            if isinstance(cached, list) and fetched_at and now - fetched_at <= timedelta(hours=24):
                 pools = []
                 for item in cached:
                     try:
@@ -467,9 +578,11 @@ class CalendarService:
                     if pool["end"] >= start and pool["start"] <= end:
                         pools.append(pool)
                 if pools:
+                    age = self._cache_age_text(now - fetched_at)
                     for state in states:
                         if not state.ok:
-                            state.message = f"实时更新失败，已使用缓存：{state.message or self._short_error(exc)}"
+                            state.updated_at = fetched_at.isoformat()
+                            state.message = f"实时更新失败，已使用 {age} 前缓存：{state.message or self._short_error(exc)}"
                     return pools, states
             raise
 
@@ -541,16 +654,21 @@ class CalendarService:
         assert self.prts
         digest = hashlib.sha256(name.encode("utf-8")).hexdigest()[:20]
         cache_name = f"event_detail_{digest}.json"
+        cached, fetched_at = self._load_source_cache(cache_name)
+        now = self._now()
+        if isinstance(cached, dict) and fetched_at and now - fetched_at <= self.EVENT_DETAIL_TTL:
+            return cached
         async with self._event_detail_semaphore:
             try:
                 detail = await self.prts.event_detail(name)
                 if isinstance(detail, dict) and detail:
-                    self.cache.save(cache_name, detail)
+                    self._save_source_cache(cache_name, detail, now)
                     return detail
             except Exception:
                 self.logger.warning(f"获取活动“{name}”详情失败，已尝试使用缓存。", exc_info=True)
-        cached = self.cache.load(cache_name)
-        return cached if isinstance(cached, dict) else {}
+        if isinstance(cached, dict) and fetched_at and now - fetched_at <= self.EVENT_DETAIL_MAX_STALE:
+            return cached
+        return {}
 
     async def _fetch_cached(
         self,
@@ -559,20 +677,30 @@ class CalendarService:
         request: Awaitable[Any],
         default: Any,
         validator: Callable[[Any], bool] | None = None,
+        max_stale: timedelta = timedelta(hours=24),
     ) -> tuple[Any, SourceState]:
-        now_text = self._now().isoformat()
+        now = self._now()
         try:
             data = await request
             if validator and not validator(data):
                 raise ValueError(f"{label} 返回的数据为空或格式异常")
-            self.cache.save(cache_name, data)
-            return data, SourceState(label, True, now_text, "")
+            self._save_source_cache(cache_name, data, now)
+            return data, SourceState(label, True, now.isoformat(), "")
         except Exception as exc:
-            cached = self.cache.load(cache_name)
+            cached, fetched_at = self._load_source_cache(cache_name)
             message = self._short_error(exc)
-            if cached is not None and (validator is None or validator(cached)):
-                return cached, SourceState(label, False, now_text, f"实时更新失败，已使用缓存：{message}")
-            return default, SourceState(label, False, now_text, f"当前不可用且无缓存：{message}")
+            if cached is not None and fetched_at and (validator is None or validator(cached)):
+                age = now - fetched_at
+                if age <= max_stale:
+                    return cached, SourceState(
+                        label, False, fetched_at.isoformat(),
+                        f"实时更新失败，已使用 {self._cache_age_text(age)} 前缓存：{message}",
+                    )
+                return default, SourceState(
+                    label, False, fetched_at.isoformat(),
+                    f"当前不可用，缓存已陈旧 {self._cache_age_text(age)}：{message}",
+                )
+            return default, SourceState(label, False, "", f"当前不可用且无有效缓存：{message}")
 
     def _now(self) -> datetime:
         return datetime.now(CN_TZ)

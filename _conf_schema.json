@@ -162,6 +162,12 @@
         "type": "int",
         "default": 12,
         "hint": "超过该时间不再无提示发送旧日历，改为返回渲染失败提示。"
+      },
+      "snapshot_fallback_max_age_hours": {
+        "description": "数据快照刷新失败时允许回退的最长陈旧时间（小时）",
+        "type": "int",
+        "default": 12,
+        "hint": "快照同时必须匹配当前数据配置和 schema；跨北京时间零点后不会继续回退。"
       }
     },
     "hint": "推荐保持默认。开启最终图片缓存可减少重复 T2I 渲染。"

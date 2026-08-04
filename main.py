@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -157,6 +157,83 @@ class ArkCalendarPlugin(Star):
             )
             yield event.plain_result(self.messages.text("render_failed"))
 
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    @filter.command("方舟历史日程测试", alias={"方舟回溯测试", "方舟日历历史测试"})
+    async def historical_schedule_command(
+        self,
+        event: AstrMessageEvent,
+        start_date: str = "",
+        end_date: str = "",
+    ):
+        """管理员测试指定过去日期区间的活动与寻访解析。"""
+        try:
+            start, end = self._historical_range(start_date, end_date)
+        except ValueError as exc:
+            yield event.plain_result(
+                f"历史日程测试参数错误：{exc}\n"
+                "用法：/方舟历史日程测试 YYYY-MM-DD YYYY-MM-DD\n"
+                "例如：/方舟历史日程测试 2026-07-01 2026-07-31"
+            )
+            return
+        yield event.plain_result("正在查询历史活动与寻访日程，请稍候……")
+        try:
+            result = await self.service.historical_schedule(start, end)
+            yield event.plain_result(self._format_historical_schedule(start, end, result))
+        except Exception:
+            logger.error("历史日程测试失败。", exc_info=True)
+            yield event.plain_result("历史日程测试失败，请查看 AstrBot 日志与数据源状态。")
+
+    @staticmethod
+    def _historical_range(start_text: str, end_text: str) -> tuple[datetime, datetime]:
+        if not start_text.strip() or not end_text.strip():
+            raise ValueError("需要开始日期和结束日期")
+        try:
+            start_day = datetime.strptime(start_text.strip(), "%Y-%m-%d").date()
+            end_day = datetime.strptime(end_text.strip(), "%Y-%m-%d").date()
+        except ValueError as exc:
+            raise ValueError("日期格式必须是 YYYY-MM-DD") from exc
+        today = datetime.now(CN_TZ).date()
+        if start_day > end_day:
+            raise ValueError("开始日期不能晚于结束日期")
+        if end_day > today:
+            raise ValueError("只能测试今天及以前的历史区间")
+        if end_day - start_day > timedelta(days=90):
+            raise ValueError("单次最多测试 90 天")
+        return (
+            datetime.combine(start_day, datetime.min.time(), CN_TZ),
+            datetime.combine(end_day, datetime.max.time(), CN_TZ),
+        )
+
+    def _format_historical_schedule(self, start: datetime, end: datetime, result: dict[str, Any]) -> str:
+        events = result.get("events", [])
+        pools = result.get("pools", [])
+        lines = [
+            "方舟历史日程测试",
+            f"范围：{start:%Y-%m-%d} 至 {end:%Y-%m-%d}",
+            f"活动：{len(events)} 项；寻访：{len(pools)} 项",
+            "",
+            "【活动】",
+        ]
+        for item in events[:20]:
+            lines.append(f"- {item['start']:%m-%d %H:%M} → {item['end']:%m-%d %H:%M}｜{item['name']}")
+        if not events:
+            lines.append("- 无匹配活动")
+        elif len(events) > 20:
+            lines.append(f"- 其余 {len(events) - 20} 项活动已省略")
+        lines.extend(["", "【寻访】"])
+        for item in pools[:20]:
+            label = self.service.gacha.label(item.get("type", "")) if self.service.gacha else "寻访"
+            lines.append(f"- {item['start']:%m-%d %H:%M} → {item['end']:%m-%d %H:%M}｜{label}｜{item.get('name', '未命名')}")
+        if not pools:
+            lines.append("- 无匹配寻访")
+        elif len(pools) > 20:
+            lines.append(f"- 其余 {len(pools) - 20} 项寻访已省略")
+        states = result.get("gacha_source_states", [])
+        if states:
+            lines.extend(["", "【卡池子源】"])
+            lines.extend(f"- {item.get('name', '未知')}：{'正常' if item.get('ok') else '异常'}" for item in states)
+        return "\n".join(lines)
+
     def _help_text(self) -> str:
         return (
             "罗德岛行动日历 · 使用说明\n\n"
@@ -172,6 +249,8 @@ class ArkCalendarPlugin(Star):
             "【管理员指令】\n"
             "/方舟日历刷新（别名：/方舟日历更新、/方舟日报刷新）\n"
             "强制刷新数据源并重新生成日历图片。\n\n"
+            "/方舟历史日程测试 <开始日期> <结束日期>\n"
+            "测试指定过去 90 天内的活动与寻访解析，例如：/方舟历史日程测试 2026-07-01 2026-07-31。\n\n"
             "【自动日报】\n"
             "请在插件配置的“自动方舟日报”中启用任务，填写星期、发送时间和目标 SID。\n\n"
             "【自动生日祝贺】\n"
@@ -292,7 +371,8 @@ class ArkCalendarPlugin(Star):
         for state in snapshot.source_states:
             status = "正常" if state.ok else "降级"
             detail = f" {state.message}" if state.message else ""
-            lines.append(f"{state.name}：{status}{detail}")
+            data_time = f"（数据时间：{state.updated_at}）" if state.updated_at else ""
+            lines.append(f"{state.name}：{status}{data_time}{detail}")
         state = cache_status.get("state")
         if state == "valid":
             lines.append(f"最终图片缓存：有效（至 {cache_status.get('expires_at', '')}）")
