@@ -74,6 +74,8 @@ class CalendarSnapshot:
     gacha_pools: list[TimelineItem] = field(default_factory=list)
     long_term_events: list[TimelineItem] = field(default_factory=list)
     source_states: list[SourceState] = field(default_factory=list)
+    schema_version: int = 1
+    data_config_hash: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -93,6 +95,8 @@ class CalendarSnapshot:
             gacha_pools=[TimelineItem(**x) for x in data.get("gacha_pools", [])],
             long_term_events=[TimelineItem(**x) for x in data.get("long_term_events", [])],
             source_states=[SourceState(**x) for x in data.get("source_states", [])],
+            schema_version=int(data.get("schema_version", 1) or 1),
+            data_config_hash=str(data.get("data_config_hash", "") or ""),
         )
 
 

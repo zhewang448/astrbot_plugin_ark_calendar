@@ -54,5 +54,5 @@ class MessageCatalog:
             template = custom
         try:
             return template.format_map(defaultdict(str, values))
-        except (KeyError, ValueError):
+        except (AttributeError, IndexError, KeyError, TypeError, ValueError):
             return template

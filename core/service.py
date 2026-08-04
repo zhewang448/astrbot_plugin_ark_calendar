@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import difflib
 import hashlib
+import json
+import re
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -24,6 +26,10 @@ CN_TZ = ZoneInfo("Asia/Shanghai")
 
 
 class CalendarService:
+    SNAPSHOT_SCHEMA_VERSION = 2
+    MIN_TIMELINE_DAYS = 7
+    MAX_TIMELINE_DAYS = 90
+
     def __init__(self, plugin_dir: Path, data_dir: Path, config: dict, logger):
         self.plugin_dir = plugin_dir
         self.data_dir = data_dir
@@ -37,6 +43,7 @@ class CalendarService:
         self.prts: PrtsSource | None = None
         self.gacha: GachaSource | None = None
         self.refresh_lock = asyncio.Lock()
+        self._event_detail_semaphore = asyncio.Semaphore(4)
         self._birthdays: list[dict] = []
         self._operator_index: dict[str, dict] = {}
         self.last_snapshot: CalendarSnapshot | None = None
@@ -51,7 +58,7 @@ class CalendarService:
             timeout=timeout,
             trust_env=True,
             headers={
-                "User-Agent": "AstrBot-ArkCalendar/0.2",
+                "User-Agent": f"AstrBot-ArkCalendar/{self._plugin_version()}",
                 "Accept-Encoding": "identity",
             },
         )
@@ -104,6 +111,32 @@ class CalendarService:
     def cache_ttl(self) -> timedelta:
         return timedelta(minutes=max(1, int(self.value("cache_and_render", "data_cache_ttl_minutes", 30, "cache_ttl_minutes"))))
 
+    def timeline_days(self) -> int:
+        try:
+            configured = int(self.value("basic", "timeline_days", 28, "timeline_days"))
+        except (TypeError, ValueError):
+            configured = 28
+        return min(self.MAX_TIMELINE_DAYS, max(self.MIN_TIMELINE_DAYS, configured))
+
+    def _snapshot_data_config(self) -> dict[str, Any]:
+        return {
+            "timeline_days": self.timeline_days(),
+            "include_recent_operators": bool(self.value("basic", "include_recent_operators", True, "include_recent_operators")),
+            "include_long_term": bool(self.value("basic", "include_long_term", True, "include_long_term")),
+        }
+
+    def _data_config_hash(self) -> str:
+        raw = json.dumps(self._snapshot_data_config(), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+    def _plugin_version(self) -> str:
+        try:
+            metadata = (self.plugin_dir / "metadata.yaml").read_text("utf-8")
+            match = re.search(r"^version:\s*v?(.+?)\s*$", metadata, re.MULTILINE)
+            return match.group(1) if match else "dev"
+        except OSError:
+            return "dev"
+
     def snapshot_is_fresh(self) -> bool:
         return self._snapshot_is_fresh(self.cache_ttl())
 
@@ -145,7 +178,12 @@ class CalendarService:
         except (TypeError, ValueError):
             return False
         now = self._now()
-        return now.date() == generated.date() and now - generated < ttl
+        return (
+            self.last_snapshot.schema_version == self.SNAPSHOT_SCHEMA_VERSION
+            and self.last_snapshot.data_config_hash == self._data_config_hash()
+            and now.date() == generated.date()
+            and now - generated < ttl
+        )
 
     async def find_operator(self, query: str) -> tuple[Operator | None, list[str]]:
         await self._ensure_reference_data()
@@ -208,7 +246,7 @@ class CalendarService:
         assert self.anything and self.prts and self.gacha and self.assets
         now = self._now()
         start = (now - timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
-        end = start + timedelta(days=max(7, int(self.value("basic", "timeline_days", 28, "timeline_days"))))
+        end = start + timedelta(days=self.timeline_days())
 
         source_results = await asyncio.gather(
             self._fetch_cached(
@@ -265,7 +303,7 @@ class CalendarService:
 
         recent_operators: list[Operator] = []
         if self.value("basic", "include_recent_operators", True, "include_recent_operators"):
-            for item in home.get("recent", [])[:6]:
+            for item in home.get("recent", [])[:4]:
                 name = item.get("name", "")
                 if not name:
                     continue
@@ -306,6 +344,8 @@ class CalendarService:
             gacha_pools=gacha_items,
             long_term_events=long_items if self.value("basic", "include_long_term", True, "include_long_term") else [],
             source_states=source_states,
+            schema_version=self.SNAPSHOT_SCHEMA_VERSION,
+            data_config_hash=self._data_config_hash(),
         )
 
     @staticmethod
@@ -501,13 +541,14 @@ class CalendarService:
         assert self.prts
         digest = hashlib.sha256(name.encode("utf-8")).hexdigest()[:20]
         cache_name = f"event_detail_{digest}.json"
-        try:
-            detail = await self.prts.event_detail(name)
-            if isinstance(detail, dict) and detail:
-                self.cache.save(cache_name, detail)
-                return detail
-        except Exception:
-            self.logger.warning(f"获取活动“{name}”详情失败，已尝试使用缓存。", exc_info=True)
+        async with self._event_detail_semaphore:
+            try:
+                detail = await self.prts.event_detail(name)
+                if isinstance(detail, dict) and detail:
+                    self.cache.save(cache_name, detail)
+                    return detail
+            except Exception:
+                self.logger.warning(f"获取活动“{name}”详情失败，已尝试使用缓存。", exc_info=True)
         cached = self.cache.load(cache_name)
         return cached if isinstance(cached, dict) else {}
 

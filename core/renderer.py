@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -16,6 +17,7 @@ class CalendarRenderer:
         self.plugin = plugin
         self.service = service
         self.template = (Path(__file__).parent.parent / "templates" / "calendar.html").read_text("utf-8")
+        self.template_hash = hashlib.sha256(self.template.encode("utf-8")).hexdigest()[:16]
 
     async def calendar(self, snapshot: CalendarSnapshot) -> str:
         start, end = parse_iso(snapshot.timeline_start), parse_iso(snapshot.timeline_end)
@@ -28,12 +30,11 @@ class CalendarRenderer:
             (x["image"] for x in [*items, *pools, *longs] if x["image"]),
             "",
         )
-        ticks = []
-        for offset in (0, 1, 7, 14, 21, 28):
-            day = start + timedelta(days=offset)
-            ticks.append({"left": min(100, offset / max(1, (end-start).days) * 100), "date": day.strftime("%m.%d"), "label": "TODAY" if day.date() == now.date() else day.strftime("%a").upper(), "today": day.date() == now.date()})
+        timeline_days = max(1, (end - start).days)
+        ticks = self._ticks(start, now, timeline_days)
         data = {
             "snapshot": snapshot.to_dict(), "events": items, "pools": pools, "longs": longs, "ticks": ticks,
+            "timeline_days": timeline_days,
             "today_left": max(0, min(100, (now-start).total_seconds()/(end-start).total_seconds()*100)),
             "date_cn": now.strftime("%Y / %m / %d"), "generated_text": now.astimezone(CN_TZ).strftime("%Y-%m-%d %H:%M"),
             "weekday": "星期" + "一二三四五六日"[now.weekday()],
@@ -41,6 +42,21 @@ class CalendarRenderer:
             "show_footer": self.service.value("basic", "show_source_footer", True, "show_source_footer"),
         }
         return await self._html_render(self.template, data, options={"type": "png", "full_page": True, "animations": "disabled", "scale": "css", "timeout": 30000})
+
+    @staticmethod
+    def _ticks(start: datetime, now: datetime, timeline_days: int) -> list[dict]:
+        step = 7 if timeline_days <= 35 else 14 if timeline_days <= 63 else 21
+        offsets = set(range(0, timeline_days + 1, step))
+        offsets.update({0, min(1, timeline_days), timeline_days})
+        return [
+            {
+                "left": offset / timeline_days * 100,
+                "date": (start + timedelta(days=offset)).strftime("%m.%d"),
+                "label": "TODAY" if (start + timedelta(days=offset)).date() == now.date() else (start + timedelta(days=offset)).strftime("%a").upper(),
+                "today": (start + timedelta(days=offset)).date() == now.date(),
+            }
+            for offset in sorted(offsets)
+        ]
 
     async def _html_render(self, template: str, data: dict, options: dict) -> str:
         return await self.plugin.html_render(

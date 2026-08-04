@@ -40,6 +40,9 @@ class ArkCalendarPlugin(Star):
         self.scheduler: AsyncIOScheduler | None = None
         self._scheduled_report_lock = asyncio.Lock()
         self._scheduled_birthday_greeting_lock = asyncio.Lock()
+        self._notification_state_lock = asyncio.Lock()
+        self._render_locks: dict[str, asyncio.Lock] = {}
+        self._render_locks_guard = asyncio.Lock()
 
     async def initialize(self) -> None:
         await self.service.initialize()
@@ -179,7 +182,8 @@ class ArkCalendarPlugin(Star):
 
     def _display_config(self) -> dict[str, Any]:
         return {
-            "timeline_days": self._value("basic", "timeline_days", 28, "timeline_days"),
+            "timeline_days": self.service.timeline_days(),
+            "template_hash": self.renderer.template_hash,
             "include_recent_operators": self._value("basic", "include_recent_operators", True, "include_recent_operators"),
             "include_long_term": self._value("basic", "include_long_term", True, "include_long_term"),
             "show_source_footer": self._value("basic", "show_source_footer", True, "show_source_footer"),
@@ -198,6 +202,9 @@ class ArkCalendarPlugin(Star):
     def _cache_keep_count(self) -> int:
         return max(1, int(self._value("cache_and_render", "final_image_cache_keep_count", 3)))
 
+    def _fallback_max_age_hours(self) -> int:
+        return max(1, int(self._value("cache_and_render", "fallback_max_age_hours", 12)))
+
     def _send_rendering_notice(self) -> bool:
         return bool(self._value("cache_and_render", "send_rendering_notice", True))
 
@@ -208,11 +215,26 @@ class ArkCalendarPlugin(Star):
 
     async def _calendar_image(self, snapshot) -> tuple[Path | str, str]:
         display_config = self._display_config()
-        if self._cache_enabled():
+        if not self._cache_enabled():
+            return await self._render_calendar_image(snapshot, display_config)
+        cached = self.render_cache.lookup(snapshot, display_config)
+        if cached:
+            logger.info("最终日历图片缓存命中。")
+            return cached, "cache"
+        signature = self.render_cache.signature(snapshot, display_config)
+        lock = await self._render_lock(signature)
+        async with lock:
             cached = self.render_cache.lookup(snapshot, display_config)
             if cached:
-                logger.info("最终日历图片缓存命中。")
+                logger.info("最终日历图片缓存由并发请求生成。")
                 return cached, "cache"
+            return await self._render_calendar_image(snapshot, display_config)
+
+    async def _render_lock(self, signature: str) -> asyncio.Lock:
+        async with self._render_locks_guard:
+            return self._render_locks.setdefault(signature, asyncio.Lock())
+
+    async def _render_calendar_image(self, snapshot, display_config: dict[str, Any]) -> tuple[Path | str, str]:
         started = time.monotonic()
         logger.info("最终日历图片缓存未命中，开始调用渲染器。")
         try:
@@ -235,7 +257,7 @@ class ArkCalendarPlugin(Star):
             logger.info(f"最终日历图片已保存至插件缓存：{cached}")
             return cached, "rendered"
         except Exception:
-            fallback = self.render_cache.fallback() if self._cache_enabled() else None
+            fallback = self.render_cache.fallback(self._fallback_max_age_hours()) if self._cache_enabled() else None
             if fallback:
                 image, manifest = fallback
                 logger.warning(f"日历渲染失败，已回退到缓存图片（快照时间：{manifest.get('snapshot_generated_at', '未知')}）。")
@@ -243,7 +265,7 @@ class ArkCalendarPlugin(Star):
             raise
 
     def _fallback_notice(self) -> str:
-        cached = self.render_cache.fallback()
+        cached = self.render_cache.fallback(self._fallback_max_age_hours())
         time_text = cached[1].get("snapshot_generated_at", "未知") if cached else "未知"
         return f"{self.messages.text('cached_fallback_notice')}\n缓存数据时间：{time_text}"
 
@@ -369,7 +391,7 @@ class ArkCalendarPlugin(Star):
             logger.warning("定时方舟日报：已有任务正在执行，本次跳过。")
             return
         async with self._scheduled_report_lock:
-            targets = config_strings(self._value("scheduled_report", "target_sid_list", []))
+            targets = list(dict.fromkeys(config_strings(self._value("scheduled_report", "target_sid_list", []))))
             refresh = bool(self._value("scheduled_report", "refresh_data_before_send", True))
             if not targets:
                 logger.warning("定时方舟日报：目标 SID 为空，本次跳过。")
@@ -501,35 +523,36 @@ class ArkCalendarPlugin(Star):
     async def _observe_health(self, snapshot, origin: str) -> None:
         if not self._notifications_enabled():
             return
-        current = self._abnormal_states(snapshot)
-        stored = self.service.cache.load("notification_state.json")
-        stored = stored if isinstance(stored, dict) else {}
-        active = stored.get("active", {}) if isinstance(stored.get("active", {}), dict) else {}
-        last_sent = stored.get("last_sent", {}) if isinstance(stored.get("last_sent", {}), dict) else {}
-        now = datetime.now(CN_TZ)
-        cooldown = max(1, int(self._value("admin_notification", "cooldown_minutes", 60)))
-        to_alert: list[str] = []
-        for name, message in current.items():
-            sent_at = self._parse_time(str(last_sent.get(name, "")))
-            expired = sent_at is None or (now - sent_at).total_seconds() >= cooldown * 60
-            if active.get(name) != message or expired:
-                to_alert.append(f"- {name}：{message}")
-                last_sent[name] = now.isoformat()
-        recovered = [name for name in active if name not in current]
-        if to_alert:
-            await self._send_admin_text(
-                "【方舟日历异常告警】\n"
-                f"触发来源：{origin}\n"
-                f"时间：{now.strftime('%Y-%m-%d %H:%M')}\n"
-                + "\n".join(to_alert)
-            )
-        if recovered and bool(self._value("admin_notification", "notify_on_recovery", True)):
-            await self._send_admin_text(
-                "【方舟日历恢复通知】\n"
-                f"触发来源：{origin}\n"
-                f"已恢复：{', '.join(recovered)}"
-            )
-        self.service.cache.save("notification_state.json", {"active": current, "last_sent": last_sent})
+        async with self._notification_state_lock:
+            current = self._abnormal_states(snapshot)
+            stored = self.service.cache.load("notification_state.json")
+            stored = stored if isinstance(stored, dict) else {}
+            active = stored.get("active", {}) if isinstance(stored.get("active", {}), dict) else {}
+            last_sent = stored.get("last_sent", {}) if isinstance(stored.get("last_sent", {}), dict) else {}
+            now = datetime.now(CN_TZ)
+            cooldown = max(1, int(self._value("admin_notification", "cooldown_minutes", 60)))
+            to_alert: list[str] = []
+            for name, message in current.items():
+                sent_at = self._parse_time(str(last_sent.get(name, "")))
+                expired = sent_at is None or (now - sent_at).total_seconds() >= cooldown * 60
+                if active.get(name) != message or expired:
+                    to_alert.append(f"- {name}：{message}")
+                    last_sent[name] = now.isoformat()
+            recovered = [name for name in active if name not in current]
+            if to_alert:
+                await self._send_admin_text(
+                    "【方舟日历异常告警】\n"
+                    f"触发来源：{origin}\n"
+                    f"时间：{now.strftime('%Y-%m-%d %H:%M')}\n"
+                    + "\n".join(to_alert)
+                )
+            if recovered and bool(self._value("admin_notification", "notify_on_recovery", True)):
+                await self._send_admin_text(
+                    "【方舟日历恢复通知】\n"
+                    f"触发来源：{origin}\n"
+                    f"已恢复：{', '.join(recovered)}"
+                )
+            self.service.cache.save("notification_state.json", {"active": current, "last_sent": last_sent})
 
     def _abnormal_states(self, snapshot) -> dict[str, str]:
         abnormal = {

@@ -57,8 +57,11 @@ class GachaSource:
         for pool in pool_info.get("pool", {}).values():
             if not isinstance(pool, dict) or "start" not in pool or "end" not in pool:
                 continue
-            pool_start = datetime.fromtimestamp(pool["start"], CN_TZ)
-            pool_end = datetime.fromtimestamp(pool["end"], CN_TZ)
+            try:
+                pool_start = datetime.fromtimestamp(pool["start"], CN_TZ)
+                pool_end = datetime.fromtimestamp(pool["end"], CN_TZ)
+            except (TypeError, ValueError, OverflowError, OSError):
+                continue
             pool_type = pool.get("type", "")
             if pool_end < start or pool_start > end:
                 continue

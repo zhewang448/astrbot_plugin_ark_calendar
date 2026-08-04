@@ -3,6 +3,7 @@
 *.pyo
 .testdeps/
 .pytest_cache/
+.codegraph/
 .venv/
 dist/
 preview/runtime_data/

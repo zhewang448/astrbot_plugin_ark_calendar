@@ -7,7 +7,7 @@
         "description": "日历时间轴展示天数",
         "type": "int",
         "default": 28,
-        "hint": "建议保持 28 天。"
+        "hint": "支持 7–90 天，过长时间轴会自动降低刻度密度。"
       },
       "include_recent_operators": {
         "description": "显示近期新增干员",
@@ -156,6 +156,12 @@
         "type": "int",
         "default": 15,
         "hint": "超过该时间会记录警告日志。"
+      },
+      "fallback_max_age_hours": {
+        "description": "渲染失败时允许回退的图片最长陈旧时间（小时）",
+        "type": "int",
+        "default": 12,
+        "hint": "超过该时间不再无提示发送旧日历，改为返回渲染失败提示。"
       }
     },
     "hint": "推荐保持默认。开启最终图片缓存可减少重复 T2I 渲染。"

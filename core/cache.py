@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 
 class JsonCache:
@@ -25,6 +26,12 @@ class JsonCache:
 
     def save(self, name: str, data: Any) -> None:
         path = self.path(name)
-        tmp = path.with_suffix(path.suffix + ".tmp")
-        tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), "utf-8")
-        os.replace(tmp, path)
+        temporary = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
+        try:
+            temporary.write_text(json.dumps(data, ensure_ascii=False, indent=2), "utf-8")
+            os.replace(temporary, path)
+        finally:
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError:
+                pass
