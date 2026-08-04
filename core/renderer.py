@@ -16,7 +16,9 @@ class CalendarRenderer:
     def __init__(self, plugin, service):
         self.plugin = plugin
         self.service = service
-        self.template = (Path(__file__).parent.parent / "templates" / "calendar.html").read_text("utf-8")
+        templates = Path(__file__).parent.parent / "templates"
+        self.template = (templates / "calendar.html").read_text("utf-8")
+        self.history_template = (templates / "history_schedule.html").read_text("utf-8")
         self.template_hash = hashlib.sha256(self.template.encode("utf-8")).hexdigest()[:16]
 
     async def calendar(self, snapshot: CalendarSnapshot) -> str:
@@ -43,6 +45,33 @@ class CalendarRenderer:
         }
         return await self._html_render(self.template, data, options={"type": "png", "full_page": True, "animations": "disabled", "scale": "css", "timeout": 30000})
 
+    async def historical_schedule(self, start: datetime, end: datetime, schedule: dict) -> str:
+        """Render only historical event and headhunting timelines without cache side effects."""
+        total_days = max(1, (end.date() - start.date()).days + 1)
+        events = [self._historical_item(item, start, end, "活动", "event") for item in schedule.get("events", [])]
+        pools = [
+            self._historical_item(
+                item,
+                start,
+                end,
+                self.service.gacha.label(item.get("type", "")) if self.service.gacha else "寻访",
+                "gacha",
+            )
+            for item in schedule.get("pools", [])
+        ]
+        data = {
+            "start_text": start.astimezone(CN_TZ).strftime("%Y-%m-%d"),
+            "end_text": end.astimezone(CN_TZ).strftime("%Y-%m-%d"),
+            "timeline_days": total_days,
+            "ticks": self._range_ticks(start, total_days),
+            "events": events,
+            "pools": pools,
+            "event_count": len(events),
+            "pool_count": len(pools),
+            "static": await self._static_assets(),
+        }
+        return await self._html_render(self.history_template, data, options={"type": "png", "full_page": True, "animations": "disabled", "scale": "css", "timeout": 30000})
+
     @staticmethod
     def _ticks(start: datetime, now: datetime, timeline_days: int) -> list[dict]:
         step = 7 if timeline_days <= 35 else 14 if timeline_days <= 63 else 21
@@ -58,10 +87,22 @@ class CalendarRenderer:
             for offset in sorted(offsets)
         ]
 
+    @staticmethod
+    def _range_ticks(start: datetime, timeline_days: int) -> list[dict]:
+        step = 7 if timeline_days <= 35 else 14 if timeline_days <= 63 else 21
+        offsets = set(range(0, timeline_days, step))
+        offsets.update({0, timeline_days - 1})
+        return [
+            {
+                "left": offset / max(1, timeline_days - 1) * 100,
+                "date": (start + timedelta(days=offset)).strftime("%m.%d"),
+                "label": (start + timedelta(days=offset)).strftime("%a").upper(),
+            }
+            for offset in sorted(offsets)
+        ]
+
     async def _html_render(self, template: str, data: dict, options: dict) -> str:
-        return await self.plugin.html_render(
-            template, data, return_url=False, options=options
-        )
+        return await self.plugin.html_render(template, data, return_url=False, options=options)
 
     def _timeline(self, item, start, end, now):
         s, e = parse_iso(item.start), parse_iso(item.end)
@@ -84,6 +125,22 @@ class CalendarRenderer:
         base = {key: getattr(item, key) for key in item.__slots__}
         width = max(1.5, min(100 - left, right - left))
         return {**base, "left": left, "width": width, "start_text": s.astimezone(CN_TZ).strftime("%m.%d %H:%M"), "end_text": e.astimezone(CN_TZ).strftime("%m.%d %H:%M"), "countdown": countdown, "color": self.COLORS.get(item.item_type, self.COLORS.get(item.category, "#4d8a72"))}
+
+    def _historical_item(self, item: dict, start: datetime, end: datetime, item_type: str, category: str) -> dict:
+        item_start = item["start"].astimezone(CN_TZ)
+        item_end = item["end"].astimezone(CN_TZ)
+        total = max(1, (end - start).total_seconds())
+        left = max(0, min(100, (item_start - start).total_seconds() / total * 100))
+        right = max(0, min(100, (item_end - start).total_seconds() / total * 100))
+        return {
+            "name": str(item.get("name", "未命名")),
+            "item_type": item_type,
+            "start_text": item_start.strftime("%m.%d %H:%M"),
+            "end_text": item_end.strftime("%m.%d %H:%M"),
+            "left": left,
+            "width": max(1.2, min(100 - left, right - left)),
+            "color": self.COLORS.get(item_type, self.COLORS.get(category, "#4d8a72")),
+        }
 
     async def _static_assets(self):
         assert self.service.assets
