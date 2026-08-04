@@ -36,6 +36,7 @@ class ArkCalendarPlugin(Star):
         self.render_cache = CalendarImageCache(self.data_dir / "render")
         self.scheduler: AsyncIOScheduler | None = None
         self._scheduled_report_lock = asyncio.Lock()
+        self._scheduled_birthday_greeting_lock = asyncio.Lock()
 
     async def initialize(self) -> None:
         await self.service.initialize()
@@ -45,7 +46,7 @@ class ArkCalendarPlugin(Star):
     async def terminate(self) -> None:
         if self.scheduler and self.scheduler.running:
             self.scheduler.shutdown(wait=False)
-            logger.info("方舟日历定时日报调度器已关闭。")
+            logger.info("方舟日历定时任务调度器已关闭。")
         await self.service.close()
 
     @filter.command("方舟日报帮助", alias={"方舟日历帮助", "明日方舟日报帮助"})
@@ -95,14 +96,21 @@ class ArkCalendarPlugin(Star):
                 return
             details = self._birthday_details(operator.profession, operator.rarity)
             if operator.birthday_month and operator.birthday_day:
-                yield event.plain_result(
-                    self.messages.text(
-                        "birthday_found",
+                birthday = f"{operator.birthday_month} 月 {operator.birthday_day} 日"
+                text = self.messages.text(
+                    "birthday_found",
+                    name=operator.name,
+                    birthday=birthday,
+                    details=details,
+                )
+                if self._is_birthday_today(operator):
+                    text += "\n\n" + self.messages.text(
+                        "birthday_today_greeting",
                         name=operator.name,
-                        birthday=f"{operator.birthday_month} 月 {operator.birthday_day} 日",
+                        birthday=birthday,
                         details=details,
                     )
-                )
+                yield event.plain_result(text)
             else:
                 yield event.plain_result(
                     self.messages.text("birthday_unknown", name=operator.name, details=details)
@@ -159,7 +167,9 @@ class ArkCalendarPlugin(Star):
             "/方舟日历刷新（别名：/方舟日历更新、/方舟日报刷新）\n"
             "强制刷新数据源并重新生成日历图片。\n\n"
             "【自动日报】\n"
-            "请在插件配置的“自动方舟日报”中启用任务，填写星期、发送时间和目标 SID。\n"
+            "请在插件配置的“自动方舟日报”中启用任务，填写星期、发送时间和目标 SID。\n\n"
+            "【自动生日祝贺】\n"
+            "可单独设置每日发送时间和目标 SID；当天没有干员生日时不会发送。\n"
             "目标 SID 和管理员 SID 可在对应会话发送 /sid 获取。\n\n"
             "博士如果只想查看帮助，发送 /方舟日报帮助 就可以了喵～"
         )
@@ -242,6 +252,11 @@ class ArkCalendarPlugin(Star):
             details.append(f"星级：{rarity}★")
         return f"\n{'　'.join(details)}" if details else ""
 
+    @staticmethod
+    def _is_birthday_today(operator) -> bool:
+        now = datetime.now(CN_TZ)
+        return operator.birthday_month == now.month and operator.birthday_day == now.day
+
     def _format_status(self, snapshot) -> str:
         cache_status = self.render_cache.status(snapshot, self._display_config()) if self._cache_enabled() else {"state": "disabled"}
         lines = ["罗德岛行动日历状态", f"快照时间：{snapshot.generated_at}"]
@@ -265,14 +280,23 @@ class ArkCalendarPlugin(Star):
         return "\n".join(lines)
 
     def _initialize_scheduler(self) -> None:
+        self.scheduler = AsyncIOScheduler(timezone=CN_TZ)
+        report_jobs = self._add_scheduled_report_jobs()
+        birthday_jobs = self._add_scheduled_birthday_greeting_job()
+        if not report_jobs and not birthday_jobs:
+            self.scheduler = None
+            return
+        self.scheduler.start()
+
+    def _add_scheduled_report_jobs(self) -> int:
         enabled = bool(self._value("scheduled_report", "enabled", False))
         targets = config_strings(self._value("scheduled_report", "target_sid_list", []))
         if not enabled:
             logger.info("定时方舟日报未启用。")
-            return
+            return 0
         if not targets:
             logger.warning("定时方舟日报已启用，但未配置目标 SID，本次不创建任务。")
-            return
+            return 0
         weekdays, invalid_weekdays = normalize_weekdays(
             self._value("scheduled_report", "weekdays", ["mon", "tue", "wed", "thu", "fri", "sat", "sun"])
         )
@@ -283,8 +307,8 @@ class ArkCalendarPlugin(Star):
             logger.warning(f"已忽略无效日报时间：{invalid_times}，请使用 HH:MM 格式。")
         if not weekdays or not times:
             logger.warning("定时方舟日报未配置有效的星期和时间，本次不创建任务。")
-            return
-        self.scheduler = AsyncIOScheduler(timezone=CN_TZ)
+            return 0
+        assert self.scheduler
         day_of_week = ",".join(weekdays)
         for scheduled_time in times:
             hour, minute = (int(value) for value in scheduled_time.split(":"))
@@ -300,8 +324,42 @@ class ArkCalendarPlugin(Star):
                 max_instances=1,
                 misfire_grace_time=60,
             )
-        self.scheduler.start()
         logger.info(f"已启用定时方舟日报：每周 {day_of_week}，在 {times} 发送至 {len(targets)} 个会话。")
+        return len(times)
+
+    def _add_scheduled_birthday_greeting_job(self) -> int:
+        enabled = bool(self._value("scheduled_birthday_greeting", "enabled", False))
+        targets = config_strings(self._value("scheduled_birthday_greeting", "target_sid_list", []))
+        if not enabled:
+            logger.info("自动生日祝贺未启用。")
+            return 0
+        if not targets:
+            logger.warning("自动生日祝贺已启用，但未配置目标 SID，本次不创建任务。")
+            return 0
+        times, invalid_times = parse_schedule_times([
+            self._value("scheduled_birthday_greeting", "time", "09:00")
+        ])
+        if invalid_times:
+            logger.warning(f"自动生日祝贺时间无效：{invalid_times}，请使用 HH:MM 格式。")
+        if not times:
+            logger.warning("自动生日祝贺未配置有效发送时间，本次不创建任务。")
+            return 0
+        scheduled_time = times[0]
+        hour, minute = (int(value) for value in scheduled_time.split(":"))
+        assert self.scheduler
+        self.scheduler.add_job(
+            self._scheduled_birthday_greeting,
+            "cron",
+            hour=hour,
+            minute=minute,
+            id=f"ark_calendar_birthday_greeting_{hour:02d}{minute:02d}",
+            name=f"Ark Calendar Birthday Greeting {scheduled_time}",
+            coalesce=True,
+            max_instances=1,
+            misfire_grace_time=60,
+        )
+        logger.info(f"已启用自动生日祝贺：每日 {scheduled_time} 发送至 {len(targets)} 个会话。")
+        return 1
 
     async def _scheduled_report(self) -> None:
         if self._scheduled_report_lock.locked():
@@ -335,6 +393,79 @@ class ArkCalendarPlugin(Star):
                     "【方舟日历异常告警】\n定时日报未能完成，详情请查看 AstrBot 日志。",
                     "scheduled_report_failed",
                 )
+
+    async def _scheduled_birthday_greeting(self) -> None:
+        if self._scheduled_birthday_greeting_lock.locked():
+            logger.warning("自动生日祝贺：已有任务正在执行，本次跳过。")
+            return
+        async with self._scheduled_birthday_greeting_lock:
+            targets = list(dict.fromkeys(config_strings(
+                self._value("scheduled_birthday_greeting", "target_sid_list", [])
+            )))
+            if not targets:
+                logger.warning("自动生日祝贺：目标 SID 为空，本次跳过。")
+                return
+            try:
+                snapshot = await self.service.snapshot()
+                birthdays = snapshot.today_birthdays
+                if not birthdays:
+                    logger.info("自动生日祝贺：今天没有干员生日，本次不发送。")
+                    return
+                date_key = datetime.now(CN_TZ).date().isoformat()
+                pending_targets = self._birthday_greeting_pending_targets(targets, date_key)
+                if not pending_targets:
+                    logger.info("自动生日祝贺：目标会话今日均已发送，本次跳过。")
+                    return
+                names = "、".join(operator.name for operator in birthdays)
+                text = self.messages.text(
+                    "scheduled_birthday_greeting",
+                    names=names,
+                    count=len(birthdays),
+                )
+                sent, failed = await self._send_scheduled_text(pending_targets, text)
+                self._record_birthday_greeting_targets(sent, date_key)
+                logger.info(
+                    f"自动生日祝贺完成：寿星 {names}，成功 {len(sent)}/{len(pending_targets)}。"
+                )
+                if failed:
+                    await self._notify_admin(
+                        "【方舟日历异常告警】\n"
+                        f"自动生日祝贺发送失败：{', '.join(failed)}\n"
+                        f"成功发送：{len(sent)}/{len(pending_targets)}",
+                        "scheduled_birthday_greeting_failed",
+                    )
+                await self._observe_health(snapshot, "自动生日祝贺")
+            except Exception:
+                logger.error("自动生日祝贺执行失败。", exc_info=True)
+                await self._notify_admin(
+                    "【方舟日历异常告警】\n自动生日祝贺未能完成，详情请查看 AstrBot 日志。",
+                    "scheduled_birthday_greeting_failed",
+                )
+
+    def _birthday_greeting_pending_targets(self, targets: list[str], date_key: str) -> list[str]:
+        stored = self.service.cache.load("birthday_greeting_state.json")
+        stored = stored if isinstance(stored, dict) else {}
+        sent = stored.get("sent", {}) if isinstance(stored.get("sent", {}), dict) else {}
+        return [sid for sid in targets if sent.get(sid) != date_key]
+
+    def _record_birthday_greeting_targets(self, targets: list[str], date_key: str) -> None:
+        stored = self.service.cache.load("birthday_greeting_state.json")
+        stored = stored if isinstance(stored, dict) else {}
+        sent = stored.get("sent", {}) if isinstance(stored.get("sent", {}), dict) else {}
+        sent.update({sid: date_key for sid in targets})
+        self.service.cache.save("birthday_greeting_state.json", {"sent": sent})
+
+    async def _send_scheduled_text(self, targets: list[str], text: str) -> tuple[list[str], list[str]]:
+        sent: list[str] = []
+        failed: list[str] = []
+        for sid in targets:
+            try:
+                await self.context.send_message(sid, MessageChain([Comp.Plain(text=text)]))
+                sent.append(sid)
+            except Exception:
+                failed.append(sid)
+                logger.error(f"自动生日祝贺发送到 SID {sid} 失败。", exc_info=True)
+        return sent, failed
 
     async def _send_scheduled_image(self, targets: list[str], image: Path | str, caption: str) -> tuple[int, list[str]]:
         sent = 0
