@@ -45,20 +45,13 @@ class CalendarRenderer:
         }
         return await self._html_render(self.template, data, options={"type": "png", "full_page": True, "animations": "disabled", "scale": "css", "timeout": 30000})
 
-    async def historical_schedule(self, start: datetime, end: datetime, schedule: dict) -> str:
-        """Render only historical event and headhunting timelines without cache side effects."""
+    async def historical_calendar(self, snapshot: CalendarSnapshot) -> str:
+        """Render a historical snapshot with the same timeline/image preparation as the main calendar."""
+        start, end = parse_iso(snapshot.timeline_start), parse_iso(snapshot.timeline_end)
+        now = parse_iso(snapshot.generated_at)
+        events = [self._timeline(item, start, end, now) for item in snapshot.events]
+        pools = [self._timeline(item, start, end, now) for item in snapshot.gacha_pools]
         total_days = max(1, (end.date() - start.date()).days + 1)
-        events = [self._historical_item(item, start, end, "活动", "event") for item in schedule.get("events", [])]
-        pools = [
-            self._historical_item(
-                item,
-                start,
-                end,
-                self.service.gacha.label(item.get("type", "")) if self.service.gacha else "寻访",
-                "gacha",
-            )
-            for item in schedule.get("pools", [])
-        ]
         data = {
             "start_text": start.astimezone(CN_TZ).strftime("%Y-%m-%d"),
             "end_text": end.astimezone(CN_TZ).strftime("%Y-%m-%d"),
@@ -125,22 +118,6 @@ class CalendarRenderer:
         base = {key: getattr(item, key) for key in item.__slots__}
         width = max(1.5, min(100 - left, right - left))
         return {**base, "left": left, "width": width, "start_text": s.astimezone(CN_TZ).strftime("%m.%d %H:%M"), "end_text": e.astimezone(CN_TZ).strftime("%m.%d %H:%M"), "countdown": countdown, "color": self.COLORS.get(item.item_type, self.COLORS.get(item.category, "#4d8a72"))}
-
-    def _historical_item(self, item: dict, start: datetime, end: datetime, item_type: str, category: str) -> dict:
-        item_start = item["start"].astimezone(CN_TZ)
-        item_end = item["end"].astimezone(CN_TZ)
-        total = max(1, (end - start).total_seconds())
-        left = max(0, min(100, (item_start - start).total_seconds() / total * 100))
-        right = max(0, min(100, (item_end - start).total_seconds() / total * 100))
-        return {
-            "name": str(item.get("name", "未命名")),
-            "item_type": item_type,
-            "start_text": item_start.strftime("%m.%d %H:%M"),
-            "end_text": item_end.strftime("%m.%d %H:%M"),
-            "left": left,
-            "width": max(1.2, min(100 - left, right - left)),
-            "color": self.COLORS.get(item_type, self.COLORS.get(category, "#4d8a72")),
-        }
 
     async def _static_assets(self):
         assert self.service.assets

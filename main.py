@@ -176,8 +176,8 @@ class ArkCalendarPlugin(Star):
             )
             return
         try:
-            schedule = await self.service.historical_schedule(start, end)
-            image = await self.renderer.historical_schedule(start, end, schedule)
+            snapshot = await self.service.historical_snapshot(start, end)
+            image = await self.renderer.historical_calendar(snapshot)
             yield event.image_result(str(image))
         except Exception:
             logger.error("历史日程测试图片生成失败。", exc_info=True)

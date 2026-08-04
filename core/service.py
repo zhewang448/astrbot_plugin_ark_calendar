@@ -513,9 +513,9 @@ class CalendarService:
             (long_items if model.is_long_term else event_items).append(model)
         return event_items, long_items
 
-    async def historical_schedule(self, start: datetime, end: datetime) -> dict[str, Any]:
-        """Fetch a past time window without reading or overwriting normal snapshot caches."""
-        assert self.anything and self.prts and self.gacha
+    async def historical_snapshot(self, start: datetime, end: datetime) -> CalendarSnapshot:
+        """Build a historical CalendarSnapshot through the normal image/data pipeline."""
+        assert self.anything and self.prts and self.gacha and self.assets
         if start > end:
             raise ValueError("开始日期不能晚于结束日期")
         events_raw, overview = await asyncio.gather(
@@ -526,21 +526,22 @@ class CalendarService:
             raise ValueError("anything-ics 活动数据格式异常")
         if not self._valid_gacha_overview(overview):
             raise ValueError("PRTS 卡池一览数据格式异常")
-        events: list[dict[str, Any]] = []
-        for raw in events_raw:
-            try:
-                item_start = parse_iso(str(raw["start"])).astimezone(CN_TZ)
-                item_end = parse_iso(str(raw["end"])).astimezone(CN_TZ)
-            except (KeyError, TypeError, ValueError):
-                continue
-            if item_end >= start and item_start <= end:
-                events.append({"name": str(raw["name"]), "start": item_start, "end": item_end})
-        pools = await self.gacha.pools(start, end, overview)
-        return {
-            "events": sorted(events, key=lambda item: (item["start"], item["end"], item["name"])),
-            "pools": pools,
-            "gacha_source_states": list(self.gacha.last_source_states),
-        }
+        events, long_events = await self._build_events(events_raw, start, end)
+        pools_raw = await self.gacha.pools(start, end, overview)
+        pools = await self._build_gacha_items(pools_raw)
+        now = self._now()
+        return CalendarSnapshot(
+            generated_at=now.isoformat(),
+            calendar_date=now.date().isoformat(),
+            timeline_start=start.isoformat(),
+            timeline_end=end.isoformat(),
+            today_info=TodayInfo(),
+            events=events,
+            gacha_pools=pools,
+            long_term_events=long_events,
+            schema_version=self.SNAPSHOT_SCHEMA_VERSION,
+            data_config_hash=self._data_config_hash(),
+        )
 
     async def _load_gacha_pools(
         self,
