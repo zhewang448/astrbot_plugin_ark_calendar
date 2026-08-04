@@ -376,7 +376,7 @@ class CalendarService:
         ]
         upcoming_groups: list[BirthdayGroup] = []
         required_names = [item["name"] for item in today_records]
-        for offset in range(1, 8):
+        for offset in range(1, 10):
             day = now + timedelta(days=offset)
             records = [
                 item for item in birthdays
