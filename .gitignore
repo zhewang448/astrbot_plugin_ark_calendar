@@ -30,3 +30,6 @@ Thumbs.db
 # 本地图片资源；发布包只保留字体
 /assets/*
 !/assets/SourceHanSerifCN-Medium-6.otf
+
+# Codex 本地审查、补丁与回滚验证材料
+.codex_artifacts/
