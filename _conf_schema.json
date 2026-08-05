@@ -304,6 +304,30 @@
             "type": "string",
             "default": "",
             "hint": "模糊匹配到多个干员、需要用户补全名称时发送。可用 {candidates}。"
+          },
+          "birthday_lookup_failed": {
+            "title": "生日查询失败",
+            "type": "string",
+            "default": "",
+            "hint": "生日查询的数据准备或检索失败时发送。"
+          },
+          "status_failed": {
+            "title": "状态查询失败",
+            "type": "string",
+            "default": "",
+            "hint": "读取方舟日历状态失败时发送。"
+          },
+          "historical_range_invalid": {
+            "title": "历史日程参数错误",
+            "type": "string",
+            "default": "",
+            "hint": "管理员执行历史日程测试但日期参数无效时发送。可用 {error}。"
+          },
+          "historical_render_failed": {
+            "title": "历史日程生成失败",
+            "type": "string",
+            "default": "",
+            "hint": "历史日程图片生成失败时发送。"
           }
         }
       }

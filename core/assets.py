@@ -9,6 +9,7 @@ import mimetypes
 import os
 import socket
 from collections import OrderedDict
+from typing import Any
 from pathlib import Path
 from urllib.parse import urljoin, urlparse
 from uuid import uuid4
@@ -28,7 +29,12 @@ class AssetCache:
     MAX_DOWNLOAD_BYTES = 8 * 1024 * 1024
     MAX_REDIRECTS = 3
     MEMORY_CACHE_ENTRIES = 64
+    MEMORY_CACHE_MAX_BYTES = 32 * 1024 * 1024
     MAX_LOCAL_BYTES = 16 * 1024 * 1024
+    MAX_DISK_CACHE_FILES = 512
+    MAX_DISK_CACHE_BYTES = 256 * 1024 * 1024
+    DATA_URI_CONCURRENCY = 6
+    DOWNLOAD_FAILURE_CACHE_ENTRIES = 64
     ALLOWED_MIME_TYPES = {"image/png", "image/jpeg", "image/gif", "image/webp"}
     LOCAL_MIME_TYPES = {"font/otf", "font/ttf", "application/font-sfnt", "application/x-font-opentype"}
     MIME_SUFFIXES = {
@@ -39,28 +45,38 @@ class AssetCache:
     }
 
     def __init__(
-        self, root: Path, session: aiohttp.ClientSession, proxy: str = ""
+        self,
+        root: Path,
+        session: aiohttp.ClientSession,
+        proxy: str = "",
+        logger: Any | None = None,
     ):
         self.root = root
         self.root.mkdir(parents=True, exist_ok=True)
         self.session = session
         self.proxy = proxy.strip()
-        self._download_locks: dict[str, asyncio.Lock] = {}
+        self.logger = logger
+        self._download_locks: dict[str, tuple[asyncio.Lock, int]] = {}
         self._download_locks_guard = asyncio.Lock()
         self._data_uri_cache: OrderedDict[tuple[str, int, int], str] = OrderedDict()
+        self._data_uri_cache_bytes = 0
+        self._data_uri_semaphore = asyncio.Semaphore(self.DATA_URI_CONCURRENCY)
+        self._failed_download_urls: OrderedDict[str, None] = OrderedDict()
 
     async def data_uri(self, source: str) -> str:
-        if not source:
-            return ""
-        if source.startswith("data:"):
-            return source if self._is_safe_data_uri(source) else ""
-        if source.startswith(("http://", "https://")):
-            try:
-                path = await self._download(source)
-            except Exception:
+        async with self._data_uri_semaphore:
+            if not source:
                 return ""
-            return self._data_uri_from_path(path, require_image=True)
-        return self._data_uri_from_path(Path(source), require_image=False)
+            if source.startswith("data:"):
+                return source if self._is_safe_data_uri(source) else ""
+            if source.startswith(("http://", "https://")):
+                try:
+                    path = await self._download(source)
+                except Exception as exc:
+                    self._log_download_failure(source, exc)
+                    return ""
+                return self._data_uri_from_path(path, require_image=True)
+            return self._data_uri_from_path(Path(source), require_image=False)
 
     def _data_uri_from_path(self, path: Path, require_image: bool) -> str:
         try:
@@ -86,62 +102,126 @@ class AssetCache:
         elif mime not in self.ALLOWED_MIME_TYPES | self.LOCAL_MIME_TYPES:
             return ""
         value = f"data:{mime};base64,{base64.b64encode(payload).decode('ascii')}"
-        self._data_uri_cache[cache_key] = value
-        self._data_uri_cache.move_to_end(cache_key)
-        while len(self._data_uri_cache) > self.MEMORY_CACHE_ENTRIES:
-            self._data_uri_cache.popitem(last=False)
+        self._remember_data_uri(cache_key, value)
         return value
 
-    async def _download(self, url: str) -> Path:
-        lock = await self._download_lock(url)
-        async with lock:
-            target = self._target_path(url)
-            if self._valid_cached_file(target):
-                return target
-            current = url
-            request_kwargs = {"proxy": self.proxy} if self.proxy else {}
-            for redirect_count in range(self.MAX_REDIRECTS + 1):
-                await self._validate_remote_url(current)
-                async with self.session.get(
-                    current, allow_redirects=False, **request_kwargs
-                ) as response:
-                    if response.status in {301, 302, 303, 307, 308}:
-                        location = response.headers.get("Location", "")
-                        if not location or redirect_count >= self.MAX_REDIRECTS:
-                            raise UnsafeAssetUrl("图片重定向无效或次数过多")
-                        current = urljoin(current, location)
-                        continue
-                    response.raise_for_status()
-                    content_type = response.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
-                    if content_type not in self.ALLOWED_MIME_TYPES:
-                        raise ValueError(f"不支持的图片类型：{content_type or 'unknown'}")
-                    content_length = response.content_length
-                    if content_length is not None and content_length > self.MAX_DOWNLOAD_BYTES:
-                        raise AssetTooLarge(f"图片超过 {self.MAX_DOWNLOAD_BYTES} 字节限制")
-                    temporary = target.with_name(f".{target.name}.{uuid4().hex}.tmp")
-                    try:
-                        written = 0
-                        with temporary.open("wb") as output:
-                            async for chunk in response.content.iter_chunked(64 * 1024):
-                                written += len(chunk)
-                                if written > self.MAX_DOWNLOAD_BYTES:
-                                    raise AssetTooLarge(f"图片超过 {self.MAX_DOWNLOAD_BYTES} 字节限制")
-                                output.write(chunk)
-                        payload = temporary.read_bytes()
-                        if not self._matches_image_mime(payload, content_type):
-                            raise ValueError("图片内容与声明类型不一致")
-                        os.replace(temporary, target)
-                        return target
-                    finally:
-                        try:
-                            temporary.unlink(missing_ok=True)
-                        except OSError:
-                            pass
-            raise UnsafeAssetUrl("图片重定向无效或次数过多")
+    def _remember_data_uri(self, cache_key: tuple[str, int, int], value: str) -> None:
+        previous = self._data_uri_cache.pop(cache_key, None)
+        if previous is not None:
+            self._data_uri_cache_bytes -= len(previous)
+        self._data_uri_cache[cache_key] = value
+        self._data_uri_cache_bytes += len(value)
+        while (
+            len(self._data_uri_cache) > self.MEMORY_CACHE_ENTRIES
+            or self._data_uri_cache_bytes > self.MEMORY_CACHE_MAX_BYTES
+        ):
+            _, evicted = self._data_uri_cache.popitem(last=False)
+            self._data_uri_cache_bytes -= len(evicted)
 
-    async def _download_lock(self, url: str) -> asyncio.Lock:
+    async def _download(self, url: str) -> Path:
+        lock = await self._retain_download_lock(url)
+        try:
+            async with lock:
+                target = self._target_path(url)
+                if self._valid_cached_file(target):
+                    return target
+                current = url
+                request_kwargs = {"proxy": self.proxy} if self.proxy else {}
+                for redirect_count in range(self.MAX_REDIRECTS + 1):
+                    await self._validate_remote_url(current)
+                    async with self.session.get(
+                        current, allow_redirects=False, **request_kwargs
+                    ) as response:
+                        if response.status in {301, 302, 303, 307, 308}:
+                            location = response.headers.get("Location", "")
+                            if not location or redirect_count >= self.MAX_REDIRECTS:
+                                raise UnsafeAssetUrl("图片重定向无效或次数过多")
+                            current = urljoin(current, location)
+                            continue
+                        response.raise_for_status()
+                        content_type = response.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
+                        if content_type not in self.ALLOWED_MIME_TYPES:
+                            raise ValueError(f"不支持的图片类型：{content_type or 'unknown'}")
+                        content_length = response.content_length
+                        if content_length is not None and content_length > self.MAX_DOWNLOAD_BYTES:
+                            raise AssetTooLarge(f"图片超过 {self.MAX_DOWNLOAD_BYTES} 字节限制")
+                        temporary = target.with_name(f".{target.name}.{uuid4().hex}.tmp")
+                        try:
+                            written = 0
+                            with temporary.open("wb") as output:
+                                async for chunk in response.content.iter_chunked(64 * 1024):
+                                    written += len(chunk)
+                                    if written > self.MAX_DOWNLOAD_BYTES:
+                                        raise AssetTooLarge(f"图片超过 {self.MAX_DOWNLOAD_BYTES} 字节限制")
+                                    output.write(chunk)
+                            payload = temporary.read_bytes()
+                            if not self._matches_image_mime(payload, content_type):
+                                raise ValueError("图片内容与声明类型不一致")
+                            os.replace(temporary, target)
+                            self._prune_disk_cache()
+                            return target
+                        finally:
+                            try:
+                                temporary.unlink(missing_ok=True)
+                            except OSError:
+                                pass
+                raise UnsafeAssetUrl("图片重定向无效或次数过多")
+        finally:
+            await self._release_download_lock(url, lock)
+
+    async def _retain_download_lock(self, url: str) -> asyncio.Lock:
         async with self._download_locks_guard:
-            return self._download_locks.setdefault(url, asyncio.Lock())
+            lock, references = self._download_locks.get(url, (asyncio.Lock(), 0))
+            self._download_locks[url] = (lock, references + 1)
+            return lock
+
+    async def _release_download_lock(self, url: str, lock: asyncio.Lock) -> None:
+        async with self._download_locks_guard:
+            current = self._download_locks.get(url)
+            if current is None or current[0] is not lock:
+                return
+            _, references = current
+            if references <= 1:
+                self._download_locks.pop(url, None)
+            else:
+                self._download_locks[url] = (lock, references - 1)
+
+    def _prune_disk_cache(self) -> None:
+        files: list[tuple[Path, int, int]] = []
+        try:
+            candidates = list(self.root.iterdir())
+        except OSError:
+            return
+        for path in candidates:
+            if path.name.startswith(".") or not path.is_file():
+                continue
+            try:
+                stat = path.stat()
+            except OSError:
+                continue
+            files.append((path, stat.st_size, stat.st_mtime_ns))
+        total_bytes = sum(size for _, size, _ in files)
+        remaining = len(files)
+        for path, size, _ in sorted(files, key=lambda item: item[2]):
+            if remaining <= self.MAX_DISK_CACHE_FILES and total_bytes <= self.MAX_DISK_CACHE_BYTES:
+                break
+            try:
+                path.unlink()
+            except OSError:
+                continue
+            remaining -= 1
+            total_bytes -= size
+
+    def _log_download_failure(self, url: str, exc: Exception) -> None:
+        if self.logger is None or url in self._failed_download_urls:
+            return
+        self._failed_download_urls[url] = None
+        self._failed_download_urls.move_to_end(url)
+        while len(self._failed_download_urls) > self.DOWNLOAD_FAILURE_CACHE_ENTRIES:
+            self._failed_download_urls.popitem(last=False)
+        parsed = urlparse(url)
+        safe_url = f"{parsed.scheme}://{parsed.hostname or ''}{parsed.path}"
+        self.logger.warning(f"图片资源加载失败：{safe_url}（{type(exc).__name__}）")
 
     def _target_path(self, url: str) -> Path:
         suffix = Path(urlparse(url).path).suffix.lower()

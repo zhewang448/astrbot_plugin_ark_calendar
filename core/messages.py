@@ -21,6 +21,10 @@ PROFILES: dict[str, dict[str, str]] = {
         "birthday_unknown": "博士，干员「{name}」的生日暂未公开或数据源未记录喵。{details}",
         "birthday_not_found": "唔，没有找到「{name}」的生日记录。博士可以检查一下干员名称是否完整喵。",
         "birthday_candidates": "唔，找到了多个可能的干员：\n{candidates}\n请使用完整名称重新查询喵。",
+        "birthday_lookup_failed": "唔……生日查询暂时没有完成，请博士稍后再试喵。",
+        "status_failed": "唔……暂时没有读到方舟日历状态，请博士稍后再试喵。",
+        "historical_range_invalid": "历史日程测试参数错误：{error}\n用法：/方舟历史日程测试 YYYY-MM-DD YYYY-MM-DD\n例如：/方舟历史日程测试 2026-07-01 2026-07-31",
+        "historical_render_failed": "历史日程测试图片生成失败，请查看 AstrBot 日志与数据源状态喵。",
     },
     "plain": {
         "rendering_started": "正在生成方舟日历，请稍候……",
@@ -36,6 +40,10 @@ PROFILES: dict[str, dict[str, str]] = {
         "birthday_unknown": "干员「{name}」的生日暂未公开或数据源未记录。{details}",
         "birthday_not_found": "未找到「{name}」的生日记录，请检查干员名称是否完整。",
         "birthday_candidates": "找到多个可能的干员：\n{candidates}\n请使用完整名称重新查询。",
+        "birthday_lookup_failed": "生日查询暂时失败，请稍后再试。",
+        "status_failed": "暂时没有读到方舟日历状态，请稍后再试。",
+        "historical_range_invalid": "历史日程测试参数错误：{error}\n用法：/方舟历史日程测试 YYYY-MM-DD YYYY-MM-DD\n例如：/方舟历史日程测试 2026-07-01 2026-07-31",
+        "historical_render_failed": "历史日程测试图片生成失败，请查看 AstrBot 日志与数据源状态。",
     },
 }
 

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -41,7 +41,7 @@ class ArkCalendarPlugin(Star):
         self._scheduled_report_lock = asyncio.Lock()
         self._scheduled_birthday_greeting_lock = asyncio.Lock()
         self._notification_state_lock = asyncio.Lock()
-        self._render_locks: dict[str, asyncio.Lock] = {}
+        self._render_locks: dict[str, tuple[asyncio.Lock, int]] = {}
         self._render_locks_guard = asyncio.Lock()
 
     async def initialize(self) -> None:
@@ -129,7 +129,7 @@ class ArkCalendarPlugin(Star):
                 )
         except Exception:
             logger.error("查询干员生日失败。", exc_info=True)
-            yield event.plain_result("生日查询暂时失败，请稍后再试。")
+            yield event.plain_result(self.messages.text("birthday_lookup_failed"))
 
     @filter.command("方舟日历状态", alias={"方舟状态", "明日方舟日历状态"})
     async def status_command(self, event: AstrMessageEvent):
@@ -141,7 +141,7 @@ class ArkCalendarPlugin(Star):
             await self._observe_health(snapshot, "状态查询")
         except Exception:
             logger.error("读取方舟日历状态失败。", exc_info=True)
-            yield event.plain_result("无法读取方舟日历状态，请稍后再试。")
+            yield event.plain_result(self.messages.text("status_failed"))
 
     @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("方舟日历刷新", alias={"方舟日历更新", "方舟日报刷新"})
@@ -178,11 +178,7 @@ class ArkCalendarPlugin(Star):
         try:
             start, end = self._historical_range(start_date, end_date)
         except ValueError as exc:
-            yield event.plain_result(
-                f"历史日程测试参数错误：{exc}\n"
-                "用法：/方舟历史日程测试 YYYY-MM-DD YYYY-MM-DD\n"
-                "例如：/方舟历史日程测试 2026-07-01 2026-07-31"
-            )
+            yield event.plain_result(self.messages.text("historical_range_invalid", error=exc))
             return
         try:
             snapshot = await self.service.historical_snapshot(start, end)
@@ -190,7 +186,7 @@ class ArkCalendarPlugin(Star):
             yield event.image_result(str(image))
         except Exception:
             logger.error("历史日程测试图片生成失败。", exc_info=True)
-            yield event.plain_result("历史日程测试图片生成失败，请查看 AstrBot 日志与数据源状态。")
+            yield event.plain_result(self.messages.text("historical_render_failed"))
 
     @staticmethod
     def _historical_range(start_text: str, end_text: str) -> tuple[datetime, datetime]:
@@ -206,7 +202,7 @@ class ArkCalendarPlugin(Star):
             raise ValueError("开始日期不能晚于结束日期")
         if end_day > today:
             raise ValueError("只能测试今天及以前的历史区间")
-        if end_day - start_day > timedelta(days=90):
+        if (end_day - start_day).days + 1 > 90:
             raise ValueError("单次最多测试 90 天")
         return (
             datetime.combine(start_day, datetime.min.time(), CN_TZ),
@@ -280,17 +276,33 @@ class ArkCalendarPlugin(Star):
             logger.info("最终日历图片缓存命中。")
             return cached, "cache"
         signature = self.render_cache.signature(snapshot, display_config)
-        lock = await self._render_lock(signature)
-        async with lock:
-            cached = self.render_cache.lookup(snapshot, display_config)
-            if cached:
-                logger.info("最终日历图片缓存由并发请求生成。")
-                return cached, "cache"
-            return await self._render_calendar_image(snapshot, display_config)
+        lock = await self._retain_render_lock(signature)
+        try:
+            async with lock:
+                cached = self.render_cache.lookup(snapshot, display_config)
+                if cached:
+                    logger.info("最终日历图片缓存由并发请求生成。")
+                    return cached, "cache"
+                return await self._render_calendar_image(snapshot, display_config)
+        finally:
+            await self._release_render_lock(signature, lock)
 
-    async def _render_lock(self, signature: str) -> asyncio.Lock:
+    async def _retain_render_lock(self, signature: str) -> asyncio.Lock:
         async with self._render_locks_guard:
-            return self._render_locks.setdefault(signature, asyncio.Lock())
+            lock, references = self._render_locks.get(signature, (asyncio.Lock(), 0))
+            self._render_locks[signature] = (lock, references + 1)
+            return lock
+
+    async def _release_render_lock(self, signature: str, lock: asyncio.Lock) -> None:
+        async with self._render_locks_guard:
+            current = self._render_locks.get(signature)
+            if current is None or current[0] is not lock:
+                return
+            _, references = current
+            if references <= 1:
+                self._render_locks.pop(signature, None)
+            else:
+                self._render_locks[signature] = (lock, references - 1)
 
     async def _render_calendar_image(self, snapshot, display_config: dict[str, Any]) -> tuple[Path | str, str]:
         started = time.monotonic()

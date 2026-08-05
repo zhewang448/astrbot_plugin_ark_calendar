@@ -84,8 +84,6 @@ class PrtsSource:
             return []
         resource_cells = cls._direct_cells(rows[0])
         resource_days = cls._direct_cells(rows[1])
-        chip_cells = cls._direct_cells(rows[2])
-        chip_days = cls._direct_cells(rows[3])
         result: list[dict] = []
         for cell, day_cell in zip(resource_cells, resource_days):
             image = cell.select_one("img[src]")

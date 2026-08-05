@@ -76,7 +76,7 @@ class CalendarService:
             },
         )
         self.http = HttpClient(self.session, proxy=proxy)
-        self.assets = AssetCache(self.data_dir / "assets", self.session, proxy=proxy)
+        self.assets = AssetCache(self.data_dir / "assets", self.session, proxy=proxy, logger=self.logger)
         if proxy:
             self.logger.info("方舟日历网络请求已启用 AstrBot HTTP 代理。")
         self.anything = AnythingIcsSource(
@@ -562,13 +562,15 @@ class CalendarService:
     async def _hydrate_home_highlights(self, home: dict) -> dict:
         assert self.assets
         result = dict(home)
+
+        async def hydrate(item: dict) -> dict:
+            current = dict(item)
+            current["image"] = await self.assets.data_uri(current.get("image", ""))
+            return current
+
         for key in ("resource_schedule", "chip_schedule", "voucher_exchange", "new_skins", "new_modules"):
-            hydrated = []
-            for item in home.get(key, []) or []:
-                current = dict(item)
-                current["image"] = await self.assets.data_uri(current.get("image", ""))
-                hydrated.append(current)
-            result[key] = hydrated
+            items = [item for item in home.get(key, []) or [] if isinstance(item, dict)]
+            result[key] = list(await asyncio.gather(*(hydrate(item) for item in items)))
         return result
 
     async def _build_events(
@@ -591,11 +593,13 @@ class CalendarService:
         details = await asyncio.gather(
             *(self._event_detail(raw["name"]) for raw, _, _ in selected),
         )
+        normalized_details = [detail if isinstance(detail, dict) else {} for detail in details]
+        images = await asyncio.gather(
+            *(self.assets.data_uri(detail.get("image_url", "")) for detail in normalized_details),
+        )
         event_items: list[TimelineItem] = []
         long_items: list[TimelineItem] = []
-        for (raw, item_start, item_end), detail_result in zip(selected, details):
-            detail = detail_result if isinstance(detail_result, dict) else {}
-            image = await self.assets.data_uri(detail.get("image_url", ""))
+        for (raw, item_start, item_end), detail, image in zip(selected, normalized_details, images):
             duration = item_end - item_start
             model = TimelineItem(
                 id=str(raw.get("id", raw["name"])),
@@ -711,16 +715,20 @@ class CalendarService:
     async def _build_gacha_items(self, pools_raw: list[dict]) -> list[TimelineItem]:
         assert self.prts and self.gacha and self.assets
         previous = {item.id: item for item in self.last_snapshot.gacha_pools} if self.last_snapshot else {}
+        primary_images = await asyncio.gather(
+            *(self.assets.data_uri(pool.get("image", "")) for pool in pools_raw),
+        )
         result: list[TimelineItem] = []
-        for pool in pools_raw:
+        for pool, image in zip(pools_raw, primary_images):
             cached = previous.get(pool.get("id", ""))
             six = list(pool.get("six", [])) or (list(cached.six_star_up) if cached else [])
             weighted = list(pool.get("weighted", [])) or (list(cached.weighted_up) if cached else [])
-            image = await self.assets.data_uri(pool.get("image", ""))
             images: list[str] = []
             if not image and six:
                 urls = await self._safe_avatar_urls(six[:2])
-                images = [await self.assets.data_uri(urls.get(name, "")) for name in six[:2]]
+                images = list(await asyncio.gather(
+                    *(self.assets.data_uri(urls.get(name, "")) for name in six[:2]),
+                ))
                 images = [item for item in images if item]
             result.append(TimelineItem(
                 id=pool.get("id", ""),
