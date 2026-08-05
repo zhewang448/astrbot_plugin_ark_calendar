@@ -29,14 +29,32 @@ class CalendarImageCache:
 
     def signature(self, snapshot: CalendarSnapshot, display_config: dict[str, Any]) -> str:
         payload = {
-            "snapshot_generated_at": snapshot.generated_at,
-            "calendar_date": snapshot.calendar_date,
-            "schema_version": snapshot.schema_version,
-            "data_config_hash": snapshot.data_config_hash,
+            "snapshot": self._business_snapshot(snapshot),
             "display": display_config,
         }
         raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24]
+
+    @staticmethod
+    def _business_snapshot(snapshot: CalendarSnapshot) -> dict[str, Any]:
+        """Build a stable signature payload from fields that affect the image."""
+        payload = snapshot.to_dict()
+        payload.pop("generated_at", None)
+        payload.pop("refresh_quality", None)
+        source_states = payload.get("source_states", [])
+        if isinstance(source_states, list):
+            payload["source_states"] = [
+                {
+                    "name": item.get("name", ""),
+                    "ok": bool(item.get("ok", True)),
+                    "event_key": item.get("event_key", ""),
+                    "status": item.get("status", "fresh"),
+                    "used_cache": bool(item.get("used_cache", False)),
+                }
+                for item in source_states
+                if isinstance(item, dict)
+            ]
+        return payload
 
     def lookup(self, snapshot: CalendarSnapshot, display_config: dict[str, Any], now: datetime | None = None) -> Path | None:
         manifest = self._load_manifest()

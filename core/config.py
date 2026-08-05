@@ -46,6 +46,30 @@ def config_strings(value: Any) -> list[str]:
     return [str(item).strip() for item in value if str(item).strip()]
 
 
+def config_int(
+    config: Any,
+    section_name: str,
+    key: str,
+    default: int,
+    *,
+    minimum: int | None = None,
+    maximum: int | None = None,
+    legacy_key: str | None = None,
+) -> int:
+    """Read an integer setting with a safe default and optional bounds."""
+    raw = config_value(config, section_name, key, default, legacy_key)
+    try:
+        if isinstance(raw, bool):
+            raise ValueError("boolean is not an integer setting")
+        value = int(raw)
+    except (TypeError, ValueError, OverflowError):
+        value = default
+    if minimum is not None:
+        value = max(minimum, value)
+    if maximum is not None:
+        value = min(maximum, value)
+    return value
+
 def sync_builtin_message_previews(config: Any, schema_path: Path) -> bool:
     """仅把历史内置预览迁移为当前 Schema 默认值。"""
     schema = json.loads(schema_path.read_text(encoding="utf-8"))

@@ -14,7 +14,7 @@ from astrbot.api.event import AstrMessageEvent, MessageChain, filter
 from astrbot.api.star import Context, Star
 from astrbot.core.utils.astrbot_path import get_astrbot_plugin_data_path
 
-from .core.config import config_strings, config_value, sync_builtin_message_previews
+from .core.config import config_int, config_strings, config_value, sync_builtin_message_previews
 from .core.messages import MessageCatalog
 from .core.render_cache import CalendarImageCache
 from .core.renderer import CalendarRenderer
@@ -246,18 +246,42 @@ class ArkCalendarPlugin(Star):
     def _value(self, section: str, key: str, default: Any, legacy_key: str | None = None) -> Any:
         return config_value(self.config, section, key, default, legacy_key)
 
+    def _int_value(
+        self,
+        section: str,
+        key: str,
+        default: int,
+        *,
+        minimum: int | None = None,
+        maximum: int | None = None,
+        legacy_key: str | None = None,
+    ) -> int:
+        return config_int(
+            self.config, section, key, default,
+            minimum=minimum, maximum=maximum, legacy_key=legacy_key,
+        )
+
     def _cache_enabled(self) -> bool:
         return bool(self._value("cache_and_render", "final_image_cache_enabled", True))
 
     def _cache_max_age(self) -> int:
-        requested = max(1, int(self._value("cache_and_render", "final_image_cache_max_age_minutes", 30)))
+        requested = self._int_value(
+            "cache_and_render", "final_image_cache_max_age_minutes", 30,
+            minimum=1, maximum=1440,
+        )
         return min(requested, max(1, int(self.service.cache_ttl().total_seconds() // 60)))
 
     def _cache_keep_count(self) -> int:
-        return max(1, int(self._value("cache_and_render", "final_image_cache_keep_count", 3)))
+        return self._int_value(
+            "cache_and_render", "final_image_cache_keep_count", 3,
+            minimum=1, maximum=100,
+        )
 
     def _fallback_max_age_hours(self) -> int:
-        return max(1, int(self._value("cache_and_render", "fallback_max_age_hours", 12)))
+        return self._int_value(
+            "cache_and_render", "fallback_max_age_hours", 12,
+            minimum=1, maximum=168,
+        )
 
     def _send_rendering_notice(self) -> bool:
         return bool(self._value("cache_and_render", "send_rendering_notice", True))
@@ -310,7 +334,7 @@ class ArkCalendarPlugin(Star):
         try:
             rendered = await self.renderer.calendar(snapshot)
             elapsed = time.monotonic() - started
-            warning_seconds = max(1, int(self._value("cache_and_render", "slow_render_warning_seconds", 15)))
+            warning_seconds = self._int_value("cache_and_render", "slow_render_warning_seconds", 15, minimum=1, maximum=3600)
             if elapsed >= warning_seconds:
                 logger.warning(f"方舟日历渲染耗时较长：{elapsed:.2f} 秒。")
             else:
@@ -626,7 +650,7 @@ class ArkCalendarPlugin(Star):
             active = stored.get("active", {}) if isinstance(stored.get("active", {}), dict) else {}
             last_sent = stored.get("last_sent", {}) if isinstance(stored.get("last_sent", {}), dict) else {}
             now = datetime.now(CN_TZ)
-            cooldown = max(1, int(self._value("admin_notification", "cooldown_minutes", 60)))
+            cooldown = self._int_value("admin_notification", "cooldown_minutes", 60, minimum=1, maximum=10080)
             alert_keys: list[str] = []
             alert_lines: list[str] = []
             for event_key, item in current.items():

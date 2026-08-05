@@ -15,11 +15,11 @@ import aiohttp
 
 from .assets import AssetCache
 from .cache import JsonCache
-from .config import config_value
+from .config import config_int, config_value
 from .models import BirthdayGroup, CalendarSnapshot, Operator, SourceState, TimelineItem, TodayInfo, parse_iso
 from ..sources.anything_ics import AnythingIcsSource
 from ..sources.gacha import GachaSource
-from ..sources.http import HttpClient
+from ..sources.http import HttpClient, PublicResolver
 from ..sources.prts import PrtsSource
 
 CN_TZ = ZoneInfo("Asia/Shanghai")
@@ -65,10 +65,15 @@ class CalendarService:
         self.last_refresh_finished_at = ""
 
     async def initialize(self) -> None:
-        timeout = aiohttp.ClientTimeout(total=max(5, int(self.value("data_sources", "request_timeout_seconds", 15, "request_timeout"))))
+        timeout_seconds = self.int_value(
+            "data_sources", "request_timeout_seconds", 15,
+            minimum=5, maximum=300, legacy_key="request_timeout",
+        )
+        timeout = aiohttp.ClientTimeout(total=timeout_seconds)
         proxy = self._http_proxy()
         self.session = aiohttp.ClientSession(
             timeout=timeout,
+            connector=aiohttp.TCPConnector(resolver=PublicResolver()),
             trust_env=True,
             headers={
                 "User-Agent": f"AstrBot-ArkCalendar/{self._plugin_version()}",
@@ -134,15 +139,33 @@ class CalendarService:
     def value(self, section: str, key: str, default: Any, legacy_key: str | None = None) -> Any:
         return config_value(self.config, section, key, default, legacy_key)
 
+    def int_value(
+        self,
+        section: str,
+        key: str,
+        default: int,
+        *,
+        minimum: int | None = None,
+        maximum: int | None = None,
+        legacy_key: str | None = None,
+    ) -> int:
+        return config_int(
+            self.config, section, key, default,
+            minimum=minimum, maximum=maximum, legacy_key=legacy_key,
+        )
+
     def cache_ttl(self) -> timedelta:
-        return timedelta(minutes=max(1, int(self.value("cache_and_render", "data_cache_ttl_minutes", 30, "cache_ttl_minutes"))))
+        return timedelta(minutes=self.int_value(
+            "cache_and_render", "data_cache_ttl_minutes", 30,
+            minimum=1, maximum=10080, legacy_key="cache_ttl_minutes",
+        ))
 
     def timeline_days(self) -> int:
-        try:
-            configured = int(self.value("basic", "timeline_days", 28, "timeline_days"))
-        except (TypeError, ValueError):
-            configured = 28
-        return min(self.MAX_TIMELINE_DAYS, max(self.MIN_TIMELINE_DAYS, configured))
+        return self.int_value(
+            "basic", "timeline_days", 28,
+            minimum=self.MIN_TIMELINE_DAYS, maximum=self.MAX_TIMELINE_DAYS,
+            legacy_key="timeline_days",
+        )
 
     def _snapshot_data_config(self) -> dict[str, Any]:
         return {
@@ -167,11 +190,10 @@ class CalendarService:
             return "dev"
 
     def snapshot_fallback_max_age(self) -> timedelta:
-        try:
-            hours = int(self.value("cache_and_render", "snapshot_fallback_max_age_hours", 12))
-        except (TypeError, ValueError):
-            hours = 12
-        return timedelta(hours=max(1, hours))
+        return timedelta(hours=self.int_value(
+            "cache_and_render", "snapshot_fallback_max_age_hours", 12,
+            minimum=1, maximum=168,
+        ))
 
     def _can_use_snapshot(self, snapshot: CalendarSnapshot | None, max_age: timedelta) -> bool:
         if not snapshot:
@@ -201,6 +223,8 @@ class CalendarService:
     def _load_source_cache(self, cache_name: str) -> tuple[Any | None, datetime | None]:
         stored = self.cache.load(cache_name)
         if isinstance(stored, dict) and stored.get("_cache_kind") == self.SOURCE_CACHE_KIND:
+            if stored.get("schema_version") != self.SOURCE_CACHE_SCHEMA_VERSION:
+                return None, None
             try:
                 fetched_at = parse_iso(str(stored.get("fetched_at", ""))).astimezone(CN_TZ)
             except (TypeError, ValueError):

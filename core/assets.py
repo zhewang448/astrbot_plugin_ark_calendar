@@ -132,6 +132,7 @@ class AssetCache:
                     async with self.session.get(
                         current, allow_redirects=False, **request_kwargs
                     ) as response:
+                        self._validate_response_peer(response)
                         if response.status in {301, 302, 303, 307, 308}:
                             location = response.headers.get("Location", "")
                             if not location or redirect_count >= self.MAX_REDIRECTS:
@@ -246,6 +247,27 @@ class AssetCache:
         if not addresses or any(not address.is_global for address in addresses):
             raise UnsafeAssetUrl("图片地址不能解析到私网、回环或保留地址")
 
+    def _validate_response_peer(self, response: Any) -> None:
+        """Defence in depth for direct requests after the TCP connection is made."""
+        if self.proxy:
+            # A configured proxy resolves the target itself and is an explicit trust boundary.
+            return
+        connection = getattr(response, "connection", None)
+        transport = getattr(connection, "transport", None)
+        if transport is None:
+            protocol = getattr(response, "_protocol", None)
+            transport = getattr(protocol, "transport", None)
+        if transport is None:
+            return
+        peer = transport.get_extra_info("peername")
+        if not isinstance(peer, tuple) or not peer:
+            return
+        try:
+            address = ipaddress.ip_address(str(peer[0]))
+        except ValueError as exc:
+            raise UnsafeAssetUrl("图片连接的对端地址无效") from exc
+        if not address.is_global:
+            raise UnsafeAssetUrl("图片连接到了私网、回环或保留地址")
     def _valid_cached_file(self, path: Path) -> bool:
         try:
             payload = path.read_bytes()

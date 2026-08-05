@@ -38,7 +38,7 @@ class CalendarRenderer:
             "snapshot": snapshot.to_dict(), "events": items, "pools": pools, "longs": longs, "ticks": ticks,
             "timeline_days": timeline_days,
             "today_left": max(0, min(100, (now-start).total_seconds()/(end-start).total_seconds()*100)),
-            "date_cn": now.strftime("%Y / %m / %d"), "generated_text": now.astimezone(CN_TZ).strftime("%Y-%m-%d %H:%M"),
+            "date_cn": now.strftime("%Y / %m / %d"), "data_date_text": snapshot.calendar_date,
             "weekday": "星期" + "一二三四五六日"[now.weekday()],
             "hero": hero, "static": static,
             "show_footer": self.service.value("basic", "show_source_footer", True, "show_source_footer"),
