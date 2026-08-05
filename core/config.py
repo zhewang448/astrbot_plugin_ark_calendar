@@ -56,7 +56,7 @@ def config_int(
     maximum: int | None = None,
     legacy_key: str | None = None,
 ) -> int:
-    """Read an integer setting with a safe default and optional bounds."""
+    """读取整数配置项，带安全默认值和可选的上下界。"""
     raw = config_value(config, section_name, key, default, legacy_key)
     try:
         if isinstance(raw, bool):

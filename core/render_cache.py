@@ -13,15 +13,18 @@ from .models import CalendarSnapshot, parse_iso
 
 CN_TZ = ZoneInfo("Asia/Shanghai")
 
+PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
+
 
 class CalendarImageCache:
-    """Persist and reuse the latest rendered calendar image."""
+    """持久化并复用最近一次渲染出的日历图片。"""
 
     MANIFEST_NAME = "calendar-current.json"
 
     def __init__(self, root: Path):
         self.root = root
         self.root.mkdir(parents=True, exist_ok=True)
+        self._manifest_cache: tuple[tuple[int, int], dict[str, Any]] | None = None
 
     @property
     def manifest_path(self) -> Path:
@@ -37,7 +40,7 @@ class CalendarImageCache:
 
     @staticmethod
     def _business_snapshot(snapshot: CalendarSnapshot) -> dict[str, Any]:
-        """Build a stable signature payload from fields that affect the image."""
+        """只取会影响图片内容的字段，构造稳定的签名载荷。"""
         payload = snapshot.to_dict()
         payload.pop("generated_at", None)
         payload.pop("refresh_quality", None)
@@ -63,7 +66,7 @@ class CalendarImageCache:
         current = now or datetime.now(CN_TZ)
         if manifest.get("signature") != self.signature(snapshot, display_config):
             return None
-        if not self._is_valid_manifest(manifest, current):
+        if not self._is_manifest_current(manifest, current):
             return None
         return self._image_path(manifest)
 
@@ -106,7 +109,7 @@ class CalendarImageCache:
             self._write_image(rendered, temporary)
             if not temporary.exists() or temporary.stat().st_size <= 0:
                 raise ValueError("渲染缓存图片为空")
-            if temporary.read_bytes()[:8] != b"\x89PNG\r\n\x1a\n":
+            if not self._has_png_magic(temporary):
                 raise ValueError("渲染器未返回 PNG 图片")
             temporary.replace(target)
         finally:
@@ -136,6 +139,7 @@ class CalendarImageCache:
                 temporary_manifest.unlink(missing_ok=True)
             except OSError:
                 pass
+        self._manifest_cache = None
         self._prune(max(1, keep_count))
         return target
 
@@ -144,8 +148,15 @@ class CalendarImageCache:
         if not manifest:
             return {"state": "missing"}
         current = datetime.now(CN_TZ)
+        # 图片只解析一次并复用于有效性判断，不再调用 lookup()，
+        # 否则会重复解析图片一次。
         image = self._image_path(manifest)
-        valid = bool(snapshot and image and self.lookup(snapshot, display_config, current))
+        valid = bool(
+            snapshot
+            and image
+            and manifest.get("signature") == self.signature(snapshot, display_config)
+            and self._is_manifest_current(manifest, current)
+        )
         return {
             "state": "valid" if valid else "stale",
             "image": str(image) if image else "",
@@ -155,11 +166,30 @@ class CalendarImageCache:
         }
 
     def _load_manifest(self) -> dict[str, Any] | None:
+        """读取 manifest，文件未变化时复用已解析的副本。
+
+        每次调用都会重新校验 (mtime_ns, size) 指纹，因此其他进程改写过的
+        manifest 仍能被及时发现。
+        """
+        try:
+            stat = self.manifest_path.stat()
+        except OSError:
+            self._manifest_cache = None
+            return None
+        fingerprint = (stat.st_mtime_ns, stat.st_size)
+        cached = self._manifest_cache
+        if cached is not None and cached[0] == fingerprint:
+            return dict(cached[1])
         try:
             data = json.loads(self.manifest_path.read_text("utf-8"))
         except (OSError, ValueError):
+            self._manifest_cache = None
             return None
-        return data if isinstance(data, dict) else None
+        if not isinstance(data, dict):
+            self._manifest_cache = None
+            return None
+        self._manifest_cache = (fingerprint, data)
+        return dict(data)
 
     def _image_path(self, manifest: dict[str, Any]) -> Path | None:
         name = str(manifest.get("image", "") or "")
@@ -167,14 +197,24 @@ class CalendarImageCache:
             return None
         image = self.root / name
         try:
-            return image if image.is_file() and image.stat().st_size > 8 and image.read_bytes()[:8] == b"\x89PNG\r\n\x1a\n" else None
+            if not image.is_file() or image.stat().st_size <= 8:
+                return None
         except OSError:
             return None
+        return image if self._has_png_magic(image) else None
 
-    def _is_valid_manifest(self, manifest: dict[str, Any], now: datetime) -> bool:
-        image = self._image_path(manifest)
-        if not image:
+    @staticmethod
+    def _has_png_magic(path: Path) -> bool:
+        """只读文件头校验 PNG 签名，避免把整张图片读入内存。"""
+        try:
+            with path.open("rb") as handle:
+                return handle.read(8) == PNG_MAGIC
+        except OSError:
             return False
+
+    @staticmethod
+    def _is_manifest_current(manifest: dict[str, Any], now: datetime) -> bool:
+        """只校验 manifest 是否在有效期内；图片由调用方解析。"""
         try:
             expiry = parse_iso(str(manifest.get("expires_at", ""))).astimezone(CN_TZ)
         except (TypeError, ValueError):

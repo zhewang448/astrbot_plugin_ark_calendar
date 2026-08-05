@@ -356,9 +356,9 @@ class PrtsSource:
 
     @staticmethod
     def _gacha_name(text: str) -> str:
-        """Extract the formal pool name from a PRTS table cell."""
-        # PRTS may prefix a formal pool title with a bracketed category.
-        # The suffix is the pool name shared by the other data sources.
+        """从 PRTS 表格单元格中提取卡池正式名称。"""
+        # PRTS 可能在正式卡池标题前加上带括号的分类前缀，
+        # 去掉前缀后的部分才是其他数据源通用的卡池名称。
         return re.sub(r"^[【『「][^】』」]+[】』」]\s*", "", text.strip()).strip()
 
     @staticmethod

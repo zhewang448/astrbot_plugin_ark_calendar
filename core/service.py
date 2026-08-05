@@ -26,6 +26,10 @@ CN_TZ = ZoneInfo("Asia/Shanghai")
 
 
 class CalendarService:
+    # 类级默认值：绕过 __init__ 构造的实例（例如测试里用 __new__ 创建）
+    # 仍然能读到该属性。
+    plugin_version = "dev"
+
     SNAPSHOT_SCHEMA_VERSION = 4
     SOURCE_CACHE_SCHEMA_VERSION = 1
     CRITICAL_SOURCE_NAMES = frozenset({
@@ -45,6 +49,7 @@ class CalendarService:
         self.data_dir = data_dir
         self.config = config
         self.logger = logger
+        self.plugin_version = self._read_plugin_version()
         self.cache = JsonCache(data_dir / "cache")
         self.session: aiohttp.ClientSession | None = None
         self.http: HttpClient | None = None
@@ -76,7 +81,7 @@ class CalendarService:
             connector=aiohttp.TCPConnector(resolver=PublicResolver()),
             trust_env=True,
             headers={
-                "User-Agent": f"AstrBot-ArkCalendar/{self._plugin_version()}",
+                "User-Agent": f"AstrBot-ArkCalendar/{self.plugin_version}",
                 "Accept-Encoding": "identity",
             },
         )
@@ -181,7 +186,8 @@ class CalendarService:
         raw = json.dumps(self._snapshot_data_config(), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
-    def _plugin_version(self) -> str:
+    def _read_plugin_version(self) -> str:
+        """从 metadata.yaml 读取版本号，仅读一次并缓存到 self.plugin_version。"""
         try:
             metadata = (self.plugin_dir / "metadata.yaml").read_text("utf-8")
             match = re.search(r"^version:\s*v?(.+?)\s*$", metadata, re.MULTILINE)
@@ -530,10 +536,27 @@ class CalendarService:
                     avatar=avatar,
                 ))
 
-        event_items, long_items = await self._build_events(events_raw, start, end)
-        pools_raw, gacha_states = await self._load_gacha_pools(start, end, overview)
+        # 活动与卡池两条链路互不依赖，并行执行可缩短慢网络下的总耗时。
+        # 任一条抛错时立即取消另一条：裸 gather 只会向上传播异常而不取消兄弟任务，
+        # 会留下继续持有信号量、且异常无人取回的孤儿任务。
+        events_task = asyncio.ensure_future(self._build_events(events_raw, start, end))
+        gacha_task = asyncio.ensure_future(self._build_gacha_timeline(start, end, overview))
+        branch_tasks = (events_task, gacha_task)
+        _, pending = await asyncio.wait(set(branch_tasks), return_when=asyncio.FIRST_EXCEPTION)
+        for task in pending:
+            task.cancel()
+        if pending:
+            await asyncio.wait(pending)
+        # 必须先取回每个任务的异常再抛出：两条链路在同一次事件循环迭代中同时失败时
+        # pending 为空、谁都不会被取消，若直接抛出第一个错误，另一个异常将无人取回，
+        # asyncio 会在回收时打印 "Task exception was never retrieved"。
+        errors = [self._task_error(task) for task in branch_tasks]
+        first_error = next((error for error in errors if error is not None), None)
+        if first_error is not None:
+            raise first_error
+        event_items, long_items = events_task.result()
+        gacha_items, gacha_states = gacha_task.result()
         source_states.extend(gacha_states)
-        gacha_items = await self._build_gacha_items(pools_raw)
 
         today_info = TodayInfo(
             home.get("supplies", []),
@@ -639,8 +662,25 @@ class CalendarService:
             (long_items if model.is_long_term else event_items).append(model)
         return event_items, long_items
 
+    async def _build_gacha_timeline(
+        self,
+        start: datetime,
+        end: datetime,
+        overview: list[dict],
+    ) -> tuple[list[TimelineItem], list[SourceState]]:
+        """把加载卡池和构造时间轴条目串成一条可等待链路。"""
+        pools_raw, states = await self._load_gacha_pools(start, end, overview)
+        return await self._build_gacha_items(pools_raw), states
+
+    @staticmethod
+    def _task_error(task: "asyncio.Task[Any]") -> BaseException | None:
+        """返回任务的异常；被取消的兄弟任务视为无异常。"""
+        if task.cancelled():
+            return None
+        return task.exception()
+
     async def historical_snapshot(self, start: datetime, end: datetime) -> CalendarSnapshot:
-        """Build a historical CalendarSnapshot through the normal image/data pipeline."""
+        """复用常规的数据与图片流程，构造历史区间的 CalendarSnapshot。"""
         assert self.anything and self.prts and self.gacha and self.assets
         if start > end:
             raise ValueError("开始日期不能晚于结束日期")

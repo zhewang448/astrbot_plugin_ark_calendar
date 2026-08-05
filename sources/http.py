@@ -16,15 +16,15 @@ from aiohttp.resolver import DefaultResolver
 
 
 class UnsafeRemoteUrl(ValueError):
-    """Raised when a remote URL uses an unsafe scheme or address."""
+    """远程 URL 使用了不安全的协议或地址时抛出。"""
 
 
 class ResponseTooLarge(ValueError):
-    """Raised when a text or JSON response exceeds the configured limit."""
+    """文本或 JSON 响应超出配置上限时抛出。"""
 
 
 class PublicResolver(AbstractResolver):
-    """Resolve only globally routable addresses for direct outbound requests."""
+    """直连请求只解析全球可路由地址。"""
 
     def __init__(self) -> None:
         self._resolver = DefaultResolver()
@@ -109,7 +109,7 @@ class HttpClient:
     async def _decode_response(cls, response: Any, as_json: bool) -> Any:
         payload = await cls._read_limited_body(response)
         if payload is None:
-            # Compatibility path for test doubles and session adapters without StreamReader.
+            # 兼容路径：测试替身与不带 StreamReader 的 session 适配器。
             value = await (response.json(content_type=None) if as_json else response.text())
             cls._ensure_fallback_value_size(value, as_json)
             return value

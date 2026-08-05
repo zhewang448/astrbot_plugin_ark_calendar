@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -22,6 +23,70 @@ from .core.scheduler_utils import normalize_weekdays, parse_schedule_times
 from .core.service import CalendarService
 
 CN_TZ = ZoneInfo("Asia/Shanghai")
+
+
+@dataclass(frozen=True)
+class CommandSpec:
+    """命令名称、别名与帮助条目的唯一来源。"""
+
+    name: str
+    aliases: tuple[str, ...] = ()
+    summary: str = ""
+    argument_hint: str = ""
+
+    @property
+    def alias_set(self) -> set[str]:
+        return set(self.aliases)
+
+    def help_entry(self) -> str:
+        invocation = f"/{self.name}"
+        if self.argument_hint:
+            invocation = f"{invocation} {self.argument_hint}"
+        if self.aliases:
+            alias_text = "、".join(f"/{alias}" for alias in self.aliases)
+            invocation = f"{invocation}（别名：{alias_text}）"
+        return f"{invocation}\n{self.summary}"
+
+
+CALENDAR_COMMAND = CommandSpec(
+    "方舟日历",
+    ("方舟日报", "明日方舟日历", "舟日历"),
+    "生成活动、寻访、生日和今日作战信息长图；命中图片缓存时会直接发送。",
+)
+BIRTHDAY_COMMAND = CommandSpec(
+    "方舟生日",
+    ("方舟生日查询", "明日方舟生日", "舟生日"),
+    "以文字查询干员生日，例如：/方舟生日 卡缇。",
+    argument_hint="<干员名称>",
+)
+STATUS_COMMAND = CommandSpec(
+    "方舟日历状态",
+    ("方舟状态", "明日方舟日历状态"),
+    "查看最近快照、数据源、降级状态和最终图片缓存。",
+)
+HELP_COMMAND = CommandSpec(
+    "方舟日报帮助",
+    ("方舟日历帮助", "明日方舟日报帮助"),
+    "查看本帮助。",
+)
+REFRESH_COMMAND = CommandSpec(
+    "方舟日历刷新",
+    ("方舟日历更新", "方舟日报刷新"),
+    "强制刷新数据源并重新生成日历图片。",
+)
+HISTORICAL_COMMAND = CommandSpec(
+    "方舟历史日程测试",
+    ("方舟回溯测试", "方舟日历历史测试"),
+    "生成仅含活动与寻访时间轴的历史测试图片，例如：/方舟历史日程测试 2026-07-01 2026-07-31。",
+    argument_hint="<开始日期> <结束日期>",
+)
+
+USER_COMMANDS = (CALENDAR_COMMAND, BIRTHDAY_COMMAND, STATUS_COMMAND, HELP_COMMAND)
+ADMIN_COMMANDS = (REFRESH_COMMAND, HISTORICAL_COMMAND)
+
+# （图片、来源状态、降级 manifest）。仅当状态为 "fallback" 时才有 manifest，
+# 降级提示可直接复用它，无需再读一次缓存。
+CalendarImageResult = tuple[Path | str, str, dict[str, Any] | None]
 
 
 class ArkCalendarPlugin(Star):
@@ -47,7 +112,7 @@ class ArkCalendarPlugin(Star):
     async def initialize(self) -> None:
         await self.service.initialize()
         self._initialize_scheduler()
-        logger.info("罗德岛行动日历插件 v0.3.0 已初始化。")
+        logger.info(f"罗德岛行动日历插件 v{self.service.plugin_version} 已初始化。")
 
     async def terminate(self) -> None:
         if self.scheduler and self.scheduler.running:
@@ -55,12 +120,12 @@ class ArkCalendarPlugin(Star):
             logger.info("方舟日历定时任务调度器已关闭。")
         await self.service.close()
 
-    @filter.command("方舟日报帮助", alias={"方舟日历帮助", "明日方舟日报帮助"})
+    @filter.command(HELP_COMMAND.name, alias=HELP_COMMAND.alias_set)
     async def help_command(self, event: AstrMessageEvent):
         """查看方舟日报的指令、别称与配置说明。"""
         yield event.plain_result(self._help_text())
 
-    @filter.command("方舟日历", alias={"方舟日报", "明日方舟日历", "舟日历"})
+    @filter.command(CALENDAR_COMMAND.name, alias=CALENDAR_COMMAND.alias_set)
     async def calendar_command(self, event: AstrMessageEvent):
         """生成明日方舟活动、寻访、生日和今日信息长图。"""
         cached = self._current_cached_image()
@@ -78,9 +143,9 @@ class ArkCalendarPlugin(Star):
             quality_notice = self._data_quality_notice()
             if quality_notice:
                 yield event.plain_result(quality_notice)
-            image, image_state = await self._calendar_image(snapshot)
+            image, image_state, fallback_manifest = await self._calendar_image(snapshot)
             if image_state == "fallback":
-                yield event.plain_result(self._fallback_notice())
+                yield event.plain_result(self._fallback_notice(fallback_manifest))
             yield event.image_result(str(image))
             await self._observe_health(snapshot, "手动日历")
         except Exception:
@@ -91,7 +156,7 @@ class ArkCalendarPlugin(Star):
             )
             yield event.plain_result(self.messages.text("render_failed"))
 
-    @filter.command("方舟生日", alias={"方舟生日查询", "明日方舟生日", "舟生日"})
+    @filter.command(BIRTHDAY_COMMAND.name, alias=BIRTHDAY_COMMAND.alias_set)
     async def birthday_command(self, event: AstrMessageEvent, operator_name: str = ""):
         """查询指定干员的生日，例如：/方舟生日 卡缇。"""
         if not operator_name.strip():
@@ -131,7 +196,7 @@ class ArkCalendarPlugin(Star):
             logger.error("查询干员生日失败。", exc_info=True)
             yield event.plain_result(self.messages.text("birthday_lookup_failed"))
 
-    @filter.command("方舟日历状态", alias={"方舟状态", "明日方舟日历状态"})
+    @filter.command(STATUS_COMMAND.name, alias=STATUS_COMMAND.alias_set)
     async def status_command(self, event: AstrMessageEvent):
         """查看最近一次快照、数据源和最终图片缓存状态。"""
         try:
@@ -144,7 +209,7 @@ class ArkCalendarPlugin(Star):
             yield event.plain_result(self.messages.text("status_failed"))
 
     @filter.permission_type(filter.PermissionType.ADMIN)
-    @filter.command("方舟日历刷新", alias={"方舟日历更新", "方舟日报刷新"})
+    @filter.command(REFRESH_COMMAND.name, alias=REFRESH_COMMAND.alias_set)
     async def refresh_command(self, event: AstrMessageEvent):
         """管理员强制刷新数据并重新生成日历。"""
         yield event.plain_result(self.messages.text("force_refresh_started"))
@@ -153,9 +218,9 @@ class ArkCalendarPlugin(Star):
             quality_notice = self._data_quality_notice()
             if quality_notice:
                 yield event.plain_result(quality_notice)
-            image, image_state = await self._calendar_image(snapshot)
+            image, image_state, fallback_manifest = await self._calendar_image(snapshot)
             if image_state == "fallback":
-                yield event.plain_result(self._fallback_notice())
+                yield event.plain_result(self._fallback_notice(fallback_manifest))
             yield event.image_result(str(image))
             await self._observe_health(snapshot, "管理员强制刷新")
         except Exception:
@@ -167,7 +232,7 @@ class ArkCalendarPlugin(Star):
             yield event.plain_result(self.messages.text("render_failed"))
 
     @filter.permission_type(filter.PermissionType.ADMIN)
-    @filter.command("方舟历史日程测试", alias={"方舟回溯测试", "方舟日历历史测试"})
+    @filter.command(HISTORICAL_COMMAND.name, alias=HISTORICAL_COMMAND.alias_set)
     async def historical_schedule_command(
         self,
         event: AstrMessageEvent,
@@ -209,30 +274,20 @@ class ArkCalendarPlugin(Star):
             datetime.combine(end_day, datetime.max.time(), CN_TZ),
         )
 
-    def _help_text(self) -> str:
-        return (
-            "罗德岛行动日历 · 使用说明\n\n"
-            "【普通指令】\n"
-            "/方舟日历（别名：/方舟日报、/明日方舟日历、/舟日历）\n"
-            "生成活动、寻访、生日和今日作战信息长图；命中图片缓存时会直接发送。\n\n"
-            "/方舟生日 <干员名称>（别名：/方舟生日查询、/明日方舟生日、/舟生日）\n"
-            "以文字查询干员生日，例如：/方舟生日 卡缇。\n\n"
-            "/方舟日历状态（别名：/方舟状态、/明日方舟日历状态）\n"
-            "查看最近快照、数据源、降级状态和最终图片缓存。\n\n"
-            "/方舟日报帮助（别名：/方舟日历帮助、/明日方舟日报帮助）\n"
-            "查看本帮助。\n\n"
-            "【管理员指令】\n"
-            "/方舟日历刷新（别名：/方舟日历更新、/方舟日报刷新）\n"
-            "强制刷新数据源并重新生成日历图片。\n\n"
-            "/方舟历史日程测试 <开始日期> <结束日期>\n"
-            "生成仅含活动与寻访时间轴的历史测试图片，例如：/方舟历史日程测试 2026-07-01 2026-07-31。\n\n"
-            "【自动日报】\n"
-            "请在插件配置的“自动方舟日报”中启用任务，填写星期、发送时间和目标 SID。\n\n"
+    @staticmethod
+    def _help_text() -> str:
+        """由命令定义生成帮助文本，使别名只需在一处维护。"""
+        sections = [
+            "罗德岛行动日历 · 使用说明",
+            "【普通指令】\n" + "\n\n".join(spec.help_entry() for spec in USER_COMMANDS),
+            "【管理员指令】\n" + "\n\n".join(spec.help_entry() for spec in ADMIN_COMMANDS),
+            "【自动日报】\n请在插件配置的“自动方舟日报”中启用任务，填写星期、发送时间和目标 SID。",
             "【自动生日祝贺】\n"
             "可单独设置每日发送时间和目标 SID；当天没有干员生日时不会发送。\n"
-            "目标 SID 和管理员 SID 可在对应会话发送 /sid 获取。\n\n"
-            "博士如果只想查看帮助，发送 /方舟日报帮助 就可以了喵～"
-        )
+            "目标 SID 和管理员 SID 可在对应会话发送 /sid 获取。",
+            f"博士如果只想查看帮助，发送 /{HELP_COMMAND.name} 就可以了喵～",
+        ]
+        return "\n\n".join(sections)
 
     def _display_config(self) -> dict[str, Any]:
         return {
@@ -291,14 +346,14 @@ class ArkCalendarPlugin(Star):
             return None
         return self.render_cache.lookup(self.service.last_snapshot, self._display_config())
 
-    async def _calendar_image(self, snapshot) -> tuple[Path | str, str]:
+    async def _calendar_image(self, snapshot) -> CalendarImageResult:
         display_config = self._display_config()
         if not self._cache_enabled():
             return await self._render_calendar_image(snapshot, display_config)
         cached = self.render_cache.lookup(snapshot, display_config)
         if cached:
             logger.info("最终日历图片缓存命中。")
-            return cached, "cache"
+            return cached, "cache", None
         signature = self.render_cache.signature(snapshot, display_config)
         lock = await self._retain_render_lock(signature)
         try:
@@ -306,7 +361,7 @@ class ArkCalendarPlugin(Star):
                 cached = self.render_cache.lookup(snapshot, display_config)
                 if cached:
                     logger.info("最终日历图片缓存由并发请求生成。")
-                    return cached, "cache"
+                    return cached, "cache", None
                 return await self._render_calendar_image(snapshot, display_config)
         finally:
             await self._release_render_lock(signature, lock)
@@ -328,7 +383,7 @@ class ArkCalendarPlugin(Star):
             else:
                 self._render_locks[signature] = (lock, references - 1)
 
-    async def _render_calendar_image(self, snapshot, display_config: dict[str, Any]) -> tuple[Path | str, str]:
+    async def _render_calendar_image(self, snapshot, display_config: dict[str, Any]) -> CalendarImageResult:
         started = time.monotonic()
         logger.info("最终日历图片缓存未命中，开始调用渲染器。")
         try:
@@ -340,7 +395,7 @@ class ArkCalendarPlugin(Star):
             else:
                 logger.info(f"方舟日历渲染完成，耗时 {elapsed:.2f} 秒。")
             if not self._cache_enabled():
-                return rendered, "rendered"
+                return rendered, "rendered", None
             cached = self.render_cache.store(
                 rendered,
                 snapshot,
@@ -349,18 +404,18 @@ class ArkCalendarPlugin(Star):
                 self._cache_keep_count(),
             )
             logger.info(f"最终日历图片已保存至插件缓存：{cached}")
-            return cached, "rendered"
+            return cached, "rendered", None
         except Exception:
             fallback = self.render_cache.fallback(self._fallback_max_age_hours()) if self._cache_enabled() else None
             if fallback:
                 image, manifest = fallback
                 logger.warning(f"日历渲染失败，已回退到缓存图片（快照时间：{manifest.get('snapshot_generated_at', '未知')}）。")
-                return image, "fallback"
+                return image, "fallback", manifest
             raise
 
-    def _fallback_notice(self) -> str:
-        cached = self.render_cache.fallback(self._fallback_max_age_hours())
-        time_text = cached[1].get("snapshot_generated_at", "未知") if cached else "未知"
+    def _fallback_notice(self, manifest: dict[str, Any] | None) -> str:
+        """依据实际发出图片的 manifest 生成降级提示。"""
+        time_text = str((manifest or {}).get("snapshot_generated_at", "") or "未知")
         return f"{self.messages.text('cached_fallback_notice')}\n缓存数据时间：{time_text}"
 
     def _data_quality_notice(self) -> str:
@@ -513,7 +568,7 @@ class ArkCalendarPlugin(Star):
             logger.info(f"定时方舟日报开始：目标 {len(targets)} 个会话，强制刷新={refresh}。")
             try:
                 snapshot = await self.service.snapshot(force=refresh)
-                image, image_state = await self._calendar_image(snapshot)
+                image, image_state, _ = await self._calendar_image(snapshot)
                 caption = self.messages.text("scheduled_report_caption")
                 quality_notice = self._data_quality_notice()
                 if quality_notice:

@@ -46,7 +46,7 @@ class CalendarRenderer:
         return await self._html_render(self.template, data, options={"type": "png", "full_page": True, "animations": "disabled", "scale": "css", "timeout": self._render_timeout_ms()})
 
     async def historical_calendar(self, snapshot: CalendarSnapshot) -> str:
-        """Render a historical snapshot with the same timeline/image preparation as the main calendar."""
+        """按与主日历相同的时间轴与图片准备流程渲染历史快照。"""
         start, end = parse_iso(snapshot.timeline_start), parse_iso(snapshot.timeline_end)
         now = parse_iso(snapshot.generated_at)
         events = [self._timeline(item, start, end, now) for item in snapshot.events]

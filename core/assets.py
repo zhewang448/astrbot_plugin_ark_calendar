@@ -18,11 +18,11 @@ import aiohttp
 
 
 class UnsafeAssetUrl(ValueError):
-    """Raised when an asset URL could reach an unsafe network address."""
+    """当图片地址可能指向不安全的网络地址时抛出。"""
 
 
 class AssetTooLarge(ValueError):
-    """Raised when an asset exceeds the configured download limit."""
+    """当图片超过配置的下载体积上限时抛出。"""
 
 
 class AssetCache:
@@ -248,9 +248,9 @@ class AssetCache:
             raise UnsafeAssetUrl("图片地址不能解析到私网、回环或保留地址")
 
     def _validate_response_peer(self, response: Any) -> None:
-        """Defence in depth for direct requests after the TCP connection is made."""
+        """直连请求建立 TCP 连接后的纵深防御校验。"""
         if self.proxy:
-            # A configured proxy resolves the target itself and is an explicit trust boundary.
+            # 配置了代理时由代理自行解析目标地址，这是一条显式的信任边界。
             return
         connection = getattr(response, "connection", None)
         transport = getattr(connection, "transport", None)
