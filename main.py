@@ -35,7 +35,7 @@ class ArkCalendarPlugin(Star):
         self.data_dir = Path(get_astrbot_plugin_data_path()) / "astrbot_plugin_ark_calendar"
         self.service = CalendarService(self.plugin_dir, self.data_dir, config, logger)
         self.renderer = CalendarRenderer(self, self.service)
-        self.messages = MessageCatalog(config)
+        self.messages = MessageCatalog(config, logger)
         self.render_cache = CalendarImageCache(self.data_dir / "render")
         self.scheduler: AsyncIOScheduler | None = None
         self._scheduled_report_lock = asyncio.Lock()
@@ -66,12 +66,18 @@ class ArkCalendarPlugin(Star):
         cached = self._current_cached_image()
         if cached:
             logger.info("手动方舟日历命令命中最终图片缓存。")
+            quality_notice = self._data_quality_notice()
+            if quality_notice:
+                yield event.plain_result(quality_notice)
             yield event.image_result(str(cached))
             return
         if self._send_rendering_notice():
             yield event.plain_result(self.messages.text("rendering_started"))
         try:
             snapshot = await self.service.snapshot()
+            quality_notice = self._data_quality_notice()
+            if quality_notice:
+                yield event.plain_result(quality_notice)
             image, image_state = await self._calendar_image(snapshot)
             if image_state == "fallback":
                 yield event.plain_result(self._fallback_notice())
@@ -144,8 +150,11 @@ class ArkCalendarPlugin(Star):
         yield event.plain_result(self.messages.text("force_refresh_started"))
         try:
             snapshot = await self.service.snapshot(force=True)
+            quality_notice = self._data_quality_notice()
+            if quality_notice:
+                yield event.plain_result(quality_notice)
             image, image_state = await self._calendar_image(snapshot)
-            if image_state == "fallback" or self.service.last_refresh_used_cache:
+            if image_state == "fallback":
                 yield event.plain_result(self._fallback_notice())
             yield event.image_result(str(image))
             await self._observe_health(snapshot, "管理员强制刷新")
@@ -318,6 +327,17 @@ class ArkCalendarPlugin(Star):
         time_text = cached[1].get("snapshot_generated_at", "未知") if cached else "未知"
         return f"{self.messages.text('cached_fallback_notice')}\n缓存数据时间：{time_text}"
 
+    def _data_quality_notice(self) -> str:
+        quality = self.service.last_refresh_quality
+        if quality == "fresh":
+            return ""
+        details = {
+            "degraded": "部分数据源使用了缓存或辅助信息暂时缺失。",
+            "fallback": "关键数据源不可用，当前使用最近一次完整快照。",
+            "failed": "关键数据源不可用，当前内容可能不完整。",
+        }.get(quality, "部分数据可能不是最新。")
+        return self.messages.text("data_degraded_notice", details=details)
+
     def _birthday_details(self, profession: str, rarity: int | None) -> str:
         details: list[str] = []
         if profession:
@@ -334,12 +354,20 @@ class ArkCalendarPlugin(Star):
     def _format_status(self, snapshot) -> str:
         cache_status = self.render_cache.status(snapshot, self._display_config()) if self._cache_enabled() else {"state": "disabled"}
         lines = ["罗德岛行动日历状态", f"快照时间：{snapshot.generated_at}"]
+        quality = self.service.last_refresh_quality
+        quality_text = {
+            "fresh": "正常",
+            "degraded": "部分数据源降级",
+            "fallback": "已使用最近一次完整快照",
+            "failed": "失败",
+        }.get(quality, quality)
         if self.service.last_refresh_error:
-            lines.append(f"最近刷新：降级使用缓存（{self.service.last_refresh_error}）")
-        else:
-            lines.append("最近刷新：正常")
-        for state in snapshot.source_states:
-            status = "正常" if state.ok else "降级"
+            quality_text += f"（{self.service.last_refresh_error}）"
+        lines.append(f"最近刷新：{quality_text}")
+        source_labels = {"fresh": "正常", "fallback": "缓存降级", "failed": "不可用"}
+        source_states = self.service.last_refresh_source_states or snapshot.source_states
+        for state in source_states:
+            status = source_labels.get(state.status, "正常" if state.ok else "降级")
             detail = f" {state.message}" if state.message else ""
             data_time = f"（数据时间：{state.updated_at}）" if state.updated_at else ""
             lines.append(f"{state.name}：{status}{data_time}{detail}")
@@ -451,6 +479,9 @@ class ArkCalendarPlugin(Star):
                 snapshot = await self.service.snapshot(force=refresh)
                 image, image_state = await self._calendar_image(snapshot)
                 caption = self.messages.text("scheduled_report_caption")
+                quality_notice = self._data_quality_notice()
+                if quality_notice:
+                    caption = f"{caption}\n{quality_notice}"
                 sent, failed = await self._send_scheduled_image(targets, image, caption)
                 logger.info(f"定时方舟日报完成：成功 {sent}/{len(targets)}，图片来源={image_state}。")
                 if failed:
@@ -497,6 +528,9 @@ class ArkCalendarPlugin(Star):
                     names=names,
                     count=len(birthdays),
                 )
+                quality_notice = self._data_quality_notice()
+                if quality_notice:
+                    text = f"{quality_notice}\n{text}"
                 sent, failed = await self._send_scheduled_text(pending_targets, text)
                 self._record_birthday_greeting_targets(sent, date_key)
                 logger.info(
@@ -581,37 +615,55 @@ class ArkCalendarPlugin(Star):
             last_sent = stored.get("last_sent", {}) if isinstance(stored.get("last_sent", {}), dict) else {}
             now = datetime.now(CN_TZ)
             cooldown = max(1, int(self._value("admin_notification", "cooldown_minutes", 60)))
-            to_alert: list[str] = []
-            for name, message in current.items():
-                sent_at = self._parse_time(str(last_sent.get(name, "")))
+            alert_keys: list[str] = []
+            alert_lines: list[str] = []
+            for event_key, item in current.items():
+                sent_at = self._parse_time(str(last_sent.get(event_key, "")))
                 expired = sent_at is None or (now - sent_at).total_seconds() >= cooldown * 60
-                if active.get(name) != message or expired:
-                    to_alert.append(f"- {name}：{message}")
-                    last_sent[name] = now.isoformat()
-            recovered = [name for name in active if name not in current]
-            if to_alert:
-                await self._send_admin_text(
+                if event_key not in active or expired:
+                    alert_keys.append(event_key)
+                    alert_lines.append(f"- {item['name']}：{item['message']}")
+            recovered_keys = [event_key for event_key in active if event_key not in current]
+            if alert_lines:
+                succeeded, _ = await self._send_admin_text(
                     "【方舟日历异常告警】\n"
                     f"触发来源：{origin}\n"
                     f"时间：{now.strftime('%Y-%m-%d %H:%M')}\n"
-                    + "\n".join(to_alert)
+                    + "\n".join(alert_lines)
                 )
-            if recovered and bool(self._value("admin_notification", "notify_on_recovery", True)):
+                if succeeded:
+                    for event_key in alert_keys:
+                        last_sent[event_key] = now.isoformat()
+            if recovered_keys and bool(self._value("admin_notification", "notify_on_recovery", True)):
+                recovered_names = []
+                for event_key in recovered_keys:
+                    previous = active.get(event_key, {})
+                    recovered_names.append(
+                        str(previous.get("name", event_key)) if isinstance(previous, dict) else str(event_key)
+                    )
                 await self._send_admin_text(
                     "【方舟日历恢复通知】\n"
                     f"触发来源：{origin}\n"
-                    f"已恢复：{', '.join(recovered)}"
+                    f"已恢复：{', '.join(recovered_names)}"
                 )
             self.service.cache.save("notification_state.json", {"active": current, "last_sent": last_sent})
 
-    def _abnormal_states(self, snapshot) -> dict[str, str]:
-        abnormal = {
-            state.name: state.message or "数据源状态异常"
-            for state in snapshot.source_states
-            if not state.ok
-        }
-        if self.service.last_refresh_error:
-            abnormal["方舟日历刷新"] = self.service.last_refresh_error
+    def _abnormal_states(self, snapshot) -> dict[str, dict[str, str]]:
+        abnormal: dict[str, dict[str, str]] = {}
+        source_states = self.service.last_refresh_source_states or snapshot.source_states
+        for state in source_states:
+            if state.ok:
+                continue
+            event_key = state.event_key or f"source:{state.name}:unavailable"
+            abnormal[event_key] = {
+                "name": state.name,
+                "message": state.message or "数据源状态异常",
+            }
+        if self.service.last_refresh_error and self.service.last_refresh_quality in {"failed", "fallback"}:
+            abnormal["calendar_refresh:failed"] = {
+                "name": "方舟日历刷新",
+                "message": self.service.last_refresh_error,
+            }
         return abnormal
 
     async def _notify_admin(self, text: str, event: str) -> None:
@@ -620,13 +672,21 @@ class ArkCalendarPlugin(Star):
         logger.warning(f"方舟日历管理员通知：{event}")
         await self._send_admin_text(text)
 
-    async def _send_admin_text(self, text: str) -> None:
-        for sid in self._admin_sids():
+    async def _send_admin_text(
+        self,
+        text: str,
+        targets: list[str] | None = None,
+    ) -> tuple[list[str], list[str]]:
+        succeeded: list[str] = []
+        failed: list[str] = []
+        for sid in targets or self._admin_sids():
             try:
                 await self.context.send_message(sid, MessageChain([Comp.Plain(text=text)]))
+                succeeded.append(sid)
             except Exception:
+                failed.append(sid)
                 logger.error(f"向方舟日历管理员 SID {sid} 发送通知失败。", exc_info=True)
-
+        return succeeded, failed
     def _notifications_enabled(self) -> bool:
         return bool(self._value("admin_notification", "enabled", False)) and bool(self._admin_sids())
 

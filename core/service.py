@@ -26,8 +26,14 @@ CN_TZ = ZoneInfo("Asia/Shanghai")
 
 
 class CalendarService:
-    SNAPSHOT_SCHEMA_VERSION = 3
+    SNAPSHOT_SCHEMA_VERSION = 4
     SOURCE_CACHE_SCHEMA_VERSION = 1
+    CRITICAL_SOURCE_NAMES = frozenset({
+        "anything-ics / 生日",
+        "anything-ics / 活动",
+        "PRTS / 首页",
+        "ArknightsGachaData",
+    })
     SOURCE_CACHE_KIND = "ark_calendar_source_cache"
     MIN_TIMELINE_DAYS = 7
     MAX_TIMELINE_DAYS = 90
@@ -51,8 +57,11 @@ class CalendarService:
         self._birthdays: list[dict] = []
         self._operator_index: dict[str, dict] = {}
         self.last_snapshot: CalendarSnapshot | None = None
+        self.last_known_good_snapshot: CalendarSnapshot | None = None
         self.last_refresh_error = ""
+        self.last_refresh_quality = "failed"
         self.last_refresh_used_cache = False
+        self.last_refresh_source_states: list[SourceState] = []
         self.last_refresh_finished_at = ""
 
     async def initialize(self) -> None:
@@ -93,6 +102,19 @@ class CalendarService:
                 self.last_snapshot = CalendarSnapshot.from_dict(cached)
             except Exception:
                 self.logger.warning("无法读取日历快照缓存。", exc_info=True)
+        known_good = self.cache.load("last_known_good_snapshot.json")
+        if isinstance(known_good, dict):
+            try:
+                self.last_known_good_snapshot = CalendarSnapshot.from_dict(known_good)
+            except Exception:
+                self.logger.warning("无法读取最近一次完整日历快照。", exc_info=True)
+        if self.last_known_good_snapshot is None and self.last_snapshot is not None:
+            if self._snapshot_refresh_quality(self.last_snapshot.source_states) == "fresh":
+                self.last_known_good_snapshot = self.last_snapshot
+        if self.last_snapshot is not None:
+            self.last_refresh_quality = self.last_snapshot.refresh_quality
+            self.last_refresh_used_cache = any(state.used_cache for state in self.last_snapshot.source_states)
+            self.last_refresh_source_states = list(self.last_snapshot.source_states)
 
     def _http_proxy(self) -> str:
         plugin_proxy = str(self.value("data_sources", "http_proxy", "", "http_proxy") or "").strip()
@@ -235,9 +257,28 @@ class CalendarService:
     def _valid_home(data: Any) -> bool:
         if not isinstance(data, dict):
             return False
-        supplies = data.get("supplies")
-        schedule = data.get("resource_schedule")
-        return isinstance(supplies, list) or (isinstance(schedule, list) and bool(schedule))
+        resource_schedule = data.get("resource_schedule")
+        chip_schedule = data.get("chip_schedule")
+        if not isinstance(resource_schedule, list) or not isinstance(chip_schedule, list):
+            return False
+
+        expected_resources = {"作战记录", "技巧概要", "龙门币", "采购凭证", "碳&家具零件"}
+        expected_chips = {"术师&狙击", "先锋&辅助", "医疗&重装", "近卫&特种"}
+
+        def valid_schedule(items: list[Any], expected: set[str], minimum: int) -> bool:
+            valid_names = {
+                str(item.get("name", ""))
+                for item in items
+                if isinstance(item, dict)
+                and isinstance(item.get("weekdays", []), list)
+                and isinstance(item.get("open"), bool)
+            }
+            return len(items) >= minimum and len(valid_names & expected) >= minimum
+
+        return (
+            valid_schedule(resource_schedule, expected_resources, 4)
+            and valid_schedule(chip_schedule, expected_chips, 4)
+        )
 
     @staticmethod
     def _valid_operator_index(data: Any) -> bool:
@@ -262,6 +303,33 @@ class CalendarService:
                 continue
         return valid > 0 and valid / len(data) >= 0.8
 
+    @classmethod
+    def _snapshot_refresh_quality(cls, states: list[SourceState]) -> str:
+        if all(state.ok for state in states):
+            return "fresh"
+        if any(
+            state.name in cls.CRITICAL_SOURCE_NAMES and state.status == "failed"
+            for state in states
+        ):
+            return "failed"
+        return "degraded"
+
+    @staticmethod
+    def _source_event_key(label: str, exc: Exception) -> str:
+        root: BaseException = exc
+        while root.__cause__ is not None:
+            root = root.__cause__
+        if isinstance(root, asyncio.TimeoutError):
+            reason = "timeout"
+        elif isinstance(root, aiohttp.ClientResponseError):
+            reason = f"http_{root.status}"
+        elif isinstance(exc, ValueError):
+            reason = "data_invalid"
+        else:
+            reason = re.sub(r"(?<!^)(?=[A-Z])", "_", type(root).__name__).lower()
+        stable_label = re.sub(r"[^0-9a-zA-Z一-龥]+", "_", label).strip("_")
+        return f"source:{stable_label}:{reason}"
+
     def snapshot_is_fresh(self) -> bool:
         return self._snapshot_is_fresh(self.cache_ttl())
 
@@ -278,21 +346,51 @@ class CalendarService:
             self.logger.info(f"开始{'强制刷新' if force else '刷新'}方舟日历数据。")
             try:
                 result = await self._build_snapshot()
-                self.last_snapshot = result
-                self.cache.save("snapshot.json", result.to_dict())
-                self.last_refresh_error = ""
-                self.last_refresh_used_cache = False
+                quality = self._snapshot_refresh_quality(result.source_states)
+                result.refresh_quality = quality
+                self.last_refresh_source_states = list(result.source_states)
+                self.last_refresh_quality = quality
+                self.last_refresh_used_cache = any(state.used_cache for state in result.source_states)
                 self.last_refresh_finished_at = self._now().isoformat()
-                self.logger.info(f"方舟日历数据刷新完成，耗时 {time.monotonic() - started:.2f} 秒。")
+
+                if quality == "failed" and self._can_use_snapshot(
+                    self.last_known_good_snapshot,
+                    self.snapshot_fallback_max_age(),
+                ):
+                    self.cache.save("snapshot-degraded.json", result.to_dict())
+                    self.last_refresh_error = "关键数据源不可用"
+                    self.last_refresh_quality = "fallback"
+                    self.last_refresh_used_cache = True
+                    self.last_snapshot = self.last_known_good_snapshot
+                    self.logger.warning("关键数据源不可用，已使用最近一次完整快照。")
+                    return self.last_known_good_snapshot  # type: ignore[return-value]
+
+                self.last_snapshot = result
+                if quality == "fresh":
+                    self.last_known_good_snapshot = result
+                    self.cache.save("snapshot.json", result.to_dict())
+                    self.cache.save("last_known_good_snapshot.json", result.to_dict())
+                    self.last_refresh_error = ""
+                else:
+                    self.cache.save("snapshot-degraded.json", result.to_dict())
+                    self.last_refresh_error = "关键数据源不可用" if quality == "failed" else ""
+                self.logger.info(
+                    f"方舟日历数据刷新完成（{quality}），耗时 {time.monotonic() - started:.2f} 秒。"
+                )
                 return result
             except Exception as exc:
                 self.last_refresh_error = self._short_error(exc)
-                self.last_refresh_used_cache = self.last_snapshot is not None
+                self.last_refresh_quality = "failed"
+                self.last_refresh_used_cache = False
+                self.last_refresh_source_states = []
                 self.last_refresh_finished_at = self._now().isoformat()
                 self.logger.error(f"方舟日历刷新失败：{self.last_refresh_error}", exc_info=True)
-                if self._can_use_snapshot(self.last_snapshot, self.snapshot_fallback_max_age()):
-                    self.logger.warning("方舟日历刷新失败，已在允许陈旧期限内使用上一次快照。")
-                    return self.last_snapshot  # type: ignore[return-value]
+                if self._can_use_snapshot(self.last_known_good_snapshot, self.snapshot_fallback_max_age()):
+                    self.last_refresh_quality = "fallback"
+                    self.last_refresh_used_cache = True
+                    self.last_snapshot = self.last_known_good_snapshot
+                    self.logger.warning("方舟日历刷新失败，已使用最近一次完整快照。")
+                    return self.last_known_good_snapshot  # type: ignore[return-value]
                 raise
 
     def _snapshot_is_fresh(self, ttl: timedelta) -> bool:
@@ -555,17 +653,38 @@ class CalendarService:
             pools = await self.gacha.pools(start, end, overview)
             self._save_source_cache("gacha_pools.json", [self._serialize_pool(item) for item in pools], now)
             states = [
-                SourceState(name=item["name"], ok=item["ok"], updated_at=now.isoformat(), message=item.get("message", ""))
+                SourceState(
+                    name=item["name"],
+                    ok=bool(item["ok"]),
+                    updated_at=now.isoformat(),
+                    message=str(item.get("message", "") or ""),
+                    event_key=str(item.get("event_key", "") or ""),
+                    status=str(item.get("status", "fresh" if item.get("ok") else "failed")),
+                )
                 for item in self.gacha.last_source_states
             ]
             return pools, states
         except Exception as exc:
             states = [
-                SourceState(name=item["name"], ok=item["ok"], updated_at=now.isoformat(), message=item.get("message", ""))
+                SourceState(
+                    name=item["name"],
+                    ok=bool(item["ok"]),
+                    updated_at=now.isoformat(),
+                    message=str(item.get("message", "") or ""),
+                    event_key=str(item.get("event_key", "") or ""),
+                    status=str(item.get("status", "fresh" if item.get("ok") else "failed")),
+                )
                 for item in self.gacha.last_source_states
             ]
             if not states:
-                states.append(SourceState("ArknightsGachaData", False, now.isoformat(), self._short_error(exc)))
+                states.append(SourceState(
+                    "ArknightsGachaData",
+                    False,
+                    now.isoformat(),
+                    self._short_error(exc),
+                    event_key=self._source_event_key("ArknightsGachaData", exc),
+                    status="failed",
+                ))
             cached, fetched_at = self._load_source_cache("gacha_pools.json")
             if isinstance(cached, list) and fetched_at and now - fetched_at <= timedelta(hours=24):
                 pools = []
@@ -584,6 +703,8 @@ class CalendarService:
                         if not state.ok:
                             state.updated_at = fetched_at.isoformat()
                             state.message = f"实时更新失败，已使用 {age} 前缓存：{state.message or self._short_error(exc)}"
+                            state.status = "fallback"
+                            state.used_cache = True
                     return pools, states
             raise
 
@@ -686,22 +807,39 @@ class CalendarService:
             if validator and not validator(data):
                 raise ValueError(f"{label} 返回的数据为空或格式异常")
             self._save_source_cache(cache_name, data, now)
-            return data, SourceState(label, True, now.isoformat(), "")
+            return data, SourceState(label, True, now.isoformat(), "", status="fresh")
         except Exception as exc:
             cached, fetched_at = self._load_source_cache(cache_name)
             message = self._short_error(exc)
+            event_key = self._source_event_key(label, exc)
             if cached is not None and fetched_at and (validator is None or validator(cached)):
                 age = now - fetched_at
                 if age <= max_stale:
                     return cached, SourceState(
-                        label, False, fetched_at.isoformat(),
+                        label,
+                        False,
+                        fetched_at.isoformat(),
                         f"实时更新失败，已使用 {self._cache_age_text(age)} 前缓存：{message}",
+                        event_key=event_key,
+                        status="fallback",
+                        used_cache=True,
                     )
                 return default, SourceState(
-                    label, False, fetched_at.isoformat(),
+                    label,
+                    False,
+                    fetched_at.isoformat(),
                     f"当前不可用，缓存已陈旧 {self._cache_age_text(age)}：{message}",
+                    event_key=event_key,
+                    status="failed",
                 )
-            return default, SourceState(label, False, "", f"当前不可用且无有效缓存：{message}")
+            return default, SourceState(
+                label,
+                False,
+                "",
+                f"当前不可用且无有效缓存：{message}",
+                event_key=event_key,
+                status="failed",
+            )
 
     def _now(self) -> datetime:
         return datetime.now(CN_TZ)

@@ -43,7 +43,7 @@ class CalendarRenderer:
             "hero": hero, "static": static,
             "show_footer": self.service.value("basic", "show_source_footer", True, "show_source_footer"),
         }
-        return await self._html_render(self.template, data, options={"type": "png", "full_page": True, "animations": "disabled", "scale": "css", "timeout": 30000})
+        return await self._html_render(self.template, data, options={"type": "png", "full_page": True, "animations": "disabled", "scale": "css", "timeout": self._render_timeout_ms()})
 
     async def historical_calendar(self, snapshot: CalendarSnapshot) -> str:
         """Render a historical snapshot with the same timeline/image preparation as the main calendar."""
@@ -63,7 +63,7 @@ class CalendarRenderer:
             "pool_count": len(pools),
             "static": await self._static_assets(),
         }
-        return await self._html_render(self.history_template, data, options={"type": "png", "full_page": True, "animations": "disabled", "scale": "css", "timeout": 30000})
+        return await self._html_render(self.history_template, data, options={"type": "png", "full_page": True, "animations": "disabled", "scale": "css", "timeout": self._render_timeout_ms()})
 
     @staticmethod
     def _ticks(start: datetime, now: datetime, timeline_days: int) -> list[dict]:
@@ -93,6 +93,13 @@ class CalendarRenderer:
             }
             for offset in sorted(offsets)
         ]
+
+    def _render_timeout_ms(self) -> int:
+        try:
+            seconds = int(self.service.value("cache_and_render", "render_timeout_seconds", 30))
+        except (AttributeError, TypeError, ValueError):
+            seconds = 30
+        return min(300, max(5, seconds)) * 1000
 
     async def _html_render(self, template: str, data: dict, options: dict) -> str:
         return await self.plugin.html_render(template, data, return_url=False, options=options)

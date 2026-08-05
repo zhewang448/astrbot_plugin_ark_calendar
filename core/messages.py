@@ -12,6 +12,7 @@ PROFILES: dict[str, dict[str, str]] = {
         "force_refresh_started": "收到，正在重新核对活动、寻访和作战信息，新的行动日历很快送达喵～",
         "scheduled_report_caption": "博士，今日罗德岛行动日历送达，请查收喵～",
         "cached_fallback_notice": "数据源暂时有些忙，本次先为博士送上最近一次保存的行动日历喵。",
+        "data_degraded_notice": "部分数据暂时没有完成实时更新，请博士留意喵。{details}",
         "render_failed": "唔……日历终端这次没能完成绘制，已经记录问题并通知管理员。请博士稍后再试喵。",
         "birthday_missing_query": "请输入干员名称，例如：/方舟生日 卡缇",
         "birthday_found": "博士，干员「{name}」的生日是 {birthday}喵。{details}",
@@ -26,6 +27,7 @@ PROFILES: dict[str, dict[str, str]] = {
         "force_refresh_started": "正在强制刷新方舟日历数据并重新生成图片，请稍候……",
         "scheduled_report_caption": "今日罗德岛行动日历，请查收。",
         "cached_fallback_notice": "数据源刷新失败，本次已发送最近一次保存的日历图片。",
+        "data_degraded_notice": "部分数据未完成实时更新。{details}",
         "render_failed": "方舟日历生成失败，已记录问题并通知管理员，请稍后重试。",
         "birthday_missing_query": "请输入干员名称，例如：/方舟生日 卡缇",
         "birthday_found": "干员「{name}」的生日是 {birthday}。{details}",
@@ -39,20 +41,27 @@ PROFILES: dict[str, dict[str, str]] = {
 
 
 class MessageCatalog:
-    def __init__(self, config: Any):
+    def __init__(self, config: Any, logger: Any | None = None):
         section = config_section(config, "messages")
         profile = str(section.get("profile", "rhodes_catgirl") or "rhodes_catgirl")
         self.profile = profile if profile in {*PROFILES, "custom"} else "rhodes_catgirl"
         raw_custom = section.get("custom_messages", {})
         self.custom_messages = raw_custom if isinstance(raw_custom, dict) else {}
+        self.logger = logger
 
     def text(self, key: str, **values: Any) -> str:
         default_profile = "plain" if self.profile == "plain" else "rhodes_catgirl"
-        template = PROFILES[default_profile].get(key, "")
+        default_template = PROFILES[default_profile].get(key, "")
+        template = default_template
         custom = str(self.custom_messages.get(key, "") or "").strip()
         if self.profile == "custom" and custom:
             template = custom
         try:
             return template.format_map(defaultdict(str, values))
-        except (AttributeError, IndexError, KeyError, TypeError, ValueError):
-            return template
+        except (AttributeError, IndexError, KeyError, TypeError, ValueError) as exc:
+            if self.logger:
+                self.logger.warning(f"自定义消息模板格式错误，已回退内置文案：{key}（{type(exc).__name__}）")
+            try:
+                return default_template.format_map(defaultdict(str, values))
+            except (AttributeError, IndexError, KeyError, TypeError, ValueError):
+                return default_template

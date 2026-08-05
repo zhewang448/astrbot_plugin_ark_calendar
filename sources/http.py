@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import random
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 import aiohttp
 
@@ -54,7 +55,7 @@ class HttpClient:
                     )
             except aiohttp.ClientResponseError as exc:
                 if exc.status not in self.RETRY_STATUSES:
-                    raise
+                    raise self._request_error(url, exc) from exc
                 error = exc
             except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
                 error = exc
@@ -62,6 +63,28 @@ class HttpClient:
                 delay = retry_after if retry_after is not None else min(8.0, 0.6 * (2 ** attempt))
                 await asyncio.sleep(delay + random.uniform(0.0, 0.25))
         assert error is not None
-        raise RuntimeError(
-            f"请求失败：{url}（{type(error).__name__}: {error}）"
-        ) from error
+        raise self._request_error(url, error) from error
+
+    @classmethod
+    def _request_error(cls, url: str, error: Exception) -> RuntimeError:
+        if isinstance(error, aiohttp.ClientResponseError):
+            detail = f"HTTP {error.status}"
+        elif isinstance(error, asyncio.TimeoutError):
+            detail = "TimeoutError"
+        else:
+            detail = type(error).__name__
+        return RuntimeError(f"请求失败：{cls._redacted_url(url)}（{detail}）")
+
+    @staticmethod
+    def _redacted_url(url: str) -> str:
+        try:
+            parsed = urlsplit(url)
+            host = parsed.hostname or ""
+            if ":" in host and not host.startswith("["):
+                host = f"[{host}]"
+            netloc = host
+            if parsed.port:
+                netloc += f":{parsed.port}"
+            return urlunsplit((parsed.scheme, netloc, parsed.path, "", ""))
+        except (TypeError, ValueError):
+            return "<invalid-url>"

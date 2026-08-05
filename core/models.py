@@ -11,6 +11,9 @@ class SourceState:
     ok: bool = True
     updated_at: str = ""
     message: str = ""
+    event_key: str = ""
+    status: str = "fresh"
+    used_cache: bool = False
 
 
 @dataclass(slots=True)
@@ -76,6 +79,7 @@ class CalendarSnapshot:
     source_states: list[SourceState] = field(default_factory=list)
     schema_version: int = 1
     data_config_hash: str = ""
+    refresh_quality: str = "fresh"
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -97,6 +101,7 @@ class CalendarSnapshot:
             source_states=[SourceState(**x) for x in data.get("source_states", [])],
             schema_version=int(data.get("schema_version", 1) or 1),
             data_config_hash=str(data.get("data_config_hash", "") or ""),
+            refresh_quality=str(data.get("refresh_quality", "fresh") or "fresh"),
         )
 
 

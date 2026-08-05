@@ -31,21 +31,42 @@ class GachaSource:
             self.http.json(self.CHARACTER_URL),
             return_exceptions=True,
         )
-        self.last_source_states = [
-            {
-                "name": label,
-                "ok": not isinstance(value, Exception),
-                "message": "" if not isinstance(value, Exception) else str(value),
-            }
-            for label, value in zip(labels, results)
-        ]
-        pool_info, server_data, character_table = results
-        if isinstance(pool_info, Exception):
-            raise pool_info
-        if not isinstance(pool_info, dict):
-            raise ValueError("ArknightsGachaData 返回格式不正确")
-        server_data = server_data if isinstance(server_data, dict) else {}
-        character_table = character_table if isinstance(character_table, dict) else {}
+        validators = (
+            self._valid_pool_info,
+            self._valid_server_data,
+            self._valid_character_table,
+        )
+        normalized: list[dict] = []
+        self.last_source_states = []
+        for label, value, validator in zip(labels, results, validators):
+            error: Exception | None = value if isinstance(value, Exception) else None
+            if error is None and not validator(value):
+                error = ValueError(f"{label} 返回的数据结构异常")
+            if error is not None:
+                normalized.append({})
+                self.last_source_states.append({
+                    "name": label,
+                    "ok": False,
+                    "message": str(error),
+                    "event_key": self._event_key(label, error),
+                    "status": "failed",
+                })
+            else:
+                normalized.append(value)
+                self.last_source_states.append({
+                    "name": label,
+                    "ok": True,
+                    "message": "",
+                    "event_key": "",
+                    "status": "fresh",
+                })
+
+        pool_info, server_data, character_table = normalized
+        if not self.last_source_states[0]["ok"]:
+            original = results[0]
+            if isinstance(original, Exception):
+                raise original
+            raise ValueError("ArknightsGachaData 返回的数据结构异常")
 
         clients = server_data.get("gachaPoolClient", [])
         server_map = {
@@ -54,7 +75,7 @@ class GachaSource:
             if isinstance(item, dict) and item.get("gachaPoolId")
         }
         result: list[dict] = []
-        for pool in pool_info.get("pool", {}).values():
+        for pool in pool_info["pool"].values():
             if not isinstance(pool, dict) or "start" not in pool or "end" not in pool:
                 continue
             try:
@@ -84,6 +105,47 @@ class GachaSource:
                 "image": match.get("image", "") if match else "",
             })
         return sorted(result, key=lambda item: (item["start"], item["end"]))
+
+    @staticmethod
+    def _valid_pool_info(data: object) -> bool:
+        if not isinstance(data, dict) or not isinstance(data.get("pool"), dict) or not data["pool"]:
+            return False
+        pools = list(data["pool"].values())
+        valid = sum(
+            1 for item in pools
+            if isinstance(item, dict)
+            and isinstance(item.get("id"), str)
+            and bool(item.get("id"))
+            and isinstance(item.get("start"), (int, float))
+            and isinstance(item.get("end"), (int, float))
+            and item["end"] >= item["start"]
+        )
+        return valid > 0 and valid / len(pools) >= 0.8
+
+    @staticmethod
+    def _valid_server_data(data: object) -> bool:
+        if not isinstance(data, dict):
+            return False
+        clients = data.get("gachaPoolClient")
+        return isinstance(clients, list) and bool(clients) and any(
+            isinstance(item, dict) and item.get("gachaPoolId") for item in clients
+        )
+
+    @staticmethod
+    def _valid_character_table(data: object) -> bool:
+        if not isinstance(data, dict) or len(data) < 100:
+            return False
+        valid = sum(
+            1 for item in data.values()
+            if isinstance(item, dict) and isinstance(item.get("name"), str) and item["name"].strip()
+        )
+        return valid >= 100 and valid / len(data) >= 0.8
+
+    @staticmethod
+    def _event_key(label: str, error: Exception) -> str:
+        reason = "data_invalid" if isinstance(error, ValueError) else type(error).__name__.lower()
+        stable_label = re.sub(r"[^0-9a-zA-Z一-龥]+", "_", label).strip("_")
+        return f"source:{stable_label}:{reason}"
 
     @classmethod
     def _match_overview(

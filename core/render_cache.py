@@ -60,8 +60,10 @@ class CalendarImageCache:
         image = self._image_path(manifest)
         if not image:
             return None
+        current = now or datetime.now(CN_TZ)
+        if str(manifest.get("calendar_date", "")) != current.date().isoformat():
+            return None
         if max_age_hours is not None:
-            current = now or datetime.now(CN_TZ)
             try:
                 rendered_at = parse_iso(str(manifest.get("rendered_at") or manifest.get("snapshot_generated_at", ""))).astimezone(CN_TZ)
             except (TypeError, ValueError):

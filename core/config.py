@@ -10,10 +10,12 @@ LEGACY_BUILTIN_MESSAGE_PREVIEW_HASHES = {
     "rhodes_catgirl_preview": {
         "624f6711c302857e3641bd098747396bbfc4288f6c56954a6fc3610a5fc17dd9",
         "7dbc988370b6d56da79c8be8abff922b6e0b4a0ee362f8e999f23b00ab45645b",
+        "c5890db25a8d1797fef3bd0374d35d4cce2990639e5c17da4d4d71225a2631ac",
     },
     "plain_preview": {
         "cb1348392800d5225faa50e1d7ec9ae136b68feeca5ce805c92eee015654e24e",
         "58077e08119720fde37fec27fa7b13910f2c0bec575bdbc34c334e18357e16a1",
+        "42a5d8edb220b5bbfdad1d54217d6c465e8b7cbd4ad26c8f4a319279328d5f1e",
     },
 }
 
