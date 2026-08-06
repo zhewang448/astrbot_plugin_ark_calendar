@@ -15,6 +15,7 @@ from astrbot.api.event import AstrMessageEvent, MessageChain, filter
 from astrbot.api.star import Context, Star
 from astrbot.core.utils.astrbot_path import get_astrbot_plugin_data_path
 
+from .core.command_args import split_name_and_time, strip_command_prefix
 from .core.config import config_int, config_strings, config_value, sync_builtin_message_previews
 from .core.messages import MessageCatalog
 from .core.models import parse_iso
@@ -39,6 +40,11 @@ class CommandSpec:
     @property
     def alias_set(self) -> set[str]:
         return set(self.aliases)
+
+    @property
+    def invocations(self) -> tuple[str, ...]:
+        """命令名与全部别名，用于从消息原文里剥掉触发词。"""
+        return (self.name, *self.aliases)
 
     def help_entry(self) -> str:
         invocation = f"/{self.name}"
@@ -277,6 +283,19 @@ class ArkCalendarPlugin(Star):
             logger.error("历史日程测试图片生成失败。", exc_info=True)
             yield event.plain_result(self.messages.text("historical_render_failed"))
 
+    @staticmethod
+    def _argument_text(event: AstrMessageEvent, spec: CommandSpec, *fallback: str) -> str:
+        """取命令后面的参数原文。
+
+        框架按空白切分位置参数，名称里带空格（如「危机合约 · 熔火行动」）会被切碎，
+        因此优先从消息原文里剥掉命令名自己解析；拿不到原文时退回拼接位置参数。
+        """
+        raw = getattr(event, "message_str", "") or ""
+        argument_text = strip_command_prefix(raw, spec.invocations)
+        if argument_text:
+            return argument_text
+        return " ".join(part for part in fallback if part).strip()
+
     @filter.command(SUBSCRIBE_COMMAND.name, alias=SUBSCRIBE_COMMAND.alias_set)
     async def subscribe_command(
         self,
@@ -285,21 +304,22 @@ class ArkCalendarPlugin(Star):
         remind_time: str = "",
     ):
         """订阅活动或卡池，在结束前一天提醒。"""
-        if not item_name.strip():
+        # 名称可能带空格，先从原文剥掉命令名再整段解析，末尾的 HH:MM 才当提醒时间。
+        argument_text = self._argument_text(event, SUBSCRIBE_COMMAND, item_name, remind_time)
+        name, parsed_time = split_name_and_time(argument_text)
+
+        if not name:
             yield event.plain_result("请输入要订阅的活动或卡池名称，例如：/方舟订阅 感谢庆典")
             return
 
-        time_to_use = remind_time.strip() if remind_time.strip() else "12:00"
-        if not self._validate_time_format(time_to_use):
-            yield event.plain_result(self.messages.text("subscription_invalid_time"))
-            return
+        time_to_use = parsed_time or "12:00"
 
         try:
             snapshot = await self.service.snapshot()
-            item = self._find_timeline_item(snapshot, item_name.strip())
+            item = self._find_timeline_item(snapshot, name)
             if not item:
                 yield event.plain_result(
-                    self.messages.text("subscription_item_not_found", name=item_name.strip())
+                    self.messages.text("subscription_item_not_found", name=name)
                 )
                 return
 
@@ -317,16 +337,18 @@ class ArkCalendarPlugin(Star):
     @filter.command(UNSUBSCRIBE_COMMAND.name, alias=UNSUBSCRIBE_COMMAND.alias_set)
     async def unsubscribe_command(self, event: AstrMessageEvent, item_name: str = ""):
         """取消订阅活动或卡池。"""
-        if not item_name.strip():
+        name = self._argument_text(event, UNSUBSCRIBE_COMMAND, item_name).strip()
+
+        if not name:
             yield event.plain_result("请输入要取消订阅的活动或卡池名称，例如：/方舟取消订阅 感谢庆典")
             return
 
         try:
             snapshot = await self.service.snapshot()
-            item = self._find_timeline_item(snapshot, item_name.strip())
+            item = self._find_timeline_item(snapshot, name)
             if not item:
                 yield event.plain_result(
-                    self.messages.text("subscription_item_not_found", name=item_name.strip())
+                    self.messages.text("subscription_item_not_found", name=name)
                 )
                 return
 
@@ -1003,19 +1025,6 @@ class ArkCalendarPlugin(Star):
                 return item
 
         return None
-
-    @staticmethod
-    def _validate_time_format(time_str: str) -> bool:
-        """验证时间格式 HH:MM"""
-        try:
-            parts = time_str.split(":")
-            if len(parts) != 2:
-                return False
-            hour = int(parts[0])
-            minute = int(parts[1])
-            return 0 <= hour <= 23 and 0 <= minute <= 59
-        except (ValueError, AttributeError):
-            return False
 
     @staticmethod
     def _is_group_session(session_id: str) -> bool:
