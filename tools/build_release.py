@@ -17,6 +17,7 @@ RUNTIME_FILES = {
     "core/__init__.py",
     "core/assets.py",
     "core/cache.py",
+    "core/command_args.py",
     "core/config.py",
     "core/messages.py",
     "core/models.py",
@@ -24,6 +25,7 @@ RUNTIME_FILES = {
     "core/renderer.py",
     "core/scheduler_utils.py",
     "core/service.py",
+    "core/subscription.py",
     "sources/__init__.py",
     "sources/anything_ics.py",
     "sources/gacha.py",
@@ -31,6 +33,7 @@ RUNTIME_FILES = {
     "sources/prts.py",
     "templates/calendar.html",
     "templates/history_schedule.html",
+    "templates/help.html",
     "assets/SourceHanSerifCN-Medium-6.otf",
 }
 

@@ -19,7 +19,7 @@ from .core.command_args import split_name_and_time, strip_command_prefix
 from .core.config import config_int, config_strings, config_value, sync_builtin_message_previews
 from .core.messages import MessageCatalog
 from .core.models import parse_iso
-from .core.render_cache import CalendarImageCache
+from .core.render_cache import CalendarImageCache, HelpImageCache
 from .core.renderer import CalendarRenderer
 from .core.scheduler_utils import normalize_weekdays, parse_schedule_times
 from .core.service import CalendarService
@@ -36,6 +36,7 @@ class CommandSpec:
     aliases: tuple[str, ...] = ()
     summary: str = ""
     argument_hint: str = ""
+    example: str = ""
 
     @property
     def alias_set(self) -> set[str]:
@@ -60,33 +61,39 @@ CALENDAR_COMMAND = CommandSpec(
     "方舟日历",
     ("方舟日报", "明日方舟日历", "舟日历"),
     "生成活动、寻访、生日和今日作战信息长图；命中图片缓存时会直接发送。",
+    example="/方舟日历",
 )
 BIRTHDAY_COMMAND = CommandSpec(
     "方舟生日",
     ("方舟生日查询", "明日方舟生日", "舟生日"),
     "以文字查询干员生日，例如：/方舟生日 卡缇。",
     argument_hint="<干员名称>",
+    example="/方舟生日 卡缇",
 )
 STATUS_COMMAND = CommandSpec(
     "方舟日历状态",
     ("方舟状态", "明日方舟日历状态"),
     "查看最近快照、数据源、降级状态和最终图片缓存。",
+    example="/方舟日历状态",
 )
 HELP_COMMAND = CommandSpec(
     "方舟日报帮助",
     ("方舟日历帮助", "明日方舟日报帮助"),
     "查看本帮助。",
+    example="/方舟日报帮助",
 )
 REFRESH_COMMAND = CommandSpec(
     "方舟日历刷新",
     ("方舟日历更新", "方舟日报刷新"),
     "强制刷新数据源并重新生成日历图片。",
+    example="/方舟日历刷新",
 )
 HISTORICAL_COMMAND = CommandSpec(
     "方舟历史日程测试",
     ("方舟回溯测试", "方舟日历历史测试"),
     "生成仅含活动与寻访时间轴的历史测试图片，例如：/方舟历史日程测试 2026-07-01 2026-07-31。",
     argument_hint="<开始日期> <结束日期>",
+    example="/方舟历史日程测试 2026-07-01 2026-07-31",
 )
 
 SUBSCRIBE_COMMAND = CommandSpec(
@@ -94,6 +101,7 @@ SUBSCRIBE_COMMAND = CommandSpec(
     ("订阅方舟活动", "订阅卡池"),
     "订阅活动或卡池，在结束前一天提醒。",
     argument_hint="<活动/卡池名称> [提醒时间]",
+    example="/方舟订阅 危机合约 · 熔火行动 20:30",
 )
 
 UNSUBSCRIBE_COMMAND = CommandSpec(
@@ -101,15 +109,18 @@ UNSUBSCRIBE_COMMAND = CommandSpec(
     ("取消订阅方舟", "取消订阅卡池"),
     "取消订阅活动或卡池。",
     argument_hint="<活动/卡池名称>",
+    example="/方舟取消订阅 危机合约 · 熔火行动",
 )
 
 SUBSCRIPTION_LIST_COMMAND = CommandSpec(
     "方舟订阅列表",
     ("我的方舟订阅", "查看订阅"),
     "查看当前订阅的所有活动和卡池。",
+    example="/方舟订阅列表",
 )
 
-USER_COMMANDS = (CALENDAR_COMMAND, BIRTHDAY_COMMAND, STATUS_COMMAND, SUBSCRIBE_COMMAND, UNSUBSCRIBE_COMMAND, SUBSCRIPTION_LIST_COMMAND, HELP_COMMAND)
+SUBSCRIPTION_COMMANDS = (SUBSCRIBE_COMMAND, UNSUBSCRIBE_COMMAND, SUBSCRIPTION_LIST_COMMAND)
+USER_COMMANDS = (CALENDAR_COMMAND, BIRTHDAY_COMMAND, STATUS_COMMAND, *SUBSCRIPTION_COMMANDS, HELP_COMMAND)
 ADMIN_COMMANDS = (REFRESH_COMMAND, HISTORICAL_COMMAND)
 
 # （图片、来源状态、降级 manifest）。仅当状态为 "fallback" 时才有 manifest，
@@ -130,14 +141,17 @@ class ArkCalendarPlugin(Star):
         self.renderer = CalendarRenderer(self, self.service)
         self.messages = MessageCatalog(config, logger)
         self.render_cache = CalendarImageCache(self.data_dir / "render")
+        self.help_cache = HelpImageCache(self.data_dir / "render")
         self.subscription_manager = SubscriptionManager(self.data_dir, logger)
         self.scheduler: AsyncIOScheduler | None = None
         self._scheduled_report_lock = asyncio.Lock()
         self._scheduled_birthday_greeting_lock = asyncio.Lock()
         self._scheduled_subscription_reminder_lock = asyncio.Lock()
         self._notification_state_lock = asyncio.Lock()
+        self._daily_precache_lock = asyncio.Lock()
         self._render_locks: dict[str, tuple[asyncio.Lock, int]] = {}
         self._render_locks_guard = asyncio.Lock()
+        self._help_render_locks = {mode: asyncio.Lock() for mode in HelpImageCache.MODES}
 
     async def initialize(self) -> None:
         await self.service.initialize()
@@ -153,7 +167,87 @@ class ArkCalendarPlugin(Star):
     @filter.command(HELP_COMMAND.name, alias=HELP_COMMAND.alias_set)
     async def help_command(self, event: AstrMessageEvent):
         """查看方舟日报的指令、别称与配置说明。"""
-        yield event.plain_result(self._help_text())
+        image = await self._help_image("full")
+        if image:
+            yield event.image_result(str(image))
+        else:
+            yield event.plain_result(self._help_text())
+
+    @staticmethod
+    def _command_rows(commands: tuple[CommandSpec, ...]) -> list[dict[str, Any]]:
+        """帮助页命令卡片数据；aliases 保持为列表，模板逐个渲染成标签。"""
+        return [
+            {
+                "name": command.name,
+                "aliases": list(command.aliases),
+                "summary": command.summary,
+                "argument_hint": command.argument_hint,
+                "example": command.example,
+            }
+            for command in commands
+        ]
+
+    @staticmethod
+    def _argument_text(event: AstrMessageEvent, spec: CommandSpec, *fallback: str) -> str:
+        """取命令后面的参数原文。
+
+        框架按空白切分位置参数，名称里带空格（如「危机合约 · 熔火行动」）会被切碎，
+        因此优先从消息原文里剥掉命令名自己解析；拿不到原文时退回拼接位置参数。
+        """
+        raw = getattr(event, "message_str", "") or ""
+        argument_text = strip_command_prefix(raw, spec.invocations)
+        if argument_text:
+            return argument_text
+        return " ".join(part for part in fallback if part).strip()
+
+    async def _help_image(self, mode: str) -> Path | str | None:
+        """取当日缓存的帮助长图；未命中则渲染并写入缓存。
+
+        帮助页内容按自然日变化（倒计时、可订阅日程），因此缓存以
+        (mode, 日期) 为键，当天复用同一张图，跨日自动失效。
+        失败时返回 None 由调用方回退到文字版。
+        """
+        cached = self.help_cache.lookup(mode)
+        if cached:
+            logger.info(f"帮助长图命中当日缓存：{mode}。")
+            return cached
+        lock = self._help_render_locks.get(mode)
+        if lock is None:
+            return await self._render_help_image(mode)
+        async with lock:
+            cached = self.help_cache.lookup(mode)
+            if cached:
+                logger.info(f"帮助长图缓存由并发请求生成：{mode}。")
+                return cached
+            return await self._render_help_image(mode)
+
+    async def _render_help_image(self, mode: str, snapshot=None) -> Path | str | None:
+        """实际调用渲染器并写入当日缓存；缓存写失败不影响本次返回。"""
+        try:
+            snapshot = snapshot or await self.service.snapshot()
+            if mode == "subscribe":
+                user_rows = self._command_rows(SUBSCRIPTION_COMMANDS)
+                admin_rows: list[dict[str, Any]] = []
+            else:
+                user_rows = self._command_rows(USER_COMMANDS)
+                admin_rows = self._command_rows(ADMIN_COMMANDS)
+            rendered = await self.renderer.help_page(
+                snapshot,
+                user_rows,
+                admin_rows,
+                mode=mode,
+            )
+        except Exception:
+            logger.error("生成方舟帮助长图失败，已回退到文字版本。", exc_info=True)
+            return None
+        try:
+            stored = self.help_cache.store(rendered, mode)
+            if stored:
+                logger.info(f"帮助长图已写入当日缓存：{stored}")
+                return stored
+        except Exception:
+            logger.warning(f"帮助长图缓存写入失败，本次直接使用渲染结果：{mode}。", exc_info=True)
+        return rendered
 
     @filter.command(CALENDAR_COMMAND.name, alias=CALENDAR_COMMAND.alias_set)
     async def calendar_command(self, event: AstrMessageEvent):
@@ -245,6 +339,8 @@ class ArkCalendarPlugin(Star):
         yield event.plain_result(self.messages.text("force_refresh_started"))
         try:
             snapshot = await self.service.snapshot(force=True)
+            # 帮助页会展示可订阅日程；强制刷新后不能继续复用旧帮助图。
+            self.help_cache.invalidate()
             quality_notice = self._data_quality_notice()
             if quality_notice:
                 yield event.plain_result(quality_notice)
@@ -283,19 +379,6 @@ class ArkCalendarPlugin(Star):
             logger.error("历史日程测试图片生成失败。", exc_info=True)
             yield event.plain_result(self.messages.text("historical_render_failed"))
 
-    @staticmethod
-    def _argument_text(event: AstrMessageEvent, spec: CommandSpec, *fallback: str) -> str:
-        """取命令后面的参数原文。
-
-        框架按空白切分位置参数，名称里带空格（如「危机合约 · 熔火行动」）会被切碎，
-        因此优先从消息原文里剥掉命令名自己解析；拿不到原文时退回拼接位置参数。
-        """
-        raw = getattr(event, "message_str", "") or ""
-        argument_text = strip_command_prefix(raw, spec.invocations)
-        if argument_text:
-            return argument_text
-        return " ".join(part for part in fallback if part).strip()
-
     @filter.command(SUBSCRIBE_COMMAND.name, alias=SUBSCRIBE_COMMAND.alias_set)
     async def subscribe_command(
         self,
@@ -304,12 +387,16 @@ class ArkCalendarPlugin(Star):
         remind_time: str = "",
     ):
         """订阅活动或卡池，在结束前一天提醒。"""
-        # 名称可能带空格，先从原文剥掉命令名再整段解析，末尾的 HH:MM 才当提醒时间。
-        argument_text = self._argument_text(event, SUBSCRIBE_COMMAND, item_name, remind_time)
-        name, parsed_time = split_name_and_time(argument_text)
+        # 优先从原文剥命令名后整段解析，避免名称里的空格被框架切碎。
+        arg_text = self._argument_text(event, SUBSCRIBE_COMMAND, item_name, remind_time)
+        name, parsed_time = split_name_and_time(arg_text)
 
         if not name:
-            yield event.plain_result("请输入要订阅的活动或卡池名称，例如：/方舟订阅 感谢庆典")
+            image = await self._help_image("subscribe")
+            if image:
+                yield event.image_result(str(image))
+            else:
+                yield event.plain_result("请输入要订阅的活动或卡池名称，例如：/方舟订阅 感谢庆典\n使用 /方舟日历 查看当前活动和卡池")
             return
 
         time_to_use = parsed_time or "12:00"
@@ -616,7 +703,8 @@ class ArkCalendarPlugin(Star):
         report_jobs = self._add_scheduled_report_jobs()
         birthday_jobs = self._add_scheduled_birthday_greeting_job()
         reminder_jobs = self._add_scheduled_subscription_reminder_job()
-        if not report_jobs and not birthday_jobs and not reminder_jobs:
+        precache_job = self._add_daily_precache_job()
+        if not report_jobs and not birthday_jobs and not reminder_jobs and not precache_job:
             self.scheduler = None
             return
         self.scheduler.start()
@@ -709,6 +797,76 @@ class ArkCalendarPlugin(Star):
         )
         logger.info("已启用订阅提醒任务：每小时检查一次。")
         return 1
+
+    def _add_daily_precache_job(self) -> int:
+        """添加每日凌晨 4:00 预缓存任务：刷新数据并预渲染日历、帮助图。"""
+        assert self.scheduler
+        self.scheduler.add_job(
+            self._daily_precache,
+            "cron",
+            hour=4,
+            minute=0,
+            id="ark_calendar_daily_precache",
+            name="Ark Calendar Daily Precache",
+            coalesce=True,
+            max_instances=1,
+            misfire_grace_time=600,
+        )
+        logger.info("已启用每日预缓存任务：每天 04:00 刷新数据并预渲染日历、帮助图。")
+        return 1
+
+    async def _daily_precache(self) -> None:
+        """刷新当天数据，并预渲染日历与两种帮助长图。"""
+        if self._daily_precache_lock.locked():
+            logger.warning("每日预缓存：已有任务正在执行，本次跳过。")
+            return
+        async with self._daily_precache_lock:
+            logger.info("每日预缓存开始：强制刷新数据并生成当天图片缓存。")
+            try:
+                snapshot = await self.service.snapshot(force=True)
+                calendar_image, image_state, _ = await self._calendar_image(snapshot)
+
+                # 任务补跑或凌晨前曾生成帮助图时，先清除当天旧版本，确保使用新快照重渲染。
+                self.help_cache.invalidate()
+                help_cache_paths: dict[str, Path] = {}
+                uncached_modes: list[str] = []
+                failed_modes: list[str] = []
+                for mode in HelpImageCache.MODES:
+                    rendered = await self._render_help_image(mode, snapshot)
+                    cached = self.help_cache.lookup(mode)
+                    if cached:
+                        help_cache_paths[mode] = cached
+                    elif rendered:
+                        uncached_modes.append(mode)
+                    else:
+                        # 一个帮助图失败时仍继续生成另一种，避免一次局部故障放大为整天无缓存。
+                        failed_modes.append(mode)
+
+                logger.info(
+                    "每日预缓存完成："
+                    f"日历={calendar_image}（来源={image_state}），"
+                    f"帮助图={', '.join(f'{mode}={path}' for mode, path in help_cache_paths.items()) or '无'}。"
+                )
+                if uncached_modes:
+                    logger.warning(
+                        "每日预缓存：以下帮助图本次已生成但未写入缓存，将由后续调用重试："
+                        f"{', '.join(uncached_modes)}。"
+                    )
+                if failed_modes:
+                    logger.error(f"每日预缓存：帮助长图生成失败：{', '.join(failed_modes)}。")
+                    await self._notify_admin(
+                        "【方舟日历异常告警】\n"
+                        f"每日 04:00 预缓存未能生成帮助图：{', '.join(failed_modes)}。"
+                        "详情请查看 AstrBot 日志。",
+                        "daily_precache_help_failed",
+                    )
+                await self._observe_health(snapshot, "每日预缓存")
+            except Exception:
+                logger.error("每日预缓存执行失败。", exc_info=True)
+                await self._notify_admin(
+                    "【方舟日历异常告警】\n每日 04:00 预缓存未能完成，详情请查看 AstrBot 日志。",
+                    "daily_precache_failed",
+                )
 
     async def _scheduled_report(self) -> None:
         if self._scheduled_report_lock.locked():

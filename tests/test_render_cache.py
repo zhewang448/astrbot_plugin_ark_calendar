@@ -5,7 +5,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from astrbot_plugin.core.models import CalendarSnapshot, SourceState
-from astrbot_plugin.core.render_cache import CalendarImageCache
+from astrbot_plugin.core.render_cache import CalendarImageCache, HelpImageCache
 
 
 CN_TZ = ZoneInfo("Asia/Shanghai")
@@ -104,6 +104,48 @@ class CalendarImageCacheTests(unittest.TestCase):
                 datetime(2026, 8, 4, 0, 1, tzinfo=CN_TZ),
             )
         )
+
+
+class HelpImageCacheTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp.name) / "render"
+        self.cache = HelpImageCache(self.root)
+
+    def tearDown(self):
+        self.temp.cleanup()
+
+    @staticmethod
+    def _now(day: int) -> datetime:
+        return datetime(2026, 8, day, 4, 0, tzinfo=CN_TZ)
+
+    def test_reuses_only_the_same_natural_day(self):
+        stored = self.cache.store(b"\x89PNG\r\n\x1a\nexample", "full", now=self._now(3))
+
+        self.assertEqual(self.cache.lookup("full", self._now(3)), stored)
+        self.assertIsNone(self.cache.lookup("full", self._now(4)))
+
+    def test_prunes_old_images_per_mode(self):
+        for day in (1, 2, 3):
+            self.cache.store(
+                b"\x89PNG\r\n\x1a\nexample",
+                "full",
+                now=self._now(day),
+                keep_days=2,
+            )
+        self.cache.store(b"\x89PNG\r\n\x1a\nexample", "subscribe", now=self._now(1), keep_days=2)
+
+        self.assertFalse((self.root / "help-full-2026-08-01.png").exists())
+        self.assertTrue((self.root / "help-full-2026-08-02.png").exists())
+        self.assertTrue((self.root / "help-full-2026-08-03.png").exists())
+        self.assertTrue((self.root / "help-subscribe-2026-08-01.png").exists())
+
+    def test_invalid_image_does_not_leave_a_temporary_file(self):
+        with self.assertRaises(ValueError):
+            self.cache.store(b"not-a-png", "full", now=self._now(3))
+
+        self.assertFalse((self.root / "help-full-2026-08-03.png").exists())
+        self.assertEqual(list(self.root.glob(".*.tmp")), [])
 
 
 if __name__ == "__main__":

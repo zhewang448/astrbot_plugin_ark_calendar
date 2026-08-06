@@ -9,6 +9,9 @@ from .models import CalendarSnapshot, parse_iso
 
 CN_TZ = ZoneInfo("Asia/Shanghai")
 
+# 帮助页头图固定使用打包内的这张图，不随当期活动变化；文件缺失时模板回退到纯 CSS 背景。
+HELP_HERO_ASSET = "help-hero.jpg"
+
 
 class CalendarRenderer:
     COLORS = {"event": "#087c92", "登录活动": "#f5c335", "限定寻访": "#c83e43", "标准寻访": "#7555a0", "中坚寻访": "#3c6680", "单人寻访": "#8a5c49", "联动寻访": "#c83e43"}
@@ -19,6 +22,7 @@ class CalendarRenderer:
         templates = Path(__file__).parent.parent / "templates"
         self.template = (templates / "calendar.html").read_text("utf-8")
         self.history_template = (templates / "history_schedule.html").read_text("utf-8")
+        self.help_template = (templates / "help.html").read_text("utf-8")
         self.template_hash = hashlib.sha256(self.template.encode("utf-8")).hexdigest()[:16]
 
     async def calendar(self, snapshot: CalendarSnapshot) -> str:
@@ -131,3 +135,87 @@ class CalendarRenderer:
         base = Path(__file__).parent.parent / "assets"
         font = base / "SourceHanSerifCN-Medium-6.otf"
         return {"font": await self.service.assets.data_uri(str(font))}
+
+    async def _help_hero(self) -> str:
+        """帮助页固定头图；打包里没有这张图时返回空串，模板会退到纯 CSS 背景。"""
+        assert self.service.assets
+        hero = Path(__file__).parent.parent / "assets" / HELP_HERO_ASSET
+        if not hero.is_file():
+            return ""
+        return await self.service.assets.data_uri(str(hero))
+
+    async def help_page(
+        self,
+        snapshot: CalendarSnapshot,
+        user_commands: list,
+        admin_commands: list,
+        mode: str = "help",
+    ) -> str:
+        """按日历同一套视觉渲染帮助页；mode="subscribe" 时把可订阅日程放到最前。"""
+        now = parse_iso(snapshot.generated_at)
+        subscribable_items = self.subscribable_items(snapshot)
+        hero = await self._help_hero()
+        data = {
+            "mode": mode,
+            "title": "订阅可用日程" if mode == "subscribe" else "罗德岛终端手册",
+            "subtitle_en": "SUBSCRIPTION DIRECTORY" if mode == "subscribe" else "COMMAND MANUAL",
+            "lead": (
+                "下面是当前可以订阅的活动与寻访，复制卡片里的命令就能订阅；"
+                "在结束前一天的设定时间提醒你，不填时间默认中午 12:00。"
+                if mode == "subscribe"
+                else "罗德岛行动日历的全部指令与当前可订阅日程都在这里，"
+                "指令支持别名，订阅提醒在结束前一天送达。"
+            ),
+            "version": self.service.plugin_version,
+            "user_commands": user_commands,
+            "admin_commands": admin_commands,
+            "subscribable_items": subscribable_items,
+            "date_cn": now.strftime("%Y / %m / %d"),
+            "weekday": "星期" + "一二三四五六日"[now.weekday()],
+            "data_date_text": snapshot.calendar_date,
+            "hero": hero,
+            "static": await self._static_assets(),
+        }
+        return await self._html_render(
+            self.help_template,
+            data,
+            options={
+                "type": "png",
+                "full_page": True,
+                "animations": "disabled",
+                "scale": "css",
+                "timeout": self._render_timeout_ms(),
+            },
+        )
+
+    def subscribable_items(self, snapshot: CalendarSnapshot) -> list[dict]:
+        """未结束的活动与卡池，按结束时间排序，供帮助页与订阅提示复用。"""
+        now = parse_iso(snapshot.generated_at)
+        items: list[dict] = []
+        for item in [*snapshot.events, *snapshot.gacha_pools]:
+            try:
+                start_time, end_time = parse_iso(item.start), parse_iso(item.end)
+            except (TypeError, ValueError):
+                continue
+            if end_time <= now:
+                continue
+            target, prefix = (start_time, "距开启 ") if now < start_time else (end_time, "距结束 ")
+            hours = max(0, int((target - now).total_seconds() // 3600))
+            if hours <= 0:
+                countdown = prefix + "不足 1 小时"
+            elif hours >= 24:
+                countdown = prefix + f"{hours // 24} 天 {hours % 24} 时"
+            else:
+                countdown = prefix + f"{hours} 小时"
+            items.append({
+                "name": item.name,
+                "category": item.category,
+                "type_label": "活动" if item.category == "event" else (item.item_type or "寻访"),
+                "start_text": start_time.astimezone(CN_TZ).strftime("%m.%d %H:%M"),
+                "end_text": end_time.astimezone(CN_TZ).strftime("%m.%d %H:%M"),
+                "countdown": countdown,
+                "end_sort": end_time.timestamp(),
+                "color": self.COLORS.get(item.item_type, self.COLORS.get(item.category, "#4d8a72")),
+            })
+        items.sort(key=lambda entry: entry["end_sort"])
+        return items
