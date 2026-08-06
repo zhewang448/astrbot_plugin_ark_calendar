@@ -6,6 +6,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from .models import CalendarSnapshot, parse_iso
+from .pillow_renderer import PillowCalendarRenderer
 
 CN_TZ = ZoneInfo("Asia/Shanghai")
 
@@ -24,33 +25,45 @@ class CalendarRenderer:
         self.history_template = (templates / "history_schedule.html").read_text("utf-8")
         self.help_template = (templates / "help.html").read_text("utf-8")
         self.template_hash = hashlib.sha256(self.template.encode("utf-8")).hexdigest()[:16]
+        self.pillow_renderer = PillowCalendarRenderer(service)
 
-    async def calendar(self, snapshot: CalendarSnapshot) -> str:
+    async def calendar(self, snapshot: CalendarSnapshot) -> str | Path:
+        data = self._calendar_data(snapshot)
+        if self.engine == "pillow":
+            return await self.pillow_renderer.calendar(data)
+        data["static"] = await self._static_assets()
+        return await self._html_render(
+            self.template,
+            data,
+            options={"type": "png", "full_page": True, "animations": "disabled", "scale": "css", "timeout": self._render_timeout_ms()},
+        )
+
+    def _calendar_data(self, snapshot: CalendarSnapshot) -> dict:
+        """构建两个渲染后端共用的主日历页面数据。"""
         start, end = parse_iso(snapshot.timeline_start), parse_iso(snapshot.timeline_end)
         now = parse_iso(snapshot.generated_at)
-        items = [self._timeline(x, start, end, now) for x in snapshot.events]
-        pools = [self._timeline(x, start, end, now) for x in snapshot.gacha_pools]
-        longs = [self._timeline(x, start, end, now) for x in snapshot.long_term_events]
-        static = await self._static_assets()
-        hero = next(
-            (x["image"] for x in [*items, *pools, *longs] if x["image"]),
-            "",
-        )
+        items = [self._timeline(item, start, end, now) for item in snapshot.events]
+        pools = [self._timeline(item, start, end, now) for item in snapshot.gacha_pools]
+        longs = [self._timeline(item, start, end, now) for item in snapshot.long_term_events]
+        hero = next((item["image"] for item in [*items, *pools, *longs] if item["image"]), "")
         timeline_days = max(1, (end - start).days)
-        ticks = self._ticks(start, now, timeline_days)
-        data = {
-            "snapshot": snapshot.to_dict(), "events": items, "pools": pools, "longs": longs, "ticks": ticks,
+        return {
+            "snapshot": snapshot.to_dict(),
+            "events": items,
+            "pools": pools,
+            "longs": longs,
+            "ticks": self._ticks(start, now, timeline_days),
             "timeline_days": timeline_days,
-            "today_left": max(0, min(100, (now-start).total_seconds()/(end-start).total_seconds()*100)),
-            "date_cn": now.strftime("%Y / %m / %d"), "data_date_text": snapshot.calendar_date,
+            "today_left": max(0, min(100, (now - start).total_seconds() / (end - start).total_seconds() * 100)),
+            "date_cn": now.strftime("%Y / %m / %d"),
+            "data_date_text": snapshot.calendar_date,
             "weekday": "星期" + "一二三四五六日"[now.weekday()],
-            "hero": hero, "static": static,
+            "hero": hero,
             "show_footer": self.service.value("basic", "show_source_footer", True, "show_source_footer"),
         }
-        return await self._html_render(self.template, data, options={"type": "png", "full_page": True, "animations": "disabled", "scale": "css", "timeout": self._render_timeout_ms()})
 
-    async def historical_calendar(self, snapshot: CalendarSnapshot) -> str:
-        """按与主日历相同的时间轴与图片准备流程渲染历史快照。"""
+    async def historical_calendar(self, snapshot: CalendarSnapshot) -> str | Path:
+        """按与主日历相同的图片准备流程渲染历史快照。"""
         start, end = parse_iso(snapshot.timeline_start), parse_iso(snapshot.timeline_end)
         now = parse_iso(snapshot.generated_at)
         events = [self._timeline(item, start, end, now) for item in snapshot.events]
@@ -65,9 +78,15 @@ class CalendarRenderer:
             "pools": pools,
             "event_count": len(events),
             "pool_count": len(pools),
-            "static": await self._static_assets(),
         }
-        return await self._html_render(self.history_template, data, options={"type": "png", "full_page": True, "animations": "disabled", "scale": "css", "timeout": self._render_timeout_ms()})
+        if self.engine == "pillow":
+            return await self.pillow_renderer.historical_calendar(data)
+        data["static"] = await self._static_assets()
+        return await self._html_render(
+            self.history_template,
+            data,
+            options={"type": "png", "full_page": True, "animations": "disabled", "scale": "css", "timeout": self._render_timeout_ms()},
+        )
 
     @staticmethod
     def _ticks(start: datetime, now: datetime, timeline_days: int) -> list[dict]:
@@ -97,6 +116,20 @@ class CalendarRenderer:
             }
             for offset in sorted(offsets)
         ]
+
+    @property
+    def engine(self) -> str:
+        """当前渲染后端；未知配置保持 AstrBot 的既有行为。"""
+        try:
+            value = str(self.service.value("cache_and_render", "render_engine", "astrbot")).lower().strip()
+        except (AttributeError, TypeError, ValueError):
+            value = "astrbot"
+        return value if value in {"astrbot", "pillow"} else "astrbot"
+
+    @property
+    def render_version(self) -> str:
+        """纳入最终图片缓存的渲染器版本。"""
+        return PillowCalendarRenderer.VERSION if self.engine == "pillow" else self.template_hash
 
     def _render_timeout_ms(self) -> int:
         try:
@@ -150,11 +183,9 @@ class CalendarRenderer:
         user_commands: list,
         admin_commands: list,
         mode: str = "help",
-    ) -> str:
+    ) -> str | Path:
         """按日历同一套视觉渲染帮助页；mode="subscribe" 时把可订阅日程放到最前。"""
         now = parse_iso(snapshot.generated_at)
-        subscribable_items = self.subscribable_items(snapshot)
-        hero = await self._help_hero()
         data = {
             "mode": mode,
             "title": "订阅可用日程" if mode == "subscribe" else "罗德岛终端手册",
@@ -169,13 +200,15 @@ class CalendarRenderer:
             "version": self.service.plugin_version,
             "user_commands": user_commands,
             "admin_commands": admin_commands,
-            "subscribable_items": subscribable_items,
+            "subscribable_items": self.subscribable_items(snapshot),
             "date_cn": now.strftime("%Y / %m / %d"),
             "weekday": "星期" + "一二三四五六日"[now.weekday()],
             "data_date_text": snapshot.calendar_date,
-            "hero": hero,
-            "static": await self._static_assets(),
         }
+        if self.engine == "pillow":
+            return await self.pillow_renderer.help_page(data)
+        data["hero"] = await self._help_hero()
+        data["static"] = await self._static_assets()
         return await self._html_render(
             self.help_template,
             data,

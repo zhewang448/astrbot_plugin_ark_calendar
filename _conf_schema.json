@@ -157,6 +157,13 @@
         "default": 15,
         "hint": "超过该时间会记录警告日志。"
       },
+      "render_engine": {
+        "description": "图片渲染方式",
+        "type": "string",
+        "default": "astrbot",
+        "options": ["astrbot", "pillow"],
+        "hint": "astrbot 使用官方 HTML 渲染；pillow 在本地合成长图，保留相同数据源与图片素材。"
+      },
       "render_timeout_seconds": {
         "description": "T2I 渲染超时（秒）",
         "type": "int",
@@ -176,7 +183,7 @@
         "hint": "快照同时必须匹配当前数据配置和 schema；跨北京时间零点后不会继续回退。"
       }
     },
-    "hint": "推荐保持默认。开启最终图片缓存可减少重复 T2I 渲染。"
+    "hint": "默认使用 AstrBot 官方 HTML 渲染；切换为 Pillow 后，最终图片和帮助图缓存会自动隔离。"
   },
   "messages": {
     "description": "消息文案与风格",

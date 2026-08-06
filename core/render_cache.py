@@ -96,6 +96,7 @@ class CalendarImageCache:
         self,
         max_age_hours: int | None = None,
         now: datetime | None = None,
+        display_config: dict[str, Any] | None = None,
     ) -> tuple[Path, dict[str, Any]] | None:
         manifest = self._load_manifest()
         if not manifest:
@@ -103,6 +104,11 @@ class CalendarImageCache:
         image = self._image_path(manifest)
         if not image:
             return None
+        if display_config is not None:
+            requested_engine = str(display_config.get("render_engine", "astrbot"))
+            cached_engine = str(manifest.get("render_engine", "astrbot"))
+            if requested_engine != cached_engine:
+                return None
         current = now or datetime.now(CN_TZ)
         if str(manifest.get("calendar_date", "")) != current.date().isoformat():
             return None
@@ -151,6 +157,7 @@ class CalendarImageCache:
             "calendar_date": snapshot.calendar_date,
             "rendered_at": datetime.now(CN_TZ).isoformat(),
             "expires_at": expires.isoformat(),
+            "render_engine": str(display_config.get("render_engine", "astrbot")),
         }
         temporary_manifest = self.manifest_path.with_name(f".{self.manifest_path.name}.{uuid4().hex}.tmp")
         try:
@@ -252,24 +259,35 @@ class CalendarImageCache:
 
 
 class HelpImageCache:
-    """按自然日缓存帮助长图。
+    """按自然日和渲染引擎缓存帮助长图。
 
-    帮助页里的倒计时与可订阅日程每天变一次，所以缓存只以
-    (mode, 日历日期) 为键：命中即当天复用，跨日自动失效，
-    由每日 04:00 的预缓存任务负责重新渲染。
+    AstrBot 沿用历史文件名，Pillow 使用独立的 ``-pillow`` 后缀；切换
+    引擎时不会把不同后端生成的长图混用。
     """
 
     MODES = ("full", "subscribe")
+    ENGINE_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
 
     def __init__(self, root: Path):
         self.root = root
         self.root.mkdir(parents=True, exist_ok=True)
 
-    def image_path(self, mode: str, calendar_date: str) -> Path | None:
-        """返回该 mode 当日缓存图片路径；不存在或无效时返回 None。"""
-        if mode not in self.MODES or not DATE_PATTERN.match(calendar_date):
+    @classmethod
+    def _image_name(cls, mode: str, calendar_date: str, engine: str) -> str | None:
+        if mode not in cls.MODES or not DATE_PATTERN.match(calendar_date):
             return None
-        image = self.root / f"help-{mode}-{calendar_date}.png"
+        normalized = str(engine).lower().strip()
+        if not cls.ENGINE_PATTERN.fullmatch(normalized):
+            return None
+        suffix = "" if normalized == "astrbot" else f"-{normalized}"
+        return f"help-{mode}{suffix}-{calendar_date}.png"
+
+    def image_path(self, mode: str, calendar_date: str, engine: str = "astrbot") -> Path | None:
+        """返回指定后端当日缓存图片路径；不存在或无效时返回 None。"""
+        name = self._image_name(mode, calendar_date, engine)
+        if not name:
+            return None
+        image = self.root / name
         try:
             if not image.is_file() or image.stat().st_size <= 8:
                 return None
@@ -277,9 +295,9 @@ class HelpImageCache:
             return None
         return image if has_png_magic(image) else None
 
-    def lookup(self, mode: str, now: datetime | None = None) -> Path | None:
+    def lookup(self, mode: str, now: datetime | None = None, engine: str = "astrbot") -> Path | None:
         current = now or datetime.now(CN_TZ)
-        return self.image_path(mode, current.date().isoformat())
+        return self.image_path(mode, current.date().isoformat(), engine)
 
     def store(
         self,
@@ -287,12 +305,14 @@ class HelpImageCache:
         mode: str,
         now: datetime | None = None,
         keep_days: int = 2,
+        engine: str = "astrbot",
     ) -> Path | None:
-        """写入当日缓存；mode 非法时直接返回 None，不落盘。"""
-        if mode not in self.MODES:
-            return None
+        """写入当日缓存；mode 或 engine 非法时直接返回 None，不落盘。"""
         current = now or datetime.now(CN_TZ)
-        target = self.root / f"help-{mode}-{current.date().isoformat()}.png"
+        name = self._image_name(mode, current.date().isoformat(), engine)
+        if not name:
+            return None
+        target = self.root / name
         temporary = target.with_name(f".{target.name}.{uuid4().hex}.tmp")
         try:
             write_image(rendered, temporary)
@@ -306,31 +326,32 @@ class HelpImageCache:
                 temporary.unlink(missing_ok=True)
             except OSError:
                 pass
-        self._prune(max(1, keep_days))
+        self._prune(max(1, keep_days), str(engine).lower().strip())
         return target
 
     def invalidate(self, now: datetime | None = None) -> None:
-        """删除当日全部帮助缓存，用于管理员强制刷新后重渲染。"""
+        """删除当日所有渲染后端的帮助缓存，用于管理员强制刷新。"""
         current = now or datetime.now(CN_TZ)
         for mode in self.MODES:
-            image = self.root / f"help-{mode}-{current.date().isoformat()}.png"
-            try:
-                image.unlink(missing_ok=True)
-            except OSError:
-                pass
+            for image in self.root.glob(f"help-{mode}*-{current.date().isoformat()}.png"):
+                try:
+                    image.unlink(missing_ok=True)
+                except OSError:
+                    pass
 
-    def status(self, now: datetime | None = None) -> dict[str, str]:
+    def status(self, now: datetime | None = None, engine: str = "astrbot") -> dict[str, str]:
         current = now or datetime.now(CN_TZ)
         return {
-            mode: str(self.image_path(mode, current.date().isoformat()) or "")
+            mode: str(self.image_path(mode, current.date().isoformat(), engine) or "")
             for mode in self.MODES
         }
 
-    def _prune(self, keep_days: int) -> None:
-        """每个 mode 只保留最近 keep_days 天的缓存图。"""
+    def _prune(self, keep_days: int, engine: str) -> None:
+        """每个 mode / engine 仅保留最近 keep_days 天的缓存图。"""
+        suffix = "" if engine == "astrbot" else f"-{engine}"
         for mode in self.MODES:
             images = sorted(
-                self.root.glob(f"help-{mode}-*.png"),
+                self.root.glob(f"help-{mode}{suffix}-*.png"),
                 key=lambda item: item.name,
                 reverse=True,
             )

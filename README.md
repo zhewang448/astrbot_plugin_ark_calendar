@@ -155,3 +155,7 @@ data/plugin_data/astrbot_plugin_ark_calendar/
 - [PRTS Gacha Server Data](https://weedy.prts.wiki/)：补全卡池六星 UP 信息。
 
 本插件使用的游戏图片版权属于上海鹰角网络科技有限公司及其关联公司；PRTS 页面内容遵循其站点声明。本项目仅用于非商业信息展示。
+
+### 渲染后端
+
+`cache_and_render.render_engine` 默认为 `astrbot`，继续使用 AstrBot 官方 HTML 生图接口。设置为 `pillow` 后，插件会在本地使用 Pillow 合成主日历、历史日程与两种帮助长图；活动主视觉、卡池封面和干员头像仍复用同一份数据下载与缓存。两种后端的最终图片与帮助图片缓存彼此隔离，切换后无需手动清理旧缓存。
