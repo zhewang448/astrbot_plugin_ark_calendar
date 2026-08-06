@@ -200,22 +200,6 @@ class ArkCalendarPlugin(Star):
             return argument_text
         return " ".join(part for part in fallback if part).strip()
 
-    def _help_cache_lookup(self, mode: str) -> Path | None:
-        """按当前渲染后端读取帮助图缓存。"""
-        try:
-            return self.help_cache.lookup(mode, engine=self._render_engine())
-        except TypeError:
-            # 兼容旧版缓存实现与轻量测试替身。
-            return self.help_cache.lookup(mode)
-
-    def _help_cache_store(self, rendered: str | Path | bytes, mode: str) -> Path | None:
-        """按当前渲染后端写入帮助图缓存。"""
-        try:
-            return self.help_cache.store(rendered, mode, engine=self._render_engine())
-        except TypeError:
-            # 兼容旧版缓存实现与轻量测试替身。
-            return self.help_cache.store(rendered, mode)
-
     async def _help_image(self, mode: str) -> Path | str | None:
         """取当日缓存的帮助长图；未命中则渲染并写入缓存。
 
@@ -223,7 +207,7 @@ class ArkCalendarPlugin(Star):
         (mode, 日期) 为键，当天复用同一张图，跨日自动失效。
         失败时返回 None 由调用方回退到文字版。
         """
-        cached = self._help_cache_lookup(mode)
+        cached = self.help_cache.lookup(mode)
         if cached:
             logger.info(f"帮助长图命中当日缓存：{mode}。")
             return cached
@@ -231,7 +215,7 @@ class ArkCalendarPlugin(Star):
         if lock is None:
             return await self._render_help_image(mode)
         async with lock:
-            cached = self._help_cache_lookup(mode)
+            cached = self.help_cache.lookup(mode)
             if cached:
                 logger.info(f"帮助长图缓存由并发请求生成：{mode}。")
                 return cached
@@ -257,7 +241,7 @@ class ArkCalendarPlugin(Star):
             logger.error("生成方舟帮助长图失败，已回退到文字版本。", exc_info=True)
             return None
         try:
-            stored = self._help_cache_store(rendered, mode)
+            stored = self.help_cache.store(rendered, mode)
             if stored:
                 logger.info(f"帮助长图已写入当日缓存：{stored}")
                 return stored
@@ -530,16 +514,10 @@ class ArkCalendarPlugin(Star):
         ]
         return "\n\n".join(sections)
 
-    def _render_engine(self) -> str:
-        """安全读取当前渲染引擎，便于运行时与轻量测试替身共用。"""
-        renderer = getattr(self, "renderer", None)
-        return str(getattr(renderer, "engine", "astrbot"))
-
     def _display_config(self) -> dict[str, Any]:
         return {
             "timeline_days": self.service.timeline_days(),
-            "render_engine": self._render_engine(),
-            "template_hash": self.renderer.render_version,
+            "template_hash": self.renderer.template_hash,
             "include_recent_operators": self._value("basic", "include_recent_operators", True, "include_recent_operators"),
             "include_long_term": self._value("basic", "include_long_term", True, "include_long_term"),
             "show_source_footer": self._value("basic", "show_source_footer", True, "show_source_footer"),
@@ -653,7 +631,7 @@ class ArkCalendarPlugin(Star):
             logger.info(f"最终日历图片已保存至插件缓存：{cached}")
             return cached, "rendered", None
         except Exception:
-            fallback = self.render_cache.fallback(self._fallback_max_age_hours(), display_config=display_config) if self._cache_enabled() else None
+            fallback = self.render_cache.fallback(self._fallback_max_age_hours()) if self._cache_enabled() else None
             if fallback:
                 image, manifest = fallback
                 logger.warning(f"日历渲染失败，已回退到缓存图片（快照时间：{manifest.get('snapshot_generated_at', '未知')}）。")
@@ -691,7 +669,7 @@ class ArkCalendarPlugin(Star):
 
     def _format_status(self, snapshot) -> str:
         cache_status = self.render_cache.status(snapshot, self._display_config()) if self._cache_enabled() else {"state": "disabled"}
-        lines = ["罗德岛行动日历状态", f"快照时间：{snapshot.generated_at}", f"渲染方式：{self._render_engine()}"]
+        lines = ["罗德岛行动日历状态", f"快照时间：{snapshot.generated_at}"]
         quality = self.service.last_refresh_quality
         quality_text = {
             "fresh": "正常",
@@ -855,7 +833,7 @@ class ArkCalendarPlugin(Star):
                 failed_modes: list[str] = []
                 for mode in HelpImageCache.MODES:
                     rendered = await self._render_help_image(mode, snapshot)
-                    cached = self._help_cache_lookup(mode)
+                    cached = self.help_cache.lookup(mode)
                     if cached:
                         help_cache_paths[mode] = cached
                     elif rendered:
