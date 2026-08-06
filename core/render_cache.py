@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import shutil
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -14,6 +15,27 @@ from .models import CalendarSnapshot, parse_iso
 CN_TZ = ZoneInfo("Asia/Shanghai")
 
 PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
+
+DATE_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def has_png_magic(path: Path) -> bool:
+    """只读文件头校验 PNG 签名，避免把整张图片读入内存。"""
+    try:
+        with path.open("rb") as handle:
+            return handle.read(8) == PNG_MAGIC
+    except OSError:
+        return False
+
+
+def write_image(rendered: str | Path | bytes, target: Path) -> None:
+    if isinstance(rendered, bytes):
+        target.write_bytes(rendered)
+        return
+    source = Path(rendered)
+    if not source.exists() or not source.is_file():
+        raise FileNotFoundError(f"渲染器未返回可用图片文件：{rendered}")
+    shutil.copyfile(source, target)
 
 
 class CalendarImageCache:
@@ -205,12 +227,7 @@ class CalendarImageCache:
 
     @staticmethod
     def _has_png_magic(path: Path) -> bool:
-        """只读文件头校验 PNG 签名，避免把整张图片读入内存。"""
-        try:
-            with path.open("rb") as handle:
-                return handle.read(8) == PNG_MAGIC
-        except OSError:
-            return False
+        return has_png_magic(path)
 
     @staticmethod
     def _is_manifest_current(manifest: dict[str, Any], now: datetime) -> bool:
@@ -223,13 +240,7 @@ class CalendarImageCache:
 
     @staticmethod
     def _write_image(rendered: str | Path | bytes, target: Path) -> None:
-        if isinstance(rendered, bytes):
-            target.write_bytes(rendered)
-            return
-        source = Path(rendered)
-        if not source.exists() or not source.is_file():
-            raise FileNotFoundError(f"渲染器未返回可用图片文件：{rendered}")
-        shutil.copyfile(source, target)
+        write_image(rendered, target)
 
     def _prune(self, keep_count: int) -> None:
         images = sorted(self.root.glob("calendar-*.png"), key=lambda item: item.stat().st_mtime, reverse=True)
@@ -238,3 +249,93 @@ class CalendarImageCache:
                 image.unlink()
             except OSError:
                 pass
+
+
+class HelpImageCache:
+    """按自然日缓存帮助长图。
+
+    帮助页里的倒计时与可订阅日程每天变一次，所以缓存只以
+    (mode, 日历日期) 为键：命中即当天复用，跨日自动失效，
+    由每日 04:00 的预缓存任务负责重新渲染。
+    """
+
+    MODES = ("full", "subscribe")
+
+    def __init__(self, root: Path):
+        self.root = root
+        self.root.mkdir(parents=True, exist_ok=True)
+
+    def image_path(self, mode: str, calendar_date: str) -> Path | None:
+        """返回该 mode 当日缓存图片路径；不存在或无效时返回 None。"""
+        if mode not in self.MODES or not DATE_PATTERN.match(calendar_date):
+            return None
+        image = self.root / f"help-{mode}-{calendar_date}.png"
+        try:
+            if not image.is_file() or image.stat().st_size <= 8:
+                return None
+        except OSError:
+            return None
+        return image if has_png_magic(image) else None
+
+    def lookup(self, mode: str, now: datetime | None = None) -> Path | None:
+        current = now or datetime.now(CN_TZ)
+        return self.image_path(mode, current.date().isoformat())
+
+    def store(
+        self,
+        rendered: str | Path | bytes,
+        mode: str,
+        now: datetime | None = None,
+        keep_days: int = 2,
+    ) -> Path | None:
+        """写入当日缓存；mode 非法时直接返回 None，不落盘。"""
+        if mode not in self.MODES:
+            return None
+        current = now or datetime.now(CN_TZ)
+        target = self.root / f"help-{mode}-{current.date().isoformat()}.png"
+        temporary = target.with_name(f".{target.name}.{uuid4().hex}.tmp")
+        try:
+            write_image(rendered, temporary)
+            if not temporary.exists() or temporary.stat().st_size <= 0:
+                raise ValueError("帮助长图缓存为空")
+            if not has_png_magic(temporary):
+                raise ValueError("渲染器未返回 PNG 图片")
+            temporary.replace(target)
+        finally:
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError:
+                pass
+        self._prune(max(1, keep_days))
+        return target
+
+    def invalidate(self, now: datetime | None = None) -> None:
+        """删除当日全部帮助缓存，用于管理员强制刷新后重渲染。"""
+        current = now or datetime.now(CN_TZ)
+        for mode in self.MODES:
+            image = self.root / f"help-{mode}-{current.date().isoformat()}.png"
+            try:
+                image.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+    def status(self, now: datetime | None = None) -> dict[str, str]:
+        current = now or datetime.now(CN_TZ)
+        return {
+            mode: str(self.image_path(mode, current.date().isoformat()) or "")
+            for mode in self.MODES
+        }
+
+    def _prune(self, keep_days: int) -> None:
+        """每个 mode 只保留最近 keep_days 天的缓存图。"""
+        for mode in self.MODES:
+            images = sorted(
+                self.root.glob(f"help-{mode}-*.png"),
+                key=lambda item: item.name,
+                reverse=True,
+            )
+            for image in images[keep_days:]:
+                try:
+                    image.unlink()
+                except OSError:
+                    pass
