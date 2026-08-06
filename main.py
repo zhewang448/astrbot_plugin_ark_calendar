@@ -152,17 +152,48 @@ class ArkCalendarPlugin(Star):
         self._render_locks: dict[str, tuple[asyncio.Lock, int]] = {}
         self._render_locks_guard = asyncio.Lock()
         self._help_render_locks = {mode: asyncio.Lock() for mode in HelpImageCache.MODES}
+        self._startup_precache_task: asyncio.Task[None] | None = None
 
     async def initialize(self) -> None:
         await self.service.initialize()
         self._initialize_scheduler()
+        # 重载后的图片预热放到独立任务中，避免阻塞插件初始化和主事件循环。
+        self._startup_precache_task = asyncio.create_task(
+            self._precache_help_images_after_reload(),
+            name="ark_calendar_startup_help_precache",
+        )
         logger.info(f"罗德岛行动日历插件 v{self.service.plugin_version} 已初始化。")
 
     async def terminate(self) -> None:
+        if self._startup_precache_task and not self._startup_precache_task.done():
+            self._startup_precache_task.cancel()
+            await asyncio.gather(self._startup_precache_task, return_exceptions=True)
+            self._startup_precache_task = None
         if self.scheduler and self.scheduler.running:
             self.scheduler.shutdown(wait=False)
             logger.info("方舟日历定时任务调度器已关闭。")
         await self.service.close()
+
+    async def _precache_help_images_after_reload(self) -> None:
+        """重载后后台补齐当天缺失或已失效的两张帮助图。"""
+        try:
+            missing_modes = [mode for mode in HelpImageCache.MODES if not self.help_cache.lookup(mode)]
+            if not missing_modes:
+                logger.info("重载后帮助长图预热跳过：两个当日缓存均有效。")
+                return
+
+            snapshot = await self.service.snapshot()
+            for mode in missing_modes:
+                lock = self._help_render_locks[mode]
+                async with lock:
+                    if self.help_cache.lookup(mode):
+                        continue
+                    await self._render_help_image(mode, snapshot)
+            logger.info(f"重载后帮助长图预热完成：{', '.join(missing_modes)}。")
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.warning("重载后帮助长图预热失败，将在收到对应命令时按需重试。", exc_info=True)
 
     @filter.command(HELP_COMMAND.name, alias=HELP_COMMAND.alias_set)
     async def help_command(self, event: AstrMessageEvent):

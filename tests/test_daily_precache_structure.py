@@ -22,6 +22,20 @@ class DailyPrecacheStructureTests(unittest.TestCase):
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
         }
 
+    def test_startup_precache_is_scheduled_without_awaiting_it(self):
+        initialize = self.methods["initialize"]
+        source = ast.unparse(initialize)
+        self.assertIn("asyncio.create_task", source)
+        self.assertIn("self._precache_help_images_after_reload()", source)
+
+    def test_startup_precache_only_renders_missing_modes(self):
+        task = self.methods["_precache_help_images_after_reload"]
+        source = ast.unparse(task)
+        self.assertIn("self.help_cache.lookup(mode)", source)
+        self.assertIn("self.service.snapshot()", source)
+        self.assertIn("await self._render_help_image(mode, snapshot)", source)
+        self.assertIn("asyncio.CancelledError", source)
+
     def test_daily_precache_is_defined_and_registered_at_0400(self):
         self.assertIn("_daily_precache", self.methods)
         self.assertIsInstance(self.methods["_daily_precache"], ast.AsyncFunctionDef)
