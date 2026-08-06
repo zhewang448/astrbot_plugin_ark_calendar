@@ -17,10 +17,12 @@ from astrbot.core.utils.astrbot_path import get_astrbot_plugin_data_path
 
 from .core.config import config_int, config_strings, config_value, sync_builtin_message_previews
 from .core.messages import MessageCatalog
+from .core.models import parse_iso
 from .core.render_cache import CalendarImageCache
 from .core.renderer import CalendarRenderer
 from .core.scheduler_utils import normalize_weekdays, parse_schedule_times
 from .core.service import CalendarService
+from .core.subscription import SubscriptionManager
 
 CN_TZ = ZoneInfo("Asia/Shanghai")
 
@@ -81,7 +83,27 @@ HISTORICAL_COMMAND = CommandSpec(
     argument_hint="<开始日期> <结束日期>",
 )
 
-USER_COMMANDS = (CALENDAR_COMMAND, BIRTHDAY_COMMAND, STATUS_COMMAND, HELP_COMMAND)
+SUBSCRIBE_COMMAND = CommandSpec(
+    "方舟订阅",
+    ("订阅方舟活动", "订阅卡池"),
+    "订阅活动或卡池，在结束前一天提醒。",
+    argument_hint="<活动/卡池名称> [提醒时间]",
+)
+
+UNSUBSCRIBE_COMMAND = CommandSpec(
+    "方舟取消订阅",
+    ("取消订阅方舟", "取消订阅卡池"),
+    "取消订阅活动或卡池。",
+    argument_hint="<活动/卡池名称>",
+)
+
+SUBSCRIPTION_LIST_COMMAND = CommandSpec(
+    "方舟订阅列表",
+    ("我的方舟订阅", "查看订阅"),
+    "查看当前订阅的所有活动和卡池。",
+)
+
+USER_COMMANDS = (CALENDAR_COMMAND, BIRTHDAY_COMMAND, STATUS_COMMAND, SUBSCRIBE_COMMAND, UNSUBSCRIBE_COMMAND, SUBSCRIPTION_LIST_COMMAND, HELP_COMMAND)
 ADMIN_COMMANDS = (REFRESH_COMMAND, HISTORICAL_COMMAND)
 
 # （图片、来源状态、降级 manifest）。仅当状态为 "fallback" 时才有 manifest，
@@ -102,9 +124,11 @@ class ArkCalendarPlugin(Star):
         self.renderer = CalendarRenderer(self, self.service)
         self.messages = MessageCatalog(config, logger)
         self.render_cache = CalendarImageCache(self.data_dir / "render")
+        self.subscription_manager = SubscriptionManager(self.data_dir, logger)
         self.scheduler: AsyncIOScheduler | None = None
         self._scheduled_report_lock = asyncio.Lock()
         self._scheduled_birthday_greeting_lock = asyncio.Lock()
+        self._scheduled_subscription_reminder_lock = asyncio.Lock()
         self._notification_state_lock = asyncio.Lock()
         self._render_locks: dict[str, tuple[asyncio.Lock, int]] = {}
         self._render_locks_guard = asyncio.Lock()
@@ -252,6 +276,98 @@ class ArkCalendarPlugin(Star):
         except Exception:
             logger.error("历史日程测试图片生成失败。", exc_info=True)
             yield event.plain_result(self.messages.text("historical_render_failed"))
+
+    @filter.command(SUBSCRIBE_COMMAND.name, alias=SUBSCRIBE_COMMAND.alias_set)
+    async def subscribe_command(
+        self,
+        event: AstrMessageEvent,
+        item_name: str = "",
+        remind_time: str = "",
+    ):
+        """订阅活动或卡池，在结束前一天提醒。"""
+        if not item_name.strip():
+            yield event.plain_result("请输入要订阅的活动或卡池名称，例如：/方舟订阅 感谢庆典")
+            return
+
+        time_to_use = remind_time.strip() if remind_time.strip() else "12:00"
+        if not self._validate_time_format(time_to_use):
+            yield event.plain_result(self.messages.text("subscription_invalid_time"))
+            return
+
+        try:
+            snapshot = await self.service.snapshot()
+            item = self._find_timeline_item(snapshot, item_name.strip())
+            if not item:
+                yield event.plain_result(
+                    self.messages.text("subscription_item_not_found", name=item_name.strip())
+                )
+                return
+
+            user_id = str(event.message_obj.sender.user_id)
+            session_id = event.message_obj.session_id
+
+            self.subscription_manager.add_subscription(item, user_id, session_id, time_to_use)
+            yield event.plain_result(
+                self.messages.text("subscription_added", name=item.name, time=time_to_use)
+            )
+        except Exception:
+            logger.error("添加订阅失败。", exc_info=True)
+            yield event.plain_result("订阅失败，请稍后重试。")
+
+    @filter.command(UNSUBSCRIBE_COMMAND.name, alias=UNSUBSCRIBE_COMMAND.alias_set)
+    async def unsubscribe_command(self, event: AstrMessageEvent, item_name: str = ""):
+        """取消订阅活动或卡池。"""
+        if not item_name.strip():
+            yield event.plain_result("请输入要取消订阅的活动或卡池名称，例如：/方舟取消订阅 感谢庆典")
+            return
+
+        try:
+            snapshot = await self.service.snapshot()
+            item = self._find_timeline_item(snapshot, item_name.strip())
+            if not item:
+                yield event.plain_result(
+                    self.messages.text("subscription_item_not_found", name=item_name.strip())
+                )
+                return
+
+            user_id = str(event.message_obj.sender.user_id)
+            session_id = event.message_obj.session_id
+
+            if self.subscription_manager.remove_subscription(item.id, user_id, session_id):
+                yield event.plain_result(self.messages.text("subscription_removed", name=item.name))
+            else:
+                yield event.plain_result(self.messages.text("subscription_not_found", name=item.name))
+        except Exception:
+            logger.error("取消订阅失败。", exc_info=True)
+            yield event.plain_result("取消订阅失败，请稍后重试。")
+
+    @filter.command(SUBSCRIPTION_LIST_COMMAND.name, alias=SUBSCRIPTION_LIST_COMMAND.alias_set)
+    async def subscription_list_command(self, event: AstrMessageEvent):
+        """查看当前订阅的所有活动和卡池。"""
+        try:
+            user_id = str(event.message_obj.sender.user_id)
+            session_id = event.message_obj.session_id
+            subscriptions = self.subscription_manager.get_user_subscriptions(user_id, session_id)
+
+            if not subscriptions:
+                yield event.plain_result(self.messages.text("subscription_list_empty"))
+                return
+
+            lines = [self.messages.text("subscription_list_header")]
+            for i, sub in enumerate(subscriptions, 1):
+                type_label = "活动" if sub.item_type == "event" else "卡池"
+                try:
+                    end_time = parse_iso(sub.end_time).astimezone(CN_TZ)
+                    end_str = end_time.strftime("%Y-%m-%d %H:%M")
+                except (TypeError, ValueError):
+                    end_str = "时间未知"
+                status = "✓ 已提醒" if sub.notified else f"⏰ {sub.remind_time} 提醒"
+                lines.append(f"{i}. [{type_label}] {sub.item_name}\n   结束时间：{end_str}\n   提醒设置：{status}")
+
+            yield event.plain_result("\n\n".join(lines))
+        except Exception:
+            logger.error("查询订阅列表失败。", exc_info=True)
+            yield event.plain_result("查询订阅列表失败，请稍后重试。")
 
     @staticmethod
     def _historical_range(start_text: str, end_text: str) -> tuple[datetime, datetime]:
@@ -477,7 +593,8 @@ class ArkCalendarPlugin(Star):
         self.scheduler = AsyncIOScheduler(timezone=CN_TZ)
         report_jobs = self._add_scheduled_report_jobs()
         birthday_jobs = self._add_scheduled_birthday_greeting_job()
-        if not report_jobs and not birthday_jobs:
+        reminder_jobs = self._add_scheduled_subscription_reminder_job()
+        if not report_jobs and not birthday_jobs and not reminder_jobs:
             self.scheduler = None
             return
         self.scheduler.start()
@@ -553,6 +670,22 @@ class ArkCalendarPlugin(Star):
             misfire_grace_time=60,
         )
         logger.info(f"已启用自动生日祝贺：每日 {scheduled_time} 发送至 {len(targets)} 个会话。")
+        return 1
+
+    def _add_scheduled_subscription_reminder_job(self) -> int:
+        """添加订阅提醒定时任务，每小时检查一次"""
+        assert self.scheduler
+        self.scheduler.add_job(
+            self._scheduled_subscription_reminder,
+            "cron",
+            minute=0,
+            id="ark_calendar_subscription_reminder",
+            name="Ark Calendar Subscription Reminder",
+            coalesce=True,
+            max_instances=1,
+            misfire_grace_time=300,
+        )
+        logger.info("已启用订阅提醒任务：每小时检查一次。")
         return 1
 
     async def _scheduled_report(self) -> None:
@@ -641,6 +774,65 @@ class ArkCalendarPlugin(Star):
                     "【方舟日历异常告警】\n自动生日祝贺未能完成，详情请查看 AstrBot 日志。",
                     "scheduled_birthday_greeting_failed",
                 )
+
+    async def _scheduled_subscription_reminder(self) -> None:
+        """定时检查并发送订阅提醒"""
+        if self._scheduled_subscription_reminder_lock.locked():
+            logger.warning("订阅提醒任务：已有任务正在执行，本次跳过。")
+            return
+        async with self._scheduled_subscription_reminder_lock:
+            try:
+                snapshot = await self.service.snapshot()
+                self.subscription_manager.cleanup_expired(snapshot)
+                pending = self.subscription_manager.get_pending_reminders(snapshot)
+                if not pending:
+                    logger.debug("订阅提醒任务：没有需要发送的提醒。")
+                    return
+
+                logger.info(f"订阅提醒任务：找到 {len(pending)} 个待提醒订阅。")
+
+                from collections import defaultdict
+                reminders_by_session: dict[str, list[tuple[str, str, str]]] = defaultdict(list)
+
+                for sub, item in pending:
+                    try:
+                        end_time = parse_iso(item.end).astimezone(CN_TZ)
+                        end_str = end_time.strftime("%H:%M")
+                    except (TypeError, ValueError):
+                        end_str = "未知时间"
+
+                    reminders_by_session[sub.session_id].append((sub.user_id, item.name, end_str))
+
+                success_count = 0
+                for session_id, reminders in reminders_by_session.items():
+                    try:
+                        lines = []
+                        for user_id, item_name, end_str in reminders:
+                            at_user = f"@{user_id}" if self._is_group_session(session_id) else ""
+                            reminder_text = self.messages.text(
+                                "subscription_reminder",
+                                user=user_id if at_user else "您",
+                                name=item_name,
+                                end_time=end_str,
+                            )
+                            lines.append(reminder_text)
+
+                        message_text = "\n\n".join(lines)
+                        components = [Comp.Plain(text=message_text)]
+                        await self.context.send_message(session_id, MessageChain(components))
+
+                        for sub, _ in pending:
+                            if sub.session_id == session_id:
+                                self.subscription_manager.mark_notified(sub)
+
+                        success_count += len(reminders)
+                        logger.info(f"订阅提醒已发送至 {session_id}，包含 {len(reminders)} 个提醒。")
+                    except Exception:
+                        logger.error(f"向 {session_id} 发送订阅提醒失败。", exc_info=True)
+
+                logger.info(f"订阅提醒任务完成：成功发送 {success_count} 个提醒。")
+            except Exception:
+                logger.error("订阅提醒任务执行失败。", exc_info=True)
 
     def _birthday_greeting_pending_targets(self, targets: list[str], date_key: str) -> list[str]:
         stored = self.service.cache.load("birthday_greeting_state.json")
@@ -794,3 +986,38 @@ class ArkCalendarPlugin(Star):
     @staticmethod
     def _image_state_label(state: str) -> str:
         return {"cache": "最终图片缓存", "rendered": "新渲染图片", "fallback": "降级缓存图片"}.get(state, state)
+
+    def _find_timeline_item(self, snapshot, name: str):
+        """根据名称查找活动或卡池"""
+        name_normalized = name.lower().strip()
+        all_items = snapshot.events + snapshot.gacha_pools + snapshot.long_term_events
+
+        # 精确匹配
+        for item in all_items:
+            if item.name.lower() == name_normalized:
+                return item
+
+        # 模糊匹配
+        for item in all_items:
+            if name_normalized in item.name.lower() or item.name.lower() in name_normalized:
+                return item
+
+        return None
+
+    @staticmethod
+    def _validate_time_format(time_str: str) -> bool:
+        """验证时间格式 HH:MM"""
+        try:
+            parts = time_str.split(":")
+            if len(parts) != 2:
+                return False
+            hour = int(parts[0])
+            minute = int(parts[1])
+            return 0 <= hour <= 23 and 0 <= minute <= 59
+        except (ValueError, AttributeError):
+            return False
+
+    @staticmethod
+    def _is_group_session(session_id: str) -> bool:
+        """判断是否为群聊会话"""
+        return "group" in session_id.lower() or (session_id.isdigit() and len(session_id) > 9)
