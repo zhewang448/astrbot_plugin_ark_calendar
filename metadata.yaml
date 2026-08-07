@@ -1,8 +1,33 @@
 name: astrbot_plugin_ark_calendar
 display_name: 罗德岛行动日历
-desc: 聚合 PRTS、anything-ics 与卡池数据，生成罗德岛风格的行动日历，并提供干员生日查询。
-short_desc: 汇总今日副本、生日、活动、寻访、凭证、时装与模组信息。
+desc: 明日方舟行动日报与日历插件：汇总今日副本、活动、寻访、凭证、时装、模组和干员生日，生成罗德岛风格长图；支持命令查询、订阅提醒、自动日报与自动生日祝贺。
+short_desc: 明日方舟日报、行动日历、生日查询与订阅提醒。
 version: v0.4.0
 author: bushikq
 repo: https://github.com/zhewang448/astrbot_plugin_ark_calendar
+social_link: https://github.com/zhewang448
+support_platforms:
+  - aiocqhttp
+  - qq_official
+  - qq_official_webhook
+  - telegram
+  - wecom
+  - wecom_ai_bot
+  - lark
+  - dingtalk
+  - discord
+  - slack
+  - kook
+  - vocechat
+  - weixin_official_account
+  - weixin_oc
+  - satori
+  - misskey
+  - line
+  - matrix
+  - mattermost
+tags:
+  - 游戏
+  - 日报
+  - 明日方舟
 astrbot_version: ">=4.17.0"

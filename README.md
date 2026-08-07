@@ -145,6 +145,16 @@ data/plugin_data/astrbot_plugin_ark_calendar/
 
 插件升级不会覆盖这些运行时缓存。
 
+## 🖼️ 效果预览
+
+### 今日行动日历
+
+![罗德岛行动日历预览](assets/readme/daily-calendar.webp)
+
+### 指令手册
+
+![罗德岛终端手册预览](assets/readme/command-manual.webp)
+
 ## 🙏 致谢
 
 感谢以下数据来源和项目：
