@@ -31,7 +31,7 @@ PROFILES: dict[str, dict[str, str]] = {
         "subscription_list_empty": "博士目前还没有订阅任何活动或卡池喵。",
         "subscription_list_header": "博士的订阅列表喵～",
         "subscription_item_not_found": "唔，没有找到「{name}」，请使用 /方舟日历 查看当前活动和卡池喵。",
-        "subscription_reminder": "@{user} 博士，「{name}」将在明天 {end_time} 结束，请抓紧时间参与喵～",
+        "subscription_reminder": "{user}博士，「{name}」将在明天 {end_time} 结束，请抓紧时间参与喵～",
         "subscription_invalid_time": "唔，时间格式不对喵，请使用 HH:MM 格式，例如 12:00 或 09:30。",
     },
     "plain": {
@@ -58,9 +58,17 @@ PROFILES: dict[str, dict[str, str]] = {
         "subscription_list_empty": "当前没有订阅任何活动或卡池。",
         "subscription_list_header": "订阅列表",
         "subscription_item_not_found": "未找到「{name}」，请使用 /方舟日历 查看当前活动和卡池。",
-        "subscription_reminder": "@{user} 提醒：「{name}」将在明天 {end_time} 结束，请抓紧时间参与。",
+        "subscription_reminder": "{user}提醒：「{name}」将在明天 {end_time} 结束，请抓紧时间参与。",
         "subscription_invalid_time": "时间格式错误，请使用 HH:MM 格式，例如 12:00 或 09:30。",
     },
+}
+
+
+# 自定义文案里填这些哨兵值时，表示"这一句改用某个内置风格"，而不是把它当字面文案。
+# 只在整串完全等于哨兵值（忽略大小写与首尾空白）时生效，因此以 @ 开头的正常文案不受影响。
+PROFILE_SENTINELS: dict[str, str] = {
+    "@catgirl": "rhodes_catgirl",
+    "@plain": "plain",
 }
 
 
@@ -79,7 +87,12 @@ class MessageCatalog:
         template = default_template
         custom = str(self.custom_messages.get(key, "") or "").strip()
         if self.profile == "custom" and custom:
-            template = custom
+            sentinel_profile = PROFILE_SENTINELS.get(custom.lower())
+            if sentinel_profile:
+                # 逐句选内置风格：留空沿用默认风格，填哨兵值改用指定风格。
+                template = PROFILES[sentinel_profile].get(key, default_template)
+            else:
+                template = custom
         try:
             return template.format_map(defaultdict(str, values))
         except (AttributeError, IndexError, KeyError, TypeError, ValueError) as exc:

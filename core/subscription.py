@@ -207,13 +207,33 @@ class SubscriptionManager:
             return {}
 
         subs: dict[str, Subscription] = {}
+        dropped = 0
         for key, item in data.items():
             if isinstance(item, dict):
                 try:
-                    subs[key] = Subscription.from_dict(item)
+                    sub = Subscription.from_dict(item)
                 except Exception:
                     self.logger.warning(f"无法加载订阅记录：{key}", exc_info=True)
+                    continue
+                if not self._is_full_sid(sub.session_id):
+                    # 0.4.1 及更早版本存的是裸会话号，Context.send_message() 无法解析，
+                    # 这类记录永远发不出提醒，且无法反推平台，只能丢弃。
+                    dropped += 1
+                    continue
+                subs[key] = sub
+        if dropped:
+            self.logger.warning(
+                f"已丢弃 {dropped} 条旧版订阅记录：其会话标识不是完整 SID，无法投递提醒。"
+                "请重新发送 /方舟订阅 建立订阅。"
+            )
+            self._save_all_subscriptions(subs)
         return subs
+
+    @staticmethod
+    def _is_full_sid(session_id: str) -> bool:
+        """完整 SID 形如 `platform_id:message_type:session_id`，至少三段且各段非空。"""
+        parts = session_id.split(":", 2)
+        return len(parts) == 3 and all(part.strip() for part in parts)
 
     def _save_all_subscriptions(self, subs: dict[str, Subscription]) -> None:
         """保存所有订阅"""
