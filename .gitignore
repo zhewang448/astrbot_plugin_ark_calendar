@@ -1,4 +1,4 @@
-﻿__pycache__/
+__pycache__/
 *.py[cod]
 *.pyo
 .testdeps/
@@ -29,6 +29,10 @@ Thumbs.db
 
 # 本地图片资源；发布包只保留字体
 /assets/*
+
+# README 发布截图：仅纳入文档静态资源，运行时素材仍保持忽略。
+!/assets/readme/
+!/assets/readme/*.png
 !/assets/SourceHanSerifCN-Medium-6.otf
 
 # Codex 本地审查、补丁与回滚验证材料
