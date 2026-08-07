@@ -35,6 +35,7 @@ class AssetCache:
     MAX_DISK_CACHE_BYTES = 256 * 1024 * 1024
     DATA_URI_CONCURRENCY = 6
     DOWNLOAD_FAILURE_CACHE_ENTRIES = 64
+    DISK_CACHE_PRUNE_INTERVAL = 16
     ALLOWED_MIME_TYPES = {"image/png", "image/jpeg", "image/gif", "image/webp"}
     LOCAL_MIME_TYPES = {"font/otf", "font/ttf", "application/font-sfnt", "application/x-font-opentype"}
     MIME_SUFFIXES = {
@@ -62,6 +63,8 @@ class AssetCache:
         self._data_uri_cache_bytes = 0
         self._data_uri_semaphore = asyncio.Semaphore(self.DATA_URI_CONCURRENCY)
         self._failed_download_urls: OrderedDict[str, None] = OrderedDict()
+        self._downloads_since_prune = 0
+        self._disk_cache_prune_initialized = False
 
     async def data_uri(self, source: str) -> str:
         async with self._data_uri_semaphore:
@@ -155,11 +158,12 @@ class AssetCache:
                                     if written > self.MAX_DOWNLOAD_BYTES:
                                         raise AssetTooLarge(f"图片超过 {self.MAX_DOWNLOAD_BYTES} 字节限制")
                                     output.write(chunk)
-                            payload = temporary.read_bytes()
-                            if not self._matches_image_mime(payload, content_type):
+                            with temporary.open("rb") as input_file:
+                                header = input_file.read(12)
+                            if not self._matches_image_mime(header, content_type):
                                 raise ValueError("图片内容与声明类型不一致")
                             os.replace(temporary, target)
-                            self._prune_disk_cache()
+                            self._maybe_prune_disk_cache()
                             return target
                         finally:
                             try:
@@ -186,6 +190,19 @@ class AssetCache:
                 self._download_locks.pop(url, None)
             else:
                 self._download_locks[url] = (lock, references - 1)
+
+    def _maybe_prune_disk_cache(self) -> None:
+        # 首次下载仍做一次完整清理，以处理插件重启前遗留的超限缓存；
+        # 后续按批次检查，避免每个新资源都全量扫描目录。
+        if not getattr(self, "_disk_cache_prune_initialized", False):
+            self._disk_cache_prune_initialized = True
+            self._prune_disk_cache()
+            return
+        self._downloads_since_prune = getattr(self, "_downloads_since_prune", 0) + 1
+        if self._downloads_since_prune < self.DISK_CACHE_PRUNE_INTERVAL:
+            return
+        self._downloads_since_prune = 0
+        self._prune_disk_cache()
 
     def _prune_disk_cache(self) -> None:
         files: list[tuple[Path, int, int]] = []
@@ -270,10 +287,14 @@ class AssetCache:
             raise UnsafeAssetUrl("图片连接到了私网、回环或保留地址")
     def _valid_cached_file(self, path: Path) -> bool:
         try:
-            payload = path.read_bytes()
+            stat = path.stat()
+            if not path.is_file() or not 0 < stat.st_size <= self.MAX_DOWNLOAD_BYTES:
+                return False
+            with path.open("rb") as input_file:
+                header = input_file.read(12)
         except OSError:
             return False
-        return 0 < len(payload) <= self.MAX_DOWNLOAD_BYTES and bool(self._detect_image_mime(payload))
+        return bool(self._detect_image_mime(header))
 
     @classmethod
     def _detect_image_mime(cls, payload: bytes) -> str | None:

@@ -126,13 +126,13 @@ class HttpClient:
         if content is None or not hasattr(content, "iter_chunked"):
             return None
         total = 0
-        chunks: list[bytes] = []
+        payload = bytearray()
         async for chunk in content.iter_chunked(cls.CHUNK_BYTES):
             total += len(chunk)
             if total > cls.MAX_RESPONSE_BYTES:
                 raise ResponseTooLarge(f"响应体超过 {cls.MAX_RESPONSE_BYTES} 字节限制")
-            chunks.append(chunk)
-        return b"".join(chunks)
+            payload.extend(chunk)
+        return bytes(payload)
 
     @classmethod
     def _ensure_fallback_value_size(cls, value: Any, as_json: bool) -> None:

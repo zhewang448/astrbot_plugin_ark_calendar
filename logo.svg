@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+<defs><linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#0c171c"/><stop offset="1" stop-color="#1b3138"/></linearGradient><filter id="shadow"><feGaussianBlur stdDeviation="4"/></filter></defs>
+<rect width="256" height="256" rx="36" fill="url(#bg)"/>
+<path d="M41 63 63 41h130l22 22v130l-22 22H63l-22-22Z" fill="none" stroke="#6acfd2" stroke-opacity=".55" stroke-width="2"/>
+<path d="M56 54 193 54 193 195 56 195Z" fill="#000" opacity=".38" filter="url(#shadow)"/>
+<rect x="55" y="52" width="138" height="143" rx="10" fill="#f2f5f1" stroke="#fff" stroke-width="2"/>
+<path d="M55 52h138v36H55Z" fill="#0e1b20"/>
+<path d="m55 88 26-36h22L77 88Z" fill="#f8be26"/><path d="m177 88 16-22v22Z" fill="#00b1cd"/>
+<g fill="#dfe7e5" stroke="#fff"><rect x="81" y="43" width="11" height="22" rx="4"/><rect x="120" y="43" width="11" height="22" rx="4"/><rect x="159" y="43" width="11" height="22" rx="4"/></g>
+<text x="70" y="76" font-family="Segoe UI,Arial" font-size="16" font-weight="800" fill="#fff">ARK</text><text x="116" y="76" font-family="Segoe UI,Arial" font-size="6" fill="#b1d8d8">OPS / CAL</text>
+<g stroke="#31575b" stroke-opacity=".4" stroke-width="1"><path d="M70 111h110M70 128h110M70 145h110M70 162h110"/><path d="M86 102v72M102 102v72M118 102v72M134 102v72M150 102v72M166 102v72"/></g>
+<path d="M106 107v70" stroke="#f8be26" stroke-width="3"/><path d="m106 104 5 6-5 6-5-6Z" fill="#ffd75b"/>
+<path d="m75 165 18-14 21 3 16-12 20 5 18-19 19 5" fill="none" stroke="#00b1cd" stroke-width="3"/>
+<g fill="#fff" stroke="#00b1cd" stroke-width="2"><circle cx="75" cy="165" r="3"/><circle cx="93" cy="151" r="3"/><circle cx="114" cy="154" r="3"/><circle cx="130" cy="142" r="3"/><circle cx="150" cy="147" r="3"/><circle cx="168" cy="128" r="3"/><circle cx="187" cy="133" r="3"/></g>
+<path d="m181 96 23-23-9 29 18-4-23 23 5-29Z" fill="#ffd75b"/>
+<rect x="69" y="180" width="111" height="8" rx="4" fill="#0e1b20"/><rect x="75" y="182" width="18" height="4" fill="#f8be26"/><rect x="99" y="182" width="29" height="4" fill="#00b1cd"/><rect x="134" y="182" width="36" height="4" fill="#739196"/>
+<path d="M31 82V59l13-13M31 82l16-16M218 178l9 9v21" fill="none" stroke="#00b1cd" stroke-width="3"/><path d="m218 178 9 9" stroke="#f8be26" stroke-width="3"/>
+</svg>
