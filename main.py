@@ -57,6 +57,7 @@ class CommandSpec:
         return f"{invocation}\n{self.summary}"
 
 
+# 指令定义顺序与 README 的“指令与别称”表保持一致：普通指令在前，管理员指令在后。
 CALENDAR_COMMAND = CommandSpec(
     "方舟日历",
     ("方舟日报", "明日方舟日历", "舟日历"),
@@ -76,11 +77,31 @@ STATUS_COMMAND = CommandSpec(
     "查看最近快照、数据源、降级状态和最终图片缓存。",
     example="/方舟日历状态",
 )
+SUBSCRIBE_COMMAND = CommandSpec(
+    "方舟订阅",
+    ("订阅方舟活动", "订阅卡池"),
+    "订阅活动或卡池，在结束前一天提醒。",
+    argument_hint="<活动/卡池名称> [提醒时间]",
+    example="/方舟订阅 危机合约 · 熔火行动 20:30",
+)
+UNSUBSCRIBE_COMMAND = CommandSpec(
+    "方舟取消订阅",
+    ("取消订阅方舟", "取消订阅卡池"),
+    "取消订阅活动或卡池。",
+    argument_hint="<活动/卡池名称>",
+    example="/方舟取消订阅 危机合约 · 熔火行动",
+)
+SUBSCRIPTION_LIST_COMMAND = CommandSpec(
+    "方舟订阅列表",
+    ("我的方舟订阅", "查看订阅"),
+    "查看当前订阅的所有活动和卡池。",
+    example="/方舟订阅列表",
+)
 HELP_COMMAND = CommandSpec(
-    "方舟日报帮助",
-    ("方舟日历帮助", "明日方舟日报帮助"),
+    "方舟日历帮助",
+    ("方舟日报帮助", "明日方舟日报帮助"),
     "查看本帮助。",
-    example="/方舟日报帮助",
+    example="/方舟日历帮助",
 )
 REFRESH_COMMAND = CommandSpec(
     "方舟日历刷新",
@@ -94,29 +115,6 @@ HISTORICAL_COMMAND = CommandSpec(
     "生成仅含活动与寻访时间轴的历史测试图片，例如：/方舟历史日程测试 2026-07-01 2026-07-31。",
     argument_hint="<开始日期> <结束日期>",
     example="/方舟历史日程测试 2026-07-01 2026-07-31",
-)
-
-SUBSCRIBE_COMMAND = CommandSpec(
-    "方舟订阅",
-    ("订阅方舟活动", "订阅卡池"),
-    "订阅活动或卡池，在结束前一天提醒。",
-    argument_hint="<活动/卡池名称> [提醒时间]",
-    example="/方舟订阅 危机合约 · 熔火行动 20:30",
-)
-
-UNSUBSCRIBE_COMMAND = CommandSpec(
-    "方舟取消订阅",
-    ("取消订阅方舟", "取消订阅卡池"),
-    "取消订阅活动或卡池。",
-    argument_hint="<活动/卡池名称>",
-    example="/方舟取消订阅 危机合约 · 熔火行动",
-)
-
-SUBSCRIPTION_LIST_COMMAND = CommandSpec(
-    "方舟订阅列表",
-    ("我的方舟订阅", "查看订阅"),
-    "查看当前订阅的所有活动和卡池。",
-    example="/方舟订阅列表",
 )
 
 SUBSCRIPTION_COMMANDS = (SUBSCRIBE_COMMAND, UNSUBSCRIBE_COMMAND, SUBSCRIPTION_LIST_COMMAND)
@@ -152,102 +150,48 @@ class ArkCalendarPlugin(Star):
         self._render_locks: dict[str, tuple[asyncio.Lock, int]] = {}
         self._render_locks_guard = asyncio.Lock()
         self._help_render_locks = {mode: asyncio.Lock() for mode in HelpImageCache.MODES}
+        self._startup_precache_task: asyncio.Task[None] | None = None
 
     async def initialize(self) -> None:
         await self.service.initialize()
         self._initialize_scheduler()
+        # 重载后的图片预热放到独立任务中，避免阻塞插件初始化和主事件循环。
+        self._startup_precache_task = asyncio.create_task(
+            self._precache_help_images_after_reload(),
+            name="ark_calendar_startup_help_precache",
+        )
         logger.info(f"罗德岛行动日历插件 v{self.service.plugin_version} 已初始化。")
 
     async def terminate(self) -> None:
+        if self._startup_precache_task and not self._startup_precache_task.done():
+            self._startup_precache_task.cancel()
+            await asyncio.gather(self._startup_precache_task, return_exceptions=True)
+            self._startup_precache_task = None
         if self.scheduler and self.scheduler.running:
             self.scheduler.shutdown(wait=False)
             logger.info("方舟日历定时任务调度器已关闭。")
         await self.service.close()
 
-    @filter.command(HELP_COMMAND.name, alias=HELP_COMMAND.alias_set)
-    async def help_command(self, event: AstrMessageEvent):
-        """查看方舟日报的指令、别称与配置说明。"""
-        image = await self._help_image("full")
-        if image:
-            yield event.image_result(str(image))
-        else:
-            yield event.plain_result(self._help_text())
-
-    @staticmethod
-    def _command_rows(commands: tuple[CommandSpec, ...]) -> list[dict[str, Any]]:
-        """帮助页命令卡片数据；aliases 保持为列表，模板逐个渲染成标签。"""
-        return [
-            {
-                "name": command.name,
-                "aliases": list(command.aliases),
-                "summary": command.summary,
-                "argument_hint": command.argument_hint,
-                "example": command.example,
-            }
-            for command in commands
-        ]
-
-    @staticmethod
-    def _argument_text(event: AstrMessageEvent, spec: CommandSpec, *fallback: str) -> str:
-        """取命令后面的参数原文。
-
-        框架按空白切分位置参数，名称里带空格（如「危机合约 · 熔火行动」）会被切碎，
-        因此优先从消息原文里剥掉命令名自己解析；拿不到原文时退回拼接位置参数。
-        """
-        raw = getattr(event, "message_str", "") or ""
-        argument_text = strip_command_prefix(raw, spec.invocations)
-        if argument_text:
-            return argument_text
-        return " ".join(part for part in fallback if part).strip()
-
-    async def _help_image(self, mode: str) -> Path | str | None:
-        """取当日缓存的帮助长图；未命中则渲染并写入缓存。
-
-        帮助页内容按自然日变化（倒计时、可订阅日程），因此缓存以
-        (mode, 日期) 为键，当天复用同一张图，跨日自动失效。
-        失败时返回 None 由调用方回退到文字版。
-        """
-        cached = self.help_cache.lookup(mode)
-        if cached:
-            logger.info(f"帮助长图命中当日缓存：{mode}。")
-            return cached
-        lock = self._help_render_locks.get(mode)
-        if lock is None:
-            return await self._render_help_image(mode)
-        async with lock:
-            cached = self.help_cache.lookup(mode)
-            if cached:
-                logger.info(f"帮助长图缓存由并发请求生成：{mode}。")
-                return cached
-            return await self._render_help_image(mode)
-
-    async def _render_help_image(self, mode: str, snapshot=None) -> Path | str | None:
-        """实际调用渲染器并写入当日缓存；缓存写失败不影响本次返回。"""
+    async def _precache_help_images_after_reload(self) -> None:
+        """重载后后台补齐当天缺失或已失效的两张帮助图。"""
         try:
-            snapshot = snapshot or await self.service.snapshot()
-            if mode == "subscribe":
-                user_rows = self._command_rows(SUBSCRIPTION_COMMANDS)
-                admin_rows: list[dict[str, Any]] = []
-            else:
-                user_rows = self._command_rows(USER_COMMANDS)
-                admin_rows = self._command_rows(ADMIN_COMMANDS)
-            rendered = await self.renderer.help_page(
-                snapshot,
-                user_rows,
-                admin_rows,
-                mode=mode,
-            )
+            missing_modes = [mode for mode in HelpImageCache.MODES if not self.help_cache.lookup(mode)]
+            if not missing_modes:
+                logger.info("重载后帮助长图预热跳过：两个当日缓存均有效。")
+                return
+
+            snapshot = await self.service.snapshot()
+            for mode in missing_modes:
+                lock = self._help_render_locks[mode]
+                async with lock:
+                    if self.help_cache.lookup(mode):
+                        continue
+                    await self._render_help_image(mode, snapshot)
+            logger.info(f"重载后帮助长图预热完成：{', '.join(missing_modes)}。")
+        except asyncio.CancelledError:
+            raise
         except Exception:
-            logger.error("生成方舟帮助长图失败，已回退到文字版本。", exc_info=True)
-            return None
-        try:
-            stored = self.help_cache.store(rendered, mode)
-            if stored:
-                logger.info(f"帮助长图已写入当日缓存：{stored}")
-                return stored
-        except Exception:
-            logger.warning(f"帮助长图缓存写入失败，本次直接使用渲染结果：{mode}。", exc_info=True)
-        return rendered
+            logger.warning("重载后帮助长图预热失败，将在收到对应命令时按需重试。", exc_info=True)
 
     @filter.command(CALENDAR_COMMAND.name, alias=CALENDAR_COMMAND.alias_set)
     async def calendar_command(self, event: AstrMessageEvent):
@@ -331,53 +275,6 @@ class ArkCalendarPlugin(Star):
         except Exception:
             logger.error("读取方舟日历状态失败。", exc_info=True)
             yield event.plain_result(self.messages.text("status_failed"))
-
-    @filter.permission_type(filter.PermissionType.ADMIN)
-    @filter.command(REFRESH_COMMAND.name, alias=REFRESH_COMMAND.alias_set)
-    async def refresh_command(self, event: AstrMessageEvent):
-        """管理员强制刷新数据并重新生成日历。"""
-        yield event.plain_result(self.messages.text("force_refresh_started"))
-        try:
-            snapshot = await self.service.snapshot(force=True)
-            # 帮助页会展示可订阅日程；强制刷新后不能继续复用旧帮助图。
-            self.help_cache.invalidate()
-            quality_notice = self._data_quality_notice()
-            if quality_notice:
-                yield event.plain_result(quality_notice)
-            image, image_state, fallback_manifest = await self._calendar_image(snapshot)
-            if image_state == "fallback":
-                yield event.plain_result(self._fallback_notice(fallback_manifest))
-            yield event.image_result(str(image))
-            await self._observe_health(snapshot, "管理员强制刷新")
-        except Exception:
-            logger.error("强制刷新方舟日历失败。", exc_info=True)
-            await self._notify_admin(
-                "【方舟日历异常告警】\n管理员强制刷新失败，详情请查看 AstrBot 日志。",
-                "refresh_failed",
-            )
-            yield event.plain_result(self.messages.text("render_failed"))
-
-    @filter.permission_type(filter.PermissionType.ADMIN)
-    @filter.command(HISTORICAL_COMMAND.name, alias=HISTORICAL_COMMAND.alias_set)
-    async def historical_schedule_command(
-        self,
-        event: AstrMessageEvent,
-        start_date: str = "",
-        end_date: str = "",
-    ):
-        """管理员渲染指定过去日期区间的活动与寻访时间轴。"""
-        try:
-            start, end = self._historical_range(start_date, end_date)
-        except ValueError as exc:
-            yield event.plain_result(self.messages.text("historical_range_invalid", error=exc))
-            return
-        try:
-            snapshot = await self.service.historical_snapshot(start, end)
-            image = await self.renderer.historical_calendar(snapshot)
-            yield event.image_result(str(image))
-        except Exception:
-            logger.error("历史日程测试图片生成失败。", exc_info=True)
-            yield event.plain_result(self.messages.text("historical_render_failed"))
 
     @filter.command(SUBSCRIBE_COMMAND.name, alias=SUBSCRIBE_COMMAND.alias_set)
     async def subscribe_command(
@@ -477,6 +374,147 @@ class ArkCalendarPlugin(Star):
         except Exception:
             logger.error("查询订阅列表失败。", exc_info=True)
             yield event.plain_result("查询订阅列表失败，请稍后重试。")
+
+    @filter.command(HELP_COMMAND.name, alias=HELP_COMMAND.alias_set)
+    async def help_command(self, event: AstrMessageEvent):
+        """查看方舟日历的指令、别称与配置说明。"""
+        image = await self._help_image("full")
+        if image:
+            yield event.image_result(str(image))
+        else:
+            yield event.plain_result(self._help_text())
+
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    @filter.command(REFRESH_COMMAND.name, alias=REFRESH_COMMAND.alias_set)
+    async def refresh_command(self, event: AstrMessageEvent):
+        """管理员强制刷新数据并重新生成日历。"""
+        yield event.plain_result(self.messages.text("force_refresh_started"))
+        try:
+            snapshot = await self.service.snapshot(force=True)
+            # 帮助页会展示可订阅日程；强制刷新后不能继续复用旧帮助图。
+            self.help_cache.invalidate()
+            quality_notice = self._data_quality_notice()
+            if quality_notice:
+                yield event.plain_result(quality_notice)
+            image, image_state, fallback_manifest = await self._calendar_image(snapshot)
+            if image_state == "fallback":
+                yield event.plain_result(self._fallback_notice(fallback_manifest))
+            yield event.image_result(str(image))
+            await self._observe_health(snapshot, "管理员强制刷新")
+        except Exception:
+            logger.error("强制刷新方舟日历失败。", exc_info=True)
+            await self._notify_admin(
+                "【方舟日历异常告警】\n管理员强制刷新失败，详情请查看 AstrBot 日志。",
+                "refresh_failed",
+            )
+            yield event.plain_result(self.messages.text("render_failed"))
+
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    @filter.command(HISTORICAL_COMMAND.name, alias=HISTORICAL_COMMAND.alias_set)
+    async def historical_schedule_command(
+        self,
+        event: AstrMessageEvent,
+        start_date: str = "",
+        end_date: str = "",
+    ):
+        """管理员渲染指定过去日期区间的活动与寻访时间轴。"""
+        try:
+            start, end = self._historical_range(start_date, end_date)
+        except ValueError as exc:
+            yield event.plain_result(self.messages.text("historical_range_invalid", error=exc))
+            return
+        try:
+            snapshot = await self.service.historical_snapshot(start, end)
+            image = await self.renderer.historical_calendar(snapshot)
+            yield event.image_result(str(image))
+        except Exception:
+            logger.error("历史日程测试图片生成失败。", exc_info=True)
+            yield event.plain_result(self.messages.text("historical_render_failed"))
+
+
+    @staticmethod
+    def _command_rows(commands: tuple[CommandSpec, ...]) -> list[dict[str, Any]]:
+        """帮助页命令卡片数据；aliases 保持为列表，模板逐个渲染成标签。"""
+        return [
+            {
+                "name": command.name,
+                "aliases": list(command.aliases),
+                "summary": command.summary,
+                "argument_hint": command.argument_hint,
+                "example": command.example,
+            }
+            for command in commands
+        ]
+
+    @staticmethod
+    def _argument_text(event: AstrMessageEvent, spec: CommandSpec, *fallback: str) -> str:
+        """取命令后面的参数原文。
+
+        框架按空白切分位置参数，名称里带空格（如「危机合约 · 熔火行动」）会被切碎，
+        因此优先从消息原文里剥掉命令名自己解析；拿不到原文时退回拼接位置参数。
+        """
+        raw = getattr(event, "message_str", "") or ""
+        argument_text = strip_command_prefix(raw, spec.invocations)
+        if argument_text:
+            return argument_text
+        return " ".join(part for part in fallback if part).strip()
+
+    async def _help_image(self, mode: str) -> Path | str | None:
+        """取当日缓存的帮助长图；未命中则渲染并写入缓存。
+
+        帮助页内容按自然日变化（倒计时、可订阅日程），因此缓存以
+        (mode, 日期) 为键，当天复用同一张图，跨日自动失效。
+        失败时返回 None 由调用方回退到文字版。
+        """
+        cached = self.help_cache.lookup(mode)
+        if cached:
+            logger.info(f"帮助长图命中当日缓存：{mode}。")
+            return cached
+        lock = self._help_render_locks.get(mode)
+        if lock is None:
+            return await self._render_help_image(mode)
+        async with lock:
+            cached = self.help_cache.lookup(mode)
+            if cached:
+                logger.info(f"帮助长图缓存由并发请求生成：{mode}。")
+                return cached
+            return await self._render_help_image(mode)
+
+    async def _render_help_image(self, mode: str, snapshot=None) -> Path | str | None:
+        """实际调用渲染器并写入当日缓存；缓存写失败不影响本次返回。"""
+        try:
+            snapshot = snapshot or await self.service.snapshot()
+            if mode == "subscribe":
+                user_rows = self._command_rows(SUBSCRIPTION_COMMANDS)
+                admin_rows: list[dict[str, Any]] = []
+            else:
+                user_rows = self._command_rows(USER_COMMANDS)
+                admin_rows = self._command_rows(ADMIN_COMMANDS)
+            rendered = await self.renderer.help_page(
+                snapshot,
+                user_rows,
+                admin_rows,
+                mode=mode,
+            )
+        except Exception:
+            logger.error("生成方舟帮助长图失败，已回退到文字版本。", exc_info=True)
+            return None
+        try:
+            stored = self.help_cache.store(rendered, mode)
+            if stored:
+                logger.info(f"帮助长图已写入当日缓存：{stored}")
+                return stored
+        except Exception:
+            logger.warning(f"帮助长图缓存写入失败，本次直接使用渲染结果：{mode}。", exc_info=True)
+        return rendered
+
+
+
+
+
+
+
+
 
     @staticmethod
     def _historical_range(start_text: str, end_text: str) -> tuple[datetime, datetime]:
