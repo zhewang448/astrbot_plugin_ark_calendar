@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import unittest
 from astrbot_plugin.core.command_args import (
-    normalize_text,
     parse_hhmm,
     split_name_and_time,
     strip_command_prefix,

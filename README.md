@@ -6,7 +6,7 @@
 
 <a href="https://count.getloli.com/"><img src="https://count.getloli.com/get/@:astrbot_plugin_ark_calendar?theme=rule34" alt="访问统计"></a>
 
-## v0.4.1
+## v0.7.99
 
 罗德岛行动日历是一款明日方舟信息聚合插件，聚合 PRTS、anything-ics 与 ArknightsGachaData，生成 1440px 宽的活动、寻访与今日作战信息长图，并提供干员生日文字查询、当天生日祝福和独立的自动生日祝贺。
 

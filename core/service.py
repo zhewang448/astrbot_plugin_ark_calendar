@@ -60,7 +60,14 @@ class CalendarService:
         self.refresh_lock = asyncio.Lock()
         self._event_detail_semaphore = asyncio.Semaphore(4)
         self._birthdays: list[dict] = []
+        self._birthday_index_source: list[dict] | None = None
+        self._birthday_by_normalized_name: dict[str, dict] = {}
+        self._birthday_by_display_name: dict[str, dict] = {}
+        self._birthday_search_records: tuple[tuple[str, str, dict], ...] = ()
+        self._birthday_names: tuple[str, ...] = ()
+        self._birthdays_by_date: dict[tuple[int, int], tuple[dict, ...]] = {}
         self._operator_index: dict[str, dict] = {}
+        self._avatar_url_cache: dict[str, str] | None = None
         self.last_snapshot: CalendarSnapshot | None = None
         self.last_known_good_snapshot: CalendarSnapshot | None = None
         self.last_refresh_error = ""
@@ -428,27 +435,62 @@ class CalendarService:
 
     async def find_operator(self, query: str) -> tuple[Operator | None, list[str]]:
         await self._ensure_reference_data()
+        if getattr(self, "_birthday_index_source", None) is not self._birthdays:
+            self._set_birthdays(self._birthdays)
         normalized = self.normalize_name(query)
-        by_name = {self.normalize_name(item["name"]): item for item in self._birthdays}
-        record = by_name.get(normalized)
+        record = self._birthday_by_normalized_name.get(normalized)
         if record:
             return self._operator_summary(record), []
         candidates = [
-            item["name"]
-            for item in self._birthdays
-            if normalized and normalized in self.normalize_name(item["name"])
+            name
+            for name, normalized_name, _ in self._birthday_search_records
+            if normalized and normalized in normalized_name
         ]
         if not candidates:
             candidates = difflib.get_close_matches(
                 query,
-                [item["name"] for item in self._birthdays],
+                self._birthday_names,
                 n=5,
                 cutoff=0.45,
             )
         if len(candidates) == 1:
-            record = next(item for item in self._birthdays if item["name"] == candidates[0])
-            return self._operator_summary(record), []
+            record = self._birthday_by_display_name.get(candidates[0])
+            if record is not None:
+                return self._operator_summary(record), []
         return None, candidates[:8]
+
+    def _set_birthdays(self, data: Any) -> None:
+        """保存生日数据并一次性建立查询与日期索引。"""
+        birthdays = data if isinstance(data, list) else []
+        by_normalized_name: dict[str, dict] = {}
+        by_display_name: dict[str, dict] = {}
+        search_records: list[tuple[str, str, dict]] = []
+        names: list[str] = []
+        by_date: dict[tuple[int, int], list[dict]] = {}
+        for item in birthdays:
+            if not isinstance(item, dict):
+                continue
+            name = item.get("name")
+            if not isinstance(name, str) or not name.strip():
+                continue
+            normalized_name = self.normalize_name(name)
+            if not normalized_name:
+                continue
+            by_normalized_name[normalized_name] = item
+            by_display_name.setdefault(name, item)
+            search_records.append((name, normalized_name, item))
+            names.append(name)
+            birthday = item.get("birthday") or {}
+            month, day = birthday.get("month"), birthday.get("day")
+            if isinstance(month, int) and isinstance(day, int):
+                by_date.setdefault((month, day), []).append(item)
+        self._birthdays = birthdays
+        self._birthday_index_source = birthdays
+        self._birthday_by_normalized_name = by_normalized_name
+        self._birthday_by_display_name = by_display_name
+        self._birthday_search_records = tuple(search_records)
+        self._birthday_names = tuple(names)
+        self._birthdays_by_date = {key: tuple(items) for key, items in by_date.items()}
 
     def _operator_summary(self, record: dict) -> Operator:
         birthday = record.get("birthday") or {}
@@ -469,7 +511,7 @@ class CalendarService:
                 "birthdays.json", "anything-ics / 生日", self.anything.birthdays(), [],
                 self._valid_birthdays, timedelta(days=7),
             )
-            self._birthdays = data
+            self._set_birthdays(data)
         if not self._operator_index:
             data, _ = await self._fetch_cached(
                 "operators.json", "PRTS / 干员一览", self.prts.operator_index(), {},
@@ -492,25 +534,17 @@ class CalendarService:
         )
         birthdays, events_raw, home, operator_index, overview = [item[0] for item in source_results]
         source_states = [item[1] for item in source_results]
-        self._birthdays = birthdays
+        self._set_birthdays(birthdays)
         self._operator_index = operator_index
         home = self._refresh_home_status(home, now)
         home = await self._hydrate_home_highlights(home)
 
-        today_records = [
-            item for item in birthdays
-            if (item.get("birthday") or {}).get("month") == now.month
-            and (item.get("birthday") or {}).get("day") == now.day
-        ]
+        today_records = self._birthdays_by_date.get((now.month, now.day), ())
         upcoming_groups: list[BirthdayGroup] = []
         required_names = [item["name"] for item in today_records]
         for offset in range(1, 10):
             day = now + timedelta(days=offset)
-            records = [
-                item for item in birthdays
-                if (item.get("birthday") or {}).get("month") == day.month
-                and (item.get("birthday") or {}).get("day") == day.day
-            ]
+            records = self._birthdays_by_date.get((day.month, day.day), ())
             if records:
                 upcoming_groups.append(BirthdayGroup(
                     day.month,
@@ -831,8 +865,11 @@ class CalendarService:
     async def _safe_avatar_urls(self, names: list[str]) -> dict[str, str]:
         assert self.prts
         unique_names = list(dict.fromkeys(name for name in names if name))
-        cached = self.cache.load("avatar_urls.json")
-        cached = cached if isinstance(cached, dict) else {}
+        cached = getattr(self, "_avatar_url_cache", None)
+        if cached is None:
+            loaded = self.cache.load("avatar_urls.json")
+            cached = dict(loaded) if isinstance(loaded, dict) else {}
+            self._avatar_url_cache = cached
         missing = [name for name in unique_names if not cached.get(name)]
         if missing:
             try:

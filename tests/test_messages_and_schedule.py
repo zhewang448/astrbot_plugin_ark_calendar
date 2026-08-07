@@ -73,7 +73,7 @@ class MessageAndScheduleTests(unittest.TestCase):
         root = Path(__file__).resolve().parents[1]
         schema = json.loads((root / "_conf_schema.json").read_text(encoding="utf-8"))
         cache_items = schema["cache_and_render"]["items"]
-        self.assertEqual(cache_items["render_timeout_seconds"]["default"], 30)
+        self.assertEqual(cache_items["render_timeout_seconds"]["default"], 300)
         self.assertIn("不会扫描更旧图片", cache_items["final_image_cache_keep_count"]["hint"])
         templates = schema["messages"]["items"]["custom_messages"]["template_schema"]
         self.assertIn("data_degraded_notice", templates)

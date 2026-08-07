@@ -1,7 +1,5 @@
 import unittest
-from datetime import datetime
 from pathlib import Path
-from zoneinfo import ZoneInfo
 
 from astrbot_plugin.core.models import CalendarSnapshot, TimelineItem
 from astrbot_plugin.core.renderer import CalendarRenderer
@@ -16,7 +14,7 @@ class FakePlugin:
         self.calls.append({"return_url": return_url, "options": options})
         if self.error:
             raise self.error
-        return "rendered.png"
+        return b"\x89PNG\r\n\x1a\nrendered"
 
 
 class RendererErrorTests(unittest.IsolatedAsyncioTestCase):
@@ -27,7 +25,7 @@ class RendererErrorTests(unittest.IsolatedAsyncioTestCase):
 
         result = await renderer._html_render("template", {}, {"type": "png"})
 
-        self.assertEqual(result, "rendered.png")
+        self.assertEqual(result, b"\x89PNG\r\n\x1a\nrendered")
         self.assertFalse(plugin.calls[0]["return_url"])
 
     async def test_other_render_error_is_preserved(self):
@@ -79,7 +77,6 @@ class HistoricalRendererTests(unittest.IsolatedAsyncioTestCase):
             assets = Assets()
             gacha = Gacha()
 
-        tz = ZoneInfo("Asia/Shanghai")
         plugin = FakePlugin()
         renderer = CalendarRenderer.__new__(CalendarRenderer)
         renderer.plugin = plugin
@@ -96,7 +93,7 @@ class HistoricalRendererTests(unittest.IsolatedAsyncioTestCase):
         )
         result = await renderer.historical_calendar(snapshot)
 
-        self.assertEqual(result, "rendered.png")
+        self.assertEqual(result, b"\x89PNG\r\n\x1a\nrendered")
         self.assertEqual(plugin.calls[0]["options"]["type"], "png")
 
 
