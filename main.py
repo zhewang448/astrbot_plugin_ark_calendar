@@ -645,7 +645,7 @@ class ArkCalendarPlugin(Star):
         try:
             rendered = await self.renderer.calendar(snapshot)
             elapsed = time.monotonic() - started
-            warning_seconds = self._int_value("cache_and_render", "slow_render_warning_seconds", 15, minimum=1, maximum=3600)
+            warning_seconds = self._int_value("cache_and_render", "slow_render_warning_seconds", 60, minimum=1, maximum=3600)
             if elapsed >= warning_seconds:
                 logger.warning(f"方舟日历渲染耗时较长：{elapsed:.2f} 秒。")
             else:
@@ -1163,8 +1163,15 @@ class ArkCalendarPlugin(Star):
     async def _notify_admin(self, text: str, event: str) -> None:
         if not self._notifications_enabled():
             return
-        logger.warning(f"方舟日历管理员通知：{event}")
-        await self._send_admin_text(text)
+        logger.warning(f"方舟日历管理员通知开始发送：{event}")
+        succeeded, failed = await self._send_admin_text(text)
+        if succeeded:
+            logger.info(f"方舟日历管理员通知已送达：{event}（{len(succeeded)} 个 SID）。")
+        if failed:
+            logger.warning(
+                f"方舟日历管理员通知未送达：{event}（{len(failed)} 个 SID）。"
+                "请确认 admin_sid_list 使用对应会话 /sid 返回的完整 SID，且该消息平台已连接。"
+            )
 
     async def _send_admin_text(
         self,
@@ -1175,8 +1182,15 @@ class ArkCalendarPlugin(Star):
         failed: list[str] = []
         for sid in targets or self._admin_sids():
             try:
-                await self.context.send_message(sid, MessageChain([Comp.Plain(text=text)]))
-                succeeded.append(sid)
+                delivered = await self.context.send_message(sid, MessageChain([Comp.Plain(text=text)]))
+                if delivered:
+                    succeeded.append(sid)
+                else:
+                    failed.append(sid)
+                    logger.warning(
+                        f"向方舟日历管理员 SID {sid} 发送通知未被消息平台接收。"
+                        "请使用该会话 /sid 返回的完整 SID，并确认对应平台在线。"
+                    )
             except Exception:
                 failed.append(sid)
                 logger.error(f"向方舟日历管理员 SID {sid} 发送通知失败。", exc_info=True)

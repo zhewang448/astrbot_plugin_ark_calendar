@@ -13,7 +13,7 @@
 
 - **`Subscription` 类**：订阅数据模型
   - 存储订阅的所有信息（活动ID、名称、类型、结束时间、用户ID、会话ID、提醒时间等）
-  
+
 - **`SubscriptionManager` 类**：订阅管理器
   - `add_subscription()`: 添加或更新订阅
   - `remove_subscription()`: 取消订阅
