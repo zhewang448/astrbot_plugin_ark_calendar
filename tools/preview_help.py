@@ -127,7 +127,7 @@ def build_context(mode: str) -> dict:
             else "罗德岛行动日历的全部指令与当前可订阅日程都在这里，"
             "指令支持别名，订阅提醒在结束前一天送达。"
         ),
-        "version": "0.4.0",
+        "version": "0.4.1",
         "user_commands": rows(SUB_NAMES if subscribe else USER_NAMES),
         "admin_commands": [] if subscribe else rows(ADMIN_NAMES),
         "subscribable_items": SUBSCRIBABLE,
