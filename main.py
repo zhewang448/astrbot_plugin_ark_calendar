@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -12,6 +13,7 @@ import astrbot.api.message_components as Comp
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from astrbot.api import AstrBotConfig, logger
 from astrbot.api.event import AstrMessageEvent, MessageChain, filter
+from astrbot.api.platform import MessageType
 from astrbot.api.star import Context, Star
 from astrbot.core.utils.astrbot_path import get_astrbot_plugin_data_path
 
@@ -23,7 +25,7 @@ from .core.render_cache import CalendarImageCache, HelpImageCache
 from .core.renderer import CalendarRenderer
 from .core.scheduler_utils import normalize_weekdays, parse_schedule_times
 from .core.service import CalendarService
-from .core.subscription import SubscriptionManager
+from .core.subscription import Subscription, SubscriptionManager
 
 CN_TZ = ZoneInfo("Asia/Shanghai")
 
@@ -116,6 +118,10 @@ HISTORICAL_COMMAND = CommandSpec(
     argument_hint="<开始日期> <结束日期>",
     example="/方舟历史日程测试 2026-07-01 2026-07-31",
 )
+
+# 发送侧确认会把 Comp.At 转成平台原生提醒的适配器类型（PlatformMetadata.name）。
+# 其余平台要么只降级成纯文本，要么直接忽略 At 组件，因此统一走纯文本前缀。
+AT_CAPABLE_PLATFORMS = frozenset({"aiocqhttp", "discord", "kook", "lark", "satori"})
 
 SUBSCRIPTION_COMMANDS = (SUBSCRIBE_COMMAND, UNSUBSCRIBE_COMMAND, SUBSCRIPTION_LIST_COMMAND)
 USER_COMMANDS = (CALENDAR_COMMAND, BIRTHDAY_COMMAND, STATUS_COMMAND, *SUBSCRIPTION_COMMANDS, HELP_COMMAND)
@@ -308,7 +314,9 @@ class ArkCalendarPlugin(Star):
                 return
 
             user_id = str(event.message_obj.sender.user_id)
-            session_id = event.message_obj.session_id
+            # 必须存完整 SID（platform_id:message_type:session_id），
+            # message_obj.session_id 只是裸会话号，Context.send_message() 无法解析。
+            session_id = event.unified_msg_origin
 
             self.subscription_manager.add_subscription(item, user_id, session_id, time_to_use)
             yield event.plain_result(
@@ -337,7 +345,7 @@ class ArkCalendarPlugin(Star):
                 return
 
             user_id = str(event.message_obj.sender.user_id)
-            session_id = event.message_obj.session_id
+            session_id = event.unified_msg_origin
 
             if self.subscription_manager.remove_subscription(item.id, user_id, session_id):
                 yield event.plain_result(self.messages.text("subscription_removed", name=item.name))
@@ -352,7 +360,7 @@ class ArkCalendarPlugin(Star):
         """查看当前订阅的所有活动和卡池。"""
         try:
             user_id = str(event.message_obj.sender.user_id)
-            session_id = event.message_obj.session_id
+            session_id = event.unified_msg_origin
             subscriptions = self.subscription_manager.get_user_subscriptions(user_id, session_id)
 
             if not subscriptions:
@@ -1009,44 +1017,65 @@ class ArkCalendarPlugin(Star):
 
                 logger.info(f"订阅提醒任务：找到 {len(pending)} 个待提醒订阅。")
 
-                from collections import defaultdict
-                reminders_by_session: dict[str, list[tuple[str, str, str]]] = defaultdict(list)
-
+                # 按 (会话, 订阅者) 分组：同一人在同一会话的多条提醒合并成一条消息，
+                # 但不同订阅者各发一条，避免一条消息里出现多个 At 组件。
+                grouped: dict[tuple[str, str], list[Subscription]] = defaultdict(list)
+                end_texts: dict[str, str] = {}
                 for sub, item in pending:
                     try:
-                        end_time = parse_iso(item.end).astimezone(CN_TZ)
-                        end_str = end_time.strftime("%H:%M")
+                        end_texts[sub.item_id] = parse_iso(item.end).astimezone(CN_TZ).strftime("%H:%M")
                     except (TypeError, ValueError):
-                        end_str = "未知时间"
-
-                    reminders_by_session[sub.session_id].append((sub.user_id, item.name, end_str))
+                        end_texts[sub.item_id] = "未知时间"
+                    grouped[(sub.session_id, sub.user_id)].append(sub)
 
                 success_count = 0
-                for session_id, reminders in reminders_by_session.items():
+                for (session_id, user_id), subs in grouped.items():
                     try:
-                        lines = []
-                        for user_id, item_name, end_str in reminders:
-                            at_user = f"@{user_id}" if self._is_group_session(session_id) else ""
-                            reminder_text = self.messages.text(
+                        use_at = self._platform_supports_at(session_id)
+                        # 白名单平台由 At 组件负责提醒，正文不再拼 @；其他群聊退化为纯文本 @。
+                        if use_at:
+                            mention = ""
+                        elif self._is_group_session(session_id):
+                            mention = f"@{user_id} "
+                        else:
+                            mention = ""
+
+                        lines = [
+                            self.messages.text(
                                 "subscription_reminder",
-                                user=user_id if at_user else "您",
-                                name=item_name,
-                                end_time=end_str,
+                                user=mention if index == 0 else "",
+                                name=sub.item_name,
+                                end_time=end_texts.get(sub.item_id, "未知时间"),
                             )
-                            lines.append(reminder_text)
+                            for index, sub in enumerate(subs)
+                        ]
 
-                        message_text = "\n\n".join(lines)
-                        components = [Comp.Plain(text=message_text)]
-                        await self.context.send_message(session_id, MessageChain(components))
+                        components: list[Any] = []
+                        if use_at:
+                            components.append(Comp.At(qq=user_id, name=user_id))
+                        components.append(Comp.Plain(text="\n\n".join(lines)))
 
-                        for sub, _ in pending:
-                            if sub.session_id == session_id:
-                                self.subscription_manager.mark_notified(sub)
+                        delivered = await self.context.send_message(session_id, MessageChain(components))
+                        if delivered is False:
+                            logger.warning(
+                                f"订阅提醒未投递至 {session_id}（订阅者 {user_id}）："
+                                "请确认该 SID 对应的平台适配器仍在运行。"
+                            )
+                            continue
 
-                        success_count += len(reminders)
-                        logger.info(f"订阅提醒已发送至 {session_id}，包含 {len(reminders)} 个提醒。")
+                        # 只标记本次确实发出去的订阅，失败的留到下一轮重试。
+                        for sub in subs:
+                            self.subscription_manager.mark_notified(sub)
+
+                        success_count += len(subs)
+                        logger.info(
+                            f"订阅提醒已发送至 {session_id}（订阅者 {user_id}，"
+                            f"{len(subs)} 个提醒，At={'是' if use_at else '否'}）。"
+                        )
                     except Exception:
-                        logger.error(f"向 {session_id} 发送订阅提醒失败。", exc_info=True)
+                        logger.error(
+                            f"向 {session_id} 发送订阅提醒失败（订阅者 {user_id}）。", exc_info=True
+                        )
 
                 logger.info(f"订阅提醒任务完成：成功发送 {success_count} 个提醒。")
             except Exception:
@@ -1237,6 +1266,41 @@ class ArkCalendarPlugin(Star):
         return None
 
     @staticmethod
-    def _is_group_session(session_id: str) -> bool:
-        """判断是否为群聊会话"""
-        return "group" in session_id.lower() or (session_id.isdigit() and len(session_id) > 9)
+    def _split_sid(session_id: str) -> tuple[str, str] | None:
+        """把完整 SID 拆成 (platform_id, message_type)。
+
+        SID 形如 `platform_id:message_type:session_id`，与 AstrBot 的
+        `MessageSession.from_str()` 保持一致的 `split(":", 2)` 语义；
+        段数不足说明不是完整 SID，返回 None 由调用方按未知处理。
+        """
+        parts = session_id.split(":", 2)
+        if len(parts) < 3:
+            return None
+        return parts[0], parts[1]
+
+    @classmethod
+    def _is_group_session(cls, session_id: str) -> bool:
+        """判断是否为群聊会话；无法解析出完整 SID 时按非群聊处理。"""
+        parsed = cls._split_sid(session_id)
+        if not parsed:
+            return False
+        return parsed[1] == MessageType.GROUP_MESSAGE.value
+
+    def _platform_supports_at(self, session_id: str) -> bool:
+        """判断该会话所在平台能否把 Comp.At 转成原生提醒。
+
+        SID 首段是平台实例 id（用户可改名），不是适配器类型，因此要经
+        `get_platform_inst()` 取 `meta().name` 才能与白名单比对。取不到实例
+        （平台未启用等）时按不支持处理，退回纯文本。
+        """
+        parsed = self._split_sid(session_id)
+        if not parsed:
+            return False
+        try:
+            platform = self.context.get_platform_inst(parsed[0])
+        except Exception:
+            logger.warning(f"解析平台实例失败，订阅提醒退回纯文本：{parsed[0]}", exc_info=True)
+            return False
+        if platform is None:
+            return False
+        return platform.meta().name in AT_CAPABLE_PLATFORMS

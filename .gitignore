@@ -32,7 +32,7 @@ Thumbs.db
 
 # README 发布截图：仅纳入文档静态资源，运行时素材仍保持忽略。
 !/assets/readme/
-!/assets/readme/*.png
+!/assets/readme/*
 !/assets/SourceHanSerifCN-Medium-6.otf
 
 # Codex 本地审查、补丁与回滚验证材料

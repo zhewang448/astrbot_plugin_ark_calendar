@@ -20,9 +20,31 @@
 
 ### 修复
 
+- **订阅提醒此前完全无法送达。** 订阅记录保存的是 `event.message_obj.session_id`，它只是裸会话号（aiocqhttp 群聊即纯群号）；而投递走的 `Context.send_message()` 需要完整 SID，其内部 `MessageSession.from_str()` 对裸会话号会抛 `ValueError`，异常又被提醒任务的 `except Exception` 吞掉。表现为订阅可以添加、`/方舟订阅列表` 可以查看，但到点静默不发送。三处订阅指令改为保存 `event.unified_msg_origin`。
+  - 旧版本写入的裸会话号无法反推平台，加载时会被丢弃并记录警告，需重新发送 `/方舟订阅` 建立订阅。
+- **群聊提醒改用真实 At 组件。** 此前把 `@用户ID` 直接拼进 `Comp.Plain` 文本，在各平台都只是一串普通文字，不会触发任何提醒。现在对能把 `At` 转成平台原生提醒的适配器（`aiocqhttp`、`discord`、`kook`、`lark`、`satori`）发送 `Comp.At`，其余平台仍退化为纯文本 `@`，保证提醒正文在任何平台都完整可读。
+  - 平台类型经 `Context.get_platform_inst(platform_id).meta().name` 解析，而非直接取 SID 首段——首段是用户可改名的平台实例 id，不是适配器类型。
+  - 提醒按 `(会话, 订阅者)` 分组，同一人的多条提醒合并为一条消息，不同订阅者各发一条，避免单条消息内出现多个 `At` 组件。
+  - 私聊不再出现 `@您` 这类文案。
+- **群聊判定改用 `MessageType`。** 原先用 `"group" in sid` 配合 `sid.isdigit() and len(sid) > 9` 猜测，现按 SID 中段与 `MessageType.GROUP_MESSAGE` 比对。
+- **自定义文案标签在 WebUI 显示为字段名。** `template_schema` 各条目使用的 `title` 不被 AstrBot 的 `ObjectEditor.vue` 读取（它只取 `name` → `description` → 原始 key），导致配置页显示 `rendering_started` 这类裸 key。17 条全部改为 `name`。
+- **仅标记实际发出的提醒。** 投递返回未送达时不再标记为已提醒，留待下一轮重试。
 - **清理无用导入。** 移除 `core/subscription.py` 中未使用的 `dataclasses.field`，静态检查恢复全绿。
 
+### 新增
+
+- **自定义文案补齐至全部 25 条。** `template_schema` 此前缺少 8 条订阅相关文案（`subscription_added`、`subscription_removed`、`subscription_not_found`、`subscription_list_empty`、`subscription_list_header`、`subscription_item_not_found`、`subscription_reminder`、`subscription_invalid_time`），选择“自定义文案”时无法修改。现与内置风格一一对应。
+- **自定义文案支持逐条选择来源。** 每条文案可填入哨兵值指定使用哪个内置风格：`@catgirl` 用罗德岛轻度猫娘，`@plain` 用极简正式，留空维持原有行为（回退猫娘），其余内容按自定义文本处理。大小写不敏感。
+
 ## 0.4.1 - 2026-08-07
+
+### 新增
+
+- **活动与卡池订阅提醒。** 新增 `/方舟订阅`、`/方舟取消订阅`、`/方舟订阅列表` 三条指令，可订阅当前快照中的活动或卡池，在结束前一天的指定时间（默认 `12:00`）提醒；订阅按“用户 + 会话”隔离，群聊提醒会附带 @ 订阅者。订阅记录写入 `subscriptions/subscriptions.json`，插件重启和升级都会保留。
+- **订阅提醒定时任务。** 每小时整点检查一次到期订阅，同时清理数据源中已不存在且已结束的记录；每条订阅只提醒一次，重新订阅会重置提醒状态。
+- **订阅名称支持空格。** 新增 `core/command_args.py`，统一处理指令前缀剥离与“名称 + 可选 HH:MM 提醒时间”的切分，`危机合约 · 熔火行动 20:30` 这类参数可以正确解析。
+- **每日 04:00 预缓存。** 每天凌晨强制刷新数据源，并预渲染当天的日历长图与两种帮助长图（`full`、`subscribe`），让白天的首次调用直接命中缓存。
+- **帮助长图缓存。** 帮助图按天和模式缓存；插件重载后会在后台预热缺失的当日帮助图，不阻塞初始化。
 
 ### 修复
 
@@ -35,6 +57,7 @@
   - `cache_and_render.data_cache_ttl_minutes`：`30` 分钟调整为 `120` 分钟。
   - `cache_and_render.slow_render_warning_seconds`：`15` 秒调整为 `60` 秒。
   - `cache_and_render.render_timeout_seconds`：`30` 秒调整为 `300` 秒。
+- **寻访日程增加卡池类型标签。** 寻访时间轴的行标题前显示卡池类型徽章，长名称改为单行省略；今日生日干员名称字号由 25px 调整为 28px。
 
 ## 0.4.0 - 2026-08-06
 

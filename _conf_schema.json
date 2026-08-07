@@ -222,112 +222,160 @@
         "description": "自定义消息模板",
         "type": "dict",
         "default": {},
-        "hint": "选择“自定义文案”后可编辑。留空的项目会回退到罗德岛轻度猫娘默认文案。可用变量：{name}、{birthday}、{details}、{candidates}、{names}、{count}。",
+        "hint": "选择“自定义文案”后可编辑。每一项都可以独立选择来源：留空或填 @catgirl 用“罗德岛轻度猫娘”的这句，填 @plain 用“极简正式”的这句，填其他任何文字则作为你自己的文案。可用变量：{name}、{birthday}、{details}、{candidates}、{names}、{count}、{user}、{time}、{error}。",
         "condition": {
           "profile": "custom"
         },
         "template_schema": {
           "rendering_started": {
-            "title": "开始渲染",
+            "name": "开始渲染",
             "type": "string",
             "default": "",
             "hint": "手动执行 /方舟日历 且最终图片缓存未命中、即将获取数据或调用渲染器时发送。"
           },
           "force_refresh_started": {
-            "title": "强制刷新开始",
+            "name": "强制刷新开始",
             "type": "string",
             "default": "",
             "hint": "管理员执行 /方舟日历刷新 后，在强制刷新数据源和重新渲染前发送。"
           },
           "scheduled_report_caption": {
-            "title": "定时日报标题",
+            "name": "定时日报标题",
             "type": "string",
             "default": "",
             "hint": "定时日报成功发送时，作为日历图片前的说明文字发送到目标 SID。"
           },
           "cached_fallback_notice": {
-            "title": "缓存降级提示",
+            "name": "缓存降级提示",
             "type": "string",
             "default": "",
             "hint": "数据刷新或图片渲染失败、改为发送最近一次保存的日历图片时发送。"
           },
           "data_degraded_notice": {
-            "title": "数据降级提示",
+            "name": "数据降级提示",
             "type": "string",
             "default": "",
             "hint": "部分数据源使用缓存、辅助信息缺失或使用最近一次完整快照时发送；支持 {details}。"
           },
           "render_failed": {
-            "title": "渲染失败提示",
+            "name": "渲染失败提示",
             "type": "string",
             "default": "",
             "hint": "没有可用的最终图片缓存，且日历生成或渲染最终失败时发送给命令发起者。"
           },
           "birthday_missing_query": {
-            "title": "未填写干员名称",
+            "name": "未填写干员名称",
             "type": "string",
             "default": "",
             "hint": "用户执行 /方舟生日 但未填写干员名称时发送。"
           },
           "birthday_found": {
-            "title": "生日查询成功",
+            "name": "生日查询成功",
             "type": "string",
             "default": "",
             "hint": "成功查询到干员生日时发送。可用 {name}、{birthday}、{details}。"
           },
           "birthday_today_greeting": {
-            "title": "今日生日查询祝福",
+            "name": "今日生日查询祝福",
             "type": "string",
             "default": "",
             "hint": "用户使用 /方舟生日 查询到的干员当天生日时，追加在生日查询结果后。可用 {name}、{birthday}、{details}。"
           },
           "scheduled_birthday_greeting": {
-            "title": "自动生日祝贺文案",
+            "name": "自动生日祝贺文案",
             "type": "string",
             "default": "",
             "hint": "自动生日祝贺任务在当天有寿星时发送。可用 {names}、{count}。"
           },
           "birthday_unknown": {
-            "title": "生日未公开",
+            "name": "生日未公开",
             "type": "string",
             "default": "",
             "hint": "找到干员但生日尚未公开或数据源未记录时发送。可用 {name}、{details}。"
           },
           "birthday_not_found": {
-            "title": "未找到干员",
+            "name": "未找到干员",
             "type": "string",
             "default": "",
             "hint": "未找到匹配干员时发送。可用 {name}。"
           },
           "birthday_candidates": {
-            "title": "多个候选干员",
+            "name": "多个候选干员",
             "type": "string",
             "default": "",
             "hint": "模糊匹配到多个干员、需要用户补全名称时发送。可用 {candidates}。"
           },
           "birthday_lookup_failed": {
-            "title": "生日查询失败",
+            "name": "生日查询失败",
             "type": "string",
             "default": "",
             "hint": "生日查询的数据准备或检索失败时发送。"
           },
           "status_failed": {
-            "title": "状态查询失败",
+            "name": "状态查询失败",
             "type": "string",
             "default": "",
             "hint": "读取方舟日历状态失败时发送。"
           },
           "historical_range_invalid": {
-            "title": "历史日程参数错误",
+            "name": "历史日程参数错误",
             "type": "string",
             "default": "",
             "hint": "管理员执行历史日程测试但日期参数无效时发送。可用 {error}。"
           },
           "historical_render_failed": {
-            "title": "历史日程生成失败",
+            "name": "历史日程生成失败",
             "type": "string",
             "default": "",
             "hint": "历史日程图片生成失败时发送。"
+          },
+          "subscription_added": {
+            "name": "订阅成功",
+            "type": "string",
+            "default": "",
+            "hint": "成功订阅活动或卡池时发送。可用 {name}、{time}。"
+          },
+          "subscription_removed": {
+            "name": "取消订阅成功",
+            "type": "string",
+            "default": "",
+            "hint": "成功取消订阅时发送。可用 {name}。"
+          },
+          "subscription_not_found": {
+            "name": "未订阅该项目",
+            "type": "string",
+            "default": "",
+            "hint": "取消订阅时发现没有对应订阅记录时发送。可用 {name}。"
+          },
+          "subscription_list_empty": {
+            "name": "订阅列表为空",
+            "type": "string",
+            "default": "",
+            "hint": "查询订阅列表但当前没有任何订阅时发送。"
+          },
+          "subscription_list_header": {
+            "name": "订阅列表标题",
+            "type": "string",
+            "default": "",
+            "hint": "订阅列表的首行标题，后面追加逐条订阅明细。"
+          },
+          "subscription_item_not_found": {
+            "name": "未找到活动或卡池",
+            "type": "string",
+            "default": "",
+            "hint": "订阅或取消订阅时，名称在当前时间轴中找不到对应活动或卡池时发送。可用 {name}。"
+          },
+          "subscription_reminder": {
+            "name": "订阅到期提醒",
+            "type": "string",
+            "default": "",
+            "hint": "订阅的活动或卡池即将结束时，由每小时的检查任务发送。可用 {user}、{name}、{end_time}；{user} 仅在需要纯文本 @ 的群聊中有值，支持原生 At 的平台和私聊均为空。"
+          },
+          "subscription_invalid_time": {
+            "name": "提醒时间格式错误",
+            "type": "string",
+            "default": "",
+            "hint": "订阅时填写的提醒时间不是合法 HH:MM 时发送。"
           }
         }
       }
