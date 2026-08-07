@@ -6,6 +6,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from .models import CalendarSnapshot, parse_iso
+from .render_cache import validate_rendered_png
 
 CN_TZ = ZoneInfo("Asia/Shanghai")
 
@@ -100,13 +101,21 @@ class CalendarRenderer:
 
     def _render_timeout_ms(self) -> int:
         try:
-            seconds = int(self.service.value("cache_and_render", "render_timeout_seconds", 30))
+            seconds = int(self.service.value("cache_and_render", "render_timeout_seconds", 300))
         except (AttributeError, TypeError, ValueError):
-            seconds = 30
+            seconds = 300
         return min(300, max(5, seconds)) * 1000
 
-    async def _html_render(self, template: str, data: dict, options: dict) -> str:
-        return await self.plugin.html_render(template, data, return_url=False, options=options)
+    async def _html_render(self, template: str, data: dict, options: dict) -> str | Path | bytes:
+        rendered = await self.plugin.html_render(template, data, return_url=False, options=options)
+        try:
+            validate_rendered_png(rendered)
+        except (FileNotFoundError, TypeError, ValueError) as exc:
+            timeout_seconds = max(1, int(options.get("timeout", 0)) // 1000)
+            raise RuntimeError(
+                f"T2I 渲染未返回有效 PNG 图片（超时设置：{timeout_seconds} 秒）：{exc}"
+            ) from exc
+        return rendered
 
     def _timeline(self, item, start, end, now):
         s, e = parse_iso(item.start), parse_iso(item.end)

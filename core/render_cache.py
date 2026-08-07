@@ -28,14 +28,34 @@ def has_png_magic(path: Path) -> bool:
         return False
 
 
+def validate_rendered_png(rendered: str | Path | bytes) -> None:
+    """验证渲染器输出是非空 PNG，避免把空字节一路传到缓存和消息发送阶段。"""
+    if isinstance(rendered, bytes):
+        if len(rendered) <= len(PNG_MAGIC):
+            raise ValueError("渲染器返回空图片")
+        if not rendered.startswith(PNG_MAGIC):
+            raise ValueError("渲染器未返回 PNG 图片")
+        return
+    if not isinstance(rendered, (str, Path)):
+        raise TypeError(f"渲染器返回了不支持的图片类型：{type(rendered).__name__}")
+    source = Path(rendered)
+    try:
+        if not source.is_file():
+            raise FileNotFoundError(f"渲染器未返回可用图片文件：{rendered}")
+        if source.stat().st_size <= 8:
+            raise ValueError("渲染器返回空图片")
+    except OSError as exc:
+        raise FileNotFoundError(f"渲染器未返回可用图片文件：{rendered}") from exc
+    if not has_png_magic(source):
+        raise ValueError("渲染器未返回 PNG 图片")
+
+
 def write_image(rendered: str | Path | bytes, target: Path) -> None:
+    validate_rendered_png(rendered)
     if isinstance(rendered, bytes):
         target.write_bytes(rendered)
         return
-    source = Path(rendered)
-    if not source.exists() or not source.is_file():
-        raise FileNotFoundError(f"渲染器未返回可用图片文件：{rendered}")
-    shutil.copyfile(source, target)
+    shutil.copyfile(Path(rendered), target)
 
 
 class CalendarImageCache:

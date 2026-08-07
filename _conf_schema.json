@@ -124,7 +124,7 @@
       "data_cache_ttl_minutes": {
         "description": "数据快照缓存时间（分钟）",
         "type": "int",
-        "default": 30,
+        "default": 120,
         "hint": "数据快照有效期；跨北京时间零点会自动失效。"
       },
       "final_image_cache_enabled": {
@@ -154,13 +154,13 @@
       "slow_render_warning_seconds": {
         "description": "慢渲染日志阈值（秒）",
         "type": "int",
-        "default": 15,
+        "default": 60,
         "hint": "超过该时间会记录警告日志。"
       },
       "render_timeout_seconds": {
         "description": "T2I 渲染超时（秒）",
         "type": "int",
-        "default": 30,
+        "default": 300,
         "hint": "主日历和历史日程图片共用；有效范围 5–300 秒，远程 T2I 较慢时可适当提高。"
       },
       "fallback_max_age_hours": {

@@ -161,7 +161,7 @@ class CalendarService:
 
     def cache_ttl(self) -> timedelta:
         return timedelta(minutes=self.int_value(
-            "cache_and_render", "data_cache_ttl_minutes", 30,
+            "cache_and_render", "data_cache_ttl_minutes", 120,
             minimum=1, maximum=10080, legacy_key="cache_ttl_minutes",
         ))
 
