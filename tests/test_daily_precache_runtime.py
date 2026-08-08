@@ -5,6 +5,7 @@ import importlib
 import sys
 import types
 import unittest
+from enum import Enum
 from pathlib import Path
 from unittest.mock import AsyncMock
 
@@ -57,6 +58,14 @@ def _install_astrbot_stubs() -> None:
 
     star.Context = object
     star.Star = Star
+    platform = types.ModuleType("astrbot.api.platform")
+
+    class MessageType(Enum):
+        GROUP_MESSAGE = "GroupMessage"
+        FRIEND_MESSAGE = "FriendMessage"
+        OTHER_MESSAGE = "OtherMessage"
+
+    platform.MessageType = MessageType
     components = types.ModuleType("astrbot.api.message_components")
     core = types.ModuleType("astrbot.core")
     utils = types.ModuleType("astrbot.core.utils")
@@ -68,6 +77,7 @@ def _install_astrbot_stubs() -> None:
         "astrbot.api": api,
         "astrbot.api.event": event,
         "astrbot.api.star": star,
+        "astrbot.api.platform": platform,
         "astrbot.api.message_components": components,
         "astrbot.core": core,
         "astrbot.core.utils": utils,
@@ -100,15 +110,29 @@ class _HelpCache:
         return Path(f"/{mode}.png") if mode in self.cached_modes else None
 
 
+def _outcome(quality: str = "fresh", error: str = ""):
+    """构造 snapshot_with_outcome 返回的本次刷新结果。"""
+    return types.SimpleNamespace(
+        quality=quality, error=error, used_cache=False, source_states=[],
+    )
+
+
 class DailyPrecacheRuntimeTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.plugin = main.ArkCalendarPlugin.__new__(main.ArkCalendarPlugin)
         self.plugin._daily_precache_lock = asyncio.Lock()
+        # __init__ 设的默认值；这里用 __new__ 绕过了 __init__，需手动补上。
+        self.plugin._daily_precache_time = "04:00"
         self.plugin.help_cache = _HelpCache()
         self.plugin._notify_admin = AsyncMock()
         self.plugin._observe_health = AsyncMock()
+        # 预缓存时间与撞车检测都要读配置，缺省返回传入的 default。
+        self.config: dict[tuple[str, str], object] = {}
+        self.plugin._value = lambda group, key, default=None: self.config.get(
+            (group, key), default,
+        )
 
-    def test_registers_callable_daily_job_at_0400(self):
+    def test_registers_callable_daily_job_at_default_0400(self):
         self.plugin.scheduler = _Scheduler()
 
         self.assertEqual(self.plugin._add_daily_precache_job(), 1)
@@ -119,9 +143,31 @@ class DailyPrecacheRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(kwargs["minute"], 0)
         self.assertEqual(kwargs["id"], "ark_calendar_daily_precache")
 
+    def test_precache_shifts_off_a_colliding_report_time(self):
+        """撞上日报时必须顺延而不是放弃：预缓存是帮助图当天唯一的重渲染点。"""
+        self.plugin.scheduler = _Scheduler()
+        self.config[("scheduled_report", "enabled")] = True
+        self.config[("scheduled_report", "target_sid_list")] = ["aiocqhttp:GroupMessage:1"]
+        self.config[("scheduled_report", "times")] = ["04:00"]
+
+        self.assertEqual(self.plugin._add_daily_precache_job(), 1)
+        _, kwargs = self.plugin.scheduler.jobs[0]
+        self.assertEqual((kwargs["hour"], kwargs["minute"]), (4, 10))
+        self.assertEqual(self.plugin._daily_precache_time, "04:10")
+
+    def test_precache_disabled_creates_no_job(self):
+        self.plugin.scheduler = _Scheduler()
+        self.config[("cache_and_render", "daily_precache_enabled")] = False
+
+        self.assertEqual(self.plugin._add_daily_precache_job(), 0)
+        self.assertEqual(self.plugin.scheduler.jobs, [])
+
     async def test_refreshes_once_and_populates_calendar_and_both_help_modes(self):
         snapshot = object()
-        self.plugin.service = types.SimpleNamespace(snapshot=AsyncMock(return_value=snapshot))
+        outcome = object()
+        self.plugin.service = types.SimpleNamespace(
+            snapshot_with_outcome=AsyncMock(return_value=(snapshot, outcome)),
+        )
         self.plugin._calendar_image = AsyncMock(return_value=(Path("/calendar.png"), "rendered", None))
 
         async def render_help(mode, actual_snapshot):
@@ -133,19 +179,24 @@ class DailyPrecacheRuntimeTests(unittest.IsolatedAsyncioTestCase):
 
         await self.plugin._daily_precache()
 
-        self.plugin.service.snapshot.assert_awaited_once_with(force=True)
+        self.plugin.service.snapshot_with_outcome.assert_awaited_once_with(force=True)
         self.plugin._calendar_image.assert_awaited_once_with(snapshot)
         self.assertEqual(self.plugin.help_cache.invalidated, 1)
         self.assertEqual(
             [call.args for call in self.plugin._render_help_image.await_args_list],
             [("full", snapshot), ("subscribe", snapshot)],
         )
-        self.plugin._observe_health.assert_awaited_once_with(snapshot, "每日预缓存")
+        # 告警判定必须收到"本次刷新"的 outcome，而不是快照：全局 last_refresh_*
+        # 会被其他并发任务覆盖，传快照就退回到旧的错误判定了。
+        self.plugin._observe_health.assert_awaited_once_with(outcome, "每日预缓存")
         self.plugin._notify_admin.assert_not_awaited()
 
-    async def test_help_failure_does_not_prevent_the_other_help_mode_from_caching(self):
+    async def test_help_failure_only_logs_and_does_not_notify_admin(self):
         snapshot = object()
-        self.plugin.service = types.SimpleNamespace(snapshot=AsyncMock(return_value=snapshot))
+        outcome = object()
+        self.plugin.service = types.SimpleNamespace(
+            snapshot_with_outcome=AsyncMock(return_value=(snapshot, outcome)),
+        )
         self.plugin._calendar_image = AsyncMock(return_value=(Path("/calendar.png"), "rendered", None))
 
         async def render_help(mode, actual_snapshot):
@@ -163,14 +214,14 @@ class DailyPrecacheRuntimeTests(unittest.IsolatedAsyncioTestCase):
             [("full", snapshot), ("subscribe", snapshot)],
         )
         self.assertEqual(self.plugin.help_cache.cached_modes, {"subscribe"})
-        self.plugin._notify_admin.assert_awaited_once_with(
-            "【方舟日历异常告警】\n每日 04:00 预缓存未能生成帮助图：full。详情请查看 AstrBot 日志。",
-            "daily_precache_help_failed",
-        )
-        self.plugin._observe_health.assert_awaited_once_with(snapshot, "每日预缓存")
+        # 帮助图只是缓存预热，收到命令会按需重渲染，不影响日报投递，因此只记日志。
+        self.plugin._notify_admin.assert_not_awaited()
+        self.plugin._observe_health.assert_awaited_once_with(outcome, "每日预缓存")
 
     async def test_failure_notifies_admin_and_does_not_escape_scheduler_job(self):
-        self.plugin.service = types.SimpleNamespace(snapshot=AsyncMock(side_effect=RuntimeError("network")))
+        self.plugin.service = types.SimpleNamespace(
+            snapshot_with_outcome=AsyncMock(side_effect=RuntimeError("network")),
+        )
         self.plugin._calendar_image = AsyncMock()
         self.plugin._render_help_image = AsyncMock()
 
@@ -179,6 +230,8 @@ class DailyPrecacheRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.plugin._notify_admin.assert_awaited_once()
         self.plugin._calendar_image.assert_not_awaited()
         self.plugin._render_help_image.assert_not_awaited()
+        # 刷新就失败时不能清帮助缓存，否则当天连旧图都没了。
+        self.assertEqual(self.plugin.help_cache.invalidated, 0)
 
 
 if __name__ == "__main__":
