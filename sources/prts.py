@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import PurePosixPath
 from urllib.parse import quote, unquote, urljoin, urlparse
 from zoneinfo import ZoneInfo
@@ -11,6 +11,13 @@ from bs4 import BeautifulSoup
 from .http import HttpClient
 
 CN_TZ = ZoneInfo("Asia/Shanghai")
+# 明日方舟服务器 04:00 日切，00:00-04:00 期间游戏内仍是前一天的开放表。
+GAME_DAILY_RESET_HOUR = 4
+
+
+def game_weekday(now: datetime | None = None) -> int:
+    """按游戏日切（04:00）折算的周几，取值与 datetime.weekday() 一致。"""
+    return ((now or datetime.now(CN_TZ)) - timedelta(hours=GAME_DAILY_RESET_HOUR)).weekday()
 
 
 class PrtsSource:
@@ -23,8 +30,9 @@ class PrtsSource:
         html = await self.http.text(f"{self.base_url}/")
         soup = BeautifulSoup(html, "html.parser")
         compact = soup.get_text(" ", strip=True)
-        resource_schedule = self._resource_schedule(soup, (now or datetime.now(CN_TZ)).weekday(), self.base_url)
-        chip_schedule = self._chip_schedule(soup, (now or datetime.now(CN_TZ)).weekday(), self.base_url)
+        weekday = game_weekday(now)
+        resource_schedule = self._resource_schedule(soup, weekday, self.base_url)
+        chip_schedule = self._chip_schedule(soup, weekday, self.base_url)
         supplies = [item["name"] for item in resource_schedule if item.get("open")]
         chips = [item["name"] for item in chip_schedule if item.get("open")]
         if not supplies:

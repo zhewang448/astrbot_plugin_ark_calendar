@@ -29,7 +29,7 @@ from .models import (
 from ..sources.anything_ics import AnythingIcsSource
 from ..sources.gacha import GachaSource
 from ..sources.http import HttpClient, PublicResolver
-from ..sources.prts import PrtsSource
+from ..sources.prts import PrtsSource, game_weekday
 
 CN_TZ = ZoneInfo("Asia/Shanghai")
 
@@ -660,6 +660,7 @@ class CalendarService:
     @staticmethod
     def _refresh_home_status(home: dict, now: datetime) -> dict:
         result = dict(home)
+        weekday = game_weekday(now)
         for key in ("resource_schedule", "chip_schedule"):
             schedules = []
             for item in home.get(key, []) or []:
@@ -668,7 +669,7 @@ class CalendarService:
                 current["open"] = bool(
                     current.get("always_open")
                     or current.get("all_open")
-                    or now.weekday() in allowed
+                    or weekday in allowed
                 )
                 schedules.append(current)
             result[key] = schedules
