@@ -133,6 +133,12 @@ CalendarImageResult = tuple[Path | str, str, dict[str, Any] | None]
 
 
 class ArkCalendarPlugin(Star):
+    # 明日方舟服务器日切时间，活动与卡池基本都在此刻结束。
+    GAME_DAILY_RESET = (4, 0)
+    # 预缓存与定时日报撞车时的顺延步长与最大尝试次数。
+    PRECACHE_SHIFT_MINUTES = 10
+    PRECACHE_SHIFT_ATTEMPTS = 6
+
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
         self.config = config
@@ -153,6 +159,7 @@ class ArkCalendarPlugin(Star):
         self._scheduled_subscription_reminder_lock = asyncio.Lock()
         self._notification_state_lock = asyncio.Lock()
         self._daily_precache_lock = asyncio.Lock()
+        self._daily_precache_time = "04:00"
         self._render_locks: dict[str, tuple[asyncio.Lock, int]] = {}
         self._render_locks_guard = asyncio.Lock()
         self._help_render_locks = {mode: asyncio.Lock() for mode in HelpImageCache.MODES}
@@ -213,15 +220,15 @@ class ArkCalendarPlugin(Star):
         if self._send_rendering_notice():
             yield event.plain_result(self.messages.text("rendering_started"))
         try:
-            snapshot = await self.service.snapshot()
-            quality_notice = self._data_quality_notice()
+            snapshot, outcome = await self.service.snapshot_with_outcome()
+            quality_notice = self._data_quality_notice(outcome)
             if quality_notice:
                 yield event.plain_result(quality_notice)
             image, image_state, fallback_manifest = await self._calendar_image(snapshot)
             if image_state == "fallback":
                 yield event.plain_result(self._fallback_notice(fallback_manifest))
             yield event.image_result(str(image))
-            await self._observe_health(snapshot, "手动日历")
+            await self._observe_health(outcome, "手动日历")
         except Exception:
             logger.error("生成方舟日历失败。", exc_info=True)
             await self._notify_admin(
@@ -274,10 +281,10 @@ class ArkCalendarPlugin(Star):
     async def status_command(self, event: AstrMessageEvent):
         """查看最近一次快照、数据源和最终图片缓存状态。"""
         try:
-            snapshot = await self.service.snapshot()
+            snapshot, outcome = await self.service.snapshot_with_outcome()
             logger.info("已响应方舟日历状态查询。")
-            yield event.plain_result(self._format_status(snapshot))
-            await self._observe_health(snapshot, "状态查询")
+            yield event.plain_result(self._format_status(snapshot, outcome))
+            await self._observe_health(outcome, "状态查询")
         except Exception:
             logger.error("读取方舟日历状态失败。", exc_info=True)
             yield event.plain_result(self.messages.text("status_failed"))
@@ -398,17 +405,17 @@ class ArkCalendarPlugin(Star):
         """管理员强制刷新数据并重新生成日历。"""
         yield event.plain_result(self.messages.text("force_refresh_started"))
         try:
-            snapshot = await self.service.snapshot(force=True)
+            snapshot, outcome = await self.service.snapshot_with_outcome(force=True)
             # 帮助页会展示可订阅日程；强制刷新后不能继续复用旧帮助图。
             self.help_cache.invalidate()
-            quality_notice = self._data_quality_notice()
+            quality_notice = self._data_quality_notice(outcome)
             if quality_notice:
                 yield event.plain_result(quality_notice)
             image, image_state, fallback_manifest = await self._calendar_image(snapshot)
             if image_state == "fallback":
                 yield event.plain_result(self._fallback_notice(fallback_manifest))
             yield event.image_result(str(image))
-            await self._observe_health(snapshot, "管理员强制刷新")
+            await self._observe_health(outcome, "管理员强制刷新")
         except Exception:
             logger.error("强制刷新方舟日历失败。", exc_info=True)
             await self._notify_admin(
@@ -689,8 +696,8 @@ class ArkCalendarPlugin(Star):
         time_text = str((manifest or {}).get("snapshot_generated_at", "") or "未知")
         return f"{self.messages.text('cached_fallback_notice')}\n缓存数据时间：{time_text}"
 
-    def _data_quality_notice(self) -> str:
-        quality = self.service.last_refresh_quality
+    def _data_quality_notice(self, outcome=None) -> str:
+        quality = (outcome or self.service.last_refresh_outcome).quality
         if quality == "fresh":
             return ""
         details = {
@@ -713,21 +720,22 @@ class ArkCalendarPlugin(Star):
         now = datetime.now(CN_TZ)
         return operator.birthday_month == now.month and operator.birthday_day == now.day
 
-    def _format_status(self, snapshot) -> str:
+    def _format_status(self, snapshot, outcome=None) -> str:
         cache_status = self.render_cache.status(snapshot, self._display_config()) if self._cache_enabled() else {"state": "disabled"}
         lines = ["罗德岛行动日历状态", f"快照时间：{snapshot.generated_at}"]
-        quality = self.service.last_refresh_quality
+        outcome = outcome or self.service.last_refresh_outcome
+        quality = outcome.quality
         quality_text = {
             "fresh": "正常",
             "degraded": "部分数据源降级",
             "fallback": "已使用最近一次完整快照",
             "failed": "失败",
         }.get(quality, quality)
-        if self.service.last_refresh_error:
-            quality_text += f"（{self.service.last_refresh_error}）"
+        if outcome.error:
+            quality_text += f"（{outcome.error}）"
         lines.append(f"最近刷新：{quality_text}")
         source_labels = {"fresh": "正常", "fallback": "缓存降级", "failed": "不可用"}
-        source_states = self.service.last_refresh_source_states or snapshot.source_states
+        source_states = outcome.source_states or snapshot.source_states
         for state in source_states:
             status = source_labels.get(state.status, "正常" if state.ok else "降级")
             detail = f" {state.message}" if state.message else ""
@@ -844,21 +852,85 @@ class ArkCalendarPlugin(Star):
         logger.info("已启用订阅提醒任务：每小时检查一次。")
         return 1
 
+    def _scheduled_report_times(self) -> list[str]:
+        """返回已生效的日报时间，用于与预缓存任务做撞车检查。"""
+        if not bool(self._value("scheduled_report", "enabled", False)):
+            return []
+        if not config_strings(self._value("scheduled_report", "target_sid_list", [])):
+            return []
+        times, _ = parse_schedule_times(self._value("scheduled_report", "times", ["08:00"]))
+        return times
+
+    def _avoid_report_collision(self, scheduled_time: str) -> str | None:
+        """撞上定时日报时把预缓存往后顺延，返回可用时间；无解时返回 None。
+
+        不能简单地不建预缓存任务：它是帮助长图当天唯一的重渲染点
+        （help_cache.invalidate() + 按新快照重建），缺了它，00:00-04:00
+        之间生成的帮助图会带着"还没结束"的活动留一整天。
+        撞车必须避开，因为两个任务用的是各自独立的锁，同一分钟起跑会各自
+        强制刷新并并发渲染，既拖慢日报，也会让预缓存的失败排在日报之前发出。
+        """
+        report_times = self._scheduled_report_times()
+        if scheduled_time not in report_times:
+            return scheduled_time
+        hour, minute = (int(value) for value in scheduled_time.split(":"))
+        total = hour * 60 + minute
+        for _ in range(self.PRECACHE_SHIFT_ATTEMPTS):
+            total = (total + self.PRECACHE_SHIFT_MINUTES) % (24 * 60)
+            candidate = "%02d:%02d" % divmod(total, 60)
+            if candidate not in report_times:
+                logger.warning(
+                    f"每日预缓存时间 {scheduled_time} 与定时日报冲突，已顺延到 {candidate} 执行。"
+                    "两个任务撞在同一分钟会并发强制刷新并抢渲染，且预缓存的失败会先于日报发出。"
+                    "建议直接把 cache_and_render.daily_precache_time 改成日报之后的时间。"
+                )
+                return candidate
+        return None
+
     def _add_daily_precache_job(self) -> int:
-        """添加每日凌晨 4:00 预缓存任务：刷新数据并预渲染日历、帮助图。"""
+        """添加每日预缓存任务：刷新数据并预渲染日历、帮助图。"""
         assert self.scheduler
+        if not bool(self._value("cache_and_render", "daily_precache_enabled", True)):
+            logger.info("每日预缓存未启用。")
+            return 0
+        times, invalid_times = parse_schedule_times([
+            self._value("cache_and_render", "daily_precache_time", "04:00")
+        ])
+        if invalid_times:
+            logger.warning(f"已忽略无效预缓存时间：{invalid_times}，请使用 HH:MM 格式。")
+        configured_time = times[0] if times else "04:00"
+        scheduled_time = self._avoid_report_collision(configured_time)
+        if scheduled_time is None:
+            logger.warning(
+                f"每日预缓存时间 {configured_time} 及其后续顺延时段都与定时日报冲突，"
+                "本次不创建预缓存任务。请把 cache_and_render.daily_precache_time "
+                "调整到日报时间之外。"
+            )
+            return 0
+        hour, minute = (int(value) for value in scheduled_time.split(":"))
+        if (hour, minute) < self.GAME_DAILY_RESET:
+            # 帮助长图按自然日缓存、当天不再重渲染，图里的倒计时与可订阅日程都按
+            # 快照生成时刻计算。在游戏日切前预缓存，04:00 结束的活动此刻还没结束，
+            # 会被当成可订阅项写进图里留一整天。任务照建，只是提醒改时间。
+            reset_text = "%02d:%02d" % self.GAME_DAILY_RESET
+            logger.warning(
+                f"每日预缓存时间 {scheduled_time} 早于游戏日切时间 {reset_text}，"
+                f"当天帮助长图与订阅列表会留下 {reset_text} 结束的活动。"
+                "建议把 cache_and_render.daily_precache_time 调整到日切之后。"
+            )
+        self._daily_precache_time = scheduled_time
         self.scheduler.add_job(
             self._daily_precache,
             "cron",
-            hour=4,
-            minute=0,
+            hour=hour,
+            minute=minute,
             id="ark_calendar_daily_precache",
             name="Ark Calendar Daily Precache",
             coalesce=True,
             max_instances=1,
             misfire_grace_time=600,
         )
-        logger.info("已启用每日预缓存任务：每天 04:00 刷新数据并预渲染日历、帮助图。")
+        logger.info(f"已启用每日预缓存任务：每天 {scheduled_time} 刷新数据并预渲染日历、帮助图。")
         return 1
 
     async def _daily_precache(self) -> None:
@@ -869,7 +941,7 @@ class ArkCalendarPlugin(Star):
         async with self._daily_precache_lock:
             logger.info("每日预缓存开始：强制刷新数据并生成当天图片缓存。")
             try:
-                snapshot = await self.service.snapshot(force=True)
+                snapshot, outcome = await self.service.snapshot_with_outcome(force=True)
                 calendar_image, image_state, _ = await self._calendar_image(snapshot)
 
                 # 任务补跑或凌晨前曾生成帮助图时，先清除当天旧版本，确保使用新快照重渲染。
@@ -899,18 +971,18 @@ class ArkCalendarPlugin(Star):
                         f"{', '.join(uncached_modes)}。"
                     )
                 if failed_modes:
-                    logger.error(f"每日预缓存：帮助长图生成失败：{', '.join(failed_modes)}。")
-                    await self._notify_admin(
-                        "【方舟日历异常告警】\n"
-                        f"每日 04:00 预缓存未能生成帮助图：{', '.join(failed_modes)}。"
-                        "详情请查看 AstrBot 日志。",
-                        "daily_precache_help_failed",
+                    # 帮助图只是缓存预热，失败时收到命令会按需重渲染，不影响日报投递，
+                    # 因此只记日志、不惊动管理员。
+                    logger.error(
+                        f"每日预缓存：帮助长图生成失败：{', '.join(failed_modes)}，"
+                        "将在收到对应命令时按需重试。"
                     )
-                await self._observe_health(snapshot, "每日预缓存")
+                await self._observe_health(outcome, "每日预缓存")
             except Exception:
                 logger.error("每日预缓存执行失败。", exc_info=True)
                 await self._notify_admin(
-                    "【方舟日历异常告警】\n每日 04:00 预缓存未能完成，详情请查看 AstrBot 日志。",
+                    f"【方舟日历异常告警】\n每日 {self._daily_precache_time} 预缓存未能完成，"
+                    "详情请查看 AstrBot 日志。",
                     "daily_precache_failed",
                 )
 
@@ -926,10 +998,10 @@ class ArkCalendarPlugin(Star):
                 return
             logger.info(f"定时方舟日报开始：目标 {len(targets)} 个会话，强制刷新={refresh}。")
             try:
-                snapshot = await self.service.snapshot(force=refresh)
+                snapshot, outcome = await self.service.snapshot_with_outcome(force=refresh)
                 image, image_state, _ = await self._calendar_image(snapshot)
                 caption = self.messages.text("scheduled_report_caption")
-                quality_notice = self._data_quality_notice()
+                quality_notice = self._data_quality_notice(outcome)
                 if quality_notice:
                     caption = f"{caption}\n{quality_notice}"
                 sent, failed = await self._send_scheduled_image(targets, image, caption)
@@ -941,8 +1013,8 @@ class ArkCalendarPlugin(Star):
                         f"成功发送：{sent}/{len(targets)}",
                         "scheduled_send_failed",
                     )
-                await self._notify_refresh_status(snapshot, refresh, sent, len(targets), image_state)
-                await self._observe_health(snapshot, "定时日报")
+                await self._notify_refresh_status(snapshot, refresh, sent, len(targets), image_state, outcome)
+                await self._observe_health(outcome, "定时日报")
             except Exception:
                 logger.error("定时方舟日报执行失败。", exc_info=True)
                 await self._notify_admin(
@@ -962,7 +1034,7 @@ class ArkCalendarPlugin(Star):
                 logger.warning("自动生日祝贺：目标 SID 为空，本次跳过。")
                 return
             try:
-                snapshot = await self.service.snapshot()
+                snapshot, outcome = await self.service.snapshot_with_outcome()
                 birthdays = snapshot.today_birthdays
                 if not birthdays:
                     logger.info("自动生日祝贺：今天没有干员生日，本次不发送。")
@@ -978,7 +1050,7 @@ class ArkCalendarPlugin(Star):
                     names=names,
                     count=len(birthdays),
                 )
-                quality_notice = self._data_quality_notice()
+                quality_notice = self._data_quality_notice(outcome)
                 if quality_notice:
                     text = f"{quality_notice}\n{text}"
                 sent, failed = await self._send_scheduled_text(pending_targets, text)
@@ -993,7 +1065,7 @@ class ArkCalendarPlugin(Star):
                         f"成功发送：{len(sent)}/{len(pending_targets)}",
                         "scheduled_birthday_greeting_failed",
                     )
-                await self._observe_health(snapshot, "自动生日祝贺")
+                await self._observe_health(outcome, "自动生日祝贺")
             except Exception:
                 logger.error("自动生日祝贺执行失败。", exc_info=True)
                 await self._notify_admin(
@@ -1119,7 +1191,9 @@ class ArkCalendarPlugin(Star):
                 logger.error(f"定时方舟日报发送到 SID {sid} 失败。", exc_info=True)
         return sent, failed
 
-    async def _notify_refresh_status(self, snapshot, refreshed: bool, sent: int, total: int, image_state: str) -> None:
+    async def _notify_refresh_status(
+        self, snapshot, refreshed: bool, sent: int, total: int, image_state: str, outcome=None
+    ) -> None:
         if not refreshed or not self._notifications_enabled():
             return
         mode = str(self._value("admin_notification", "refresh_status_mode", "abnormal_only") or "abnormal_only")
@@ -1131,14 +1205,14 @@ class ArkCalendarPlugin(Star):
             f"刷新时间：{snapshot.generated_at}\n"
             f"发送结果：{sent}/{total}\n"
             f"图片来源：{self._image_state_label(image_state)}\n\n"
-            f"{self._format_status(snapshot)}"
+            f"{self._format_status(snapshot, outcome)}"
         )
 
-    async def _observe_health(self, snapshot, origin: str) -> None:
+    async def _observe_health(self, outcome, origin: str) -> None:
         if not self._notifications_enabled():
             return
         async with self._notification_state_lock:
-            current = self._abnormal_states(snapshot)
+            current = self._abnormal_states(outcome)
             stored = self.service.cache.load("notification_state.json")
             stored = stored if isinstance(stored, dict) else {}
             active = stored.get("active", {}) if isinstance(stored.get("active", {}), dict) else {}
@@ -1178,10 +1252,10 @@ class ArkCalendarPlugin(Star):
                 )
             self.service.cache.save("notification_state.json", {"active": current, "last_sent": last_sent})
 
-    def _abnormal_states(self, snapshot) -> dict[str, dict[str, str]]:
+    def _abnormal_states(self, outcome) -> dict[str, dict[str, str]]:
+        """只依据本次刷新结果判定异常，避免把并发任务的故障算到自己头上。"""
         abnormal: dict[str, dict[str, str]] = {}
-        source_states = self.service.last_refresh_source_states or snapshot.source_states
-        for state in source_states:
+        for state in outcome.source_states:
             if state.ok:
                 continue
             event_key = state.event_key or f"source:{state.name}:unavailable"
@@ -1189,10 +1263,10 @@ class ArkCalendarPlugin(Star):
                 "name": state.name,
                 "message": state.message or "数据源状态异常",
             }
-        if self.service.last_refresh_error and self.service.last_refresh_quality in {"failed", "fallback"}:
+        if outcome.error and outcome.quality in {"failed", "fallback"}:
             abnormal["calendar_refresh:failed"] = {
                 "name": "方舟日历刷新",
-                "message": self.service.last_refresh_error,
+                "message": outcome.error,
             }
         return abnormal
 

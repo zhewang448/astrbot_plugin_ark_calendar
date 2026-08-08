@@ -16,7 +16,16 @@ import aiohttp
 from .assets import AssetCache
 from .cache import JsonCache
 from .config import config_int, config_value
-from .models import BirthdayGroup, CalendarSnapshot, Operator, SourceState, TimelineItem, TodayInfo, parse_iso
+from .models import (
+    BirthdayGroup,
+    CalendarSnapshot,
+    Operator,
+    RefreshOutcome,
+    SourceState,
+    TimelineItem,
+    TodayInfo,
+    parse_iso,
+)
 from ..sources.anything_ics import AnythingIcsSource
 from ..sources.gacha import GachaSource
 from ..sources.http import HttpClient, PublicResolver
@@ -75,6 +84,7 @@ class CalendarService:
         self.last_refresh_used_cache = False
         self.last_refresh_source_states: list[SourceState] = []
         self.last_refresh_finished_at = ""
+        self.last_refresh_outcome = RefreshOutcome()
 
     async def initialize(self) -> None:
         timeout_seconds = self.int_value(
@@ -129,9 +139,13 @@ class CalendarService:
             if self._snapshot_refresh_quality(self.last_snapshot.source_states) == "fresh":
                 self.last_known_good_snapshot = self.last_snapshot
         if self.last_snapshot is not None:
-            self.last_refresh_quality = self.last_snapshot.refresh_quality
-            self.last_refresh_used_cache = any(state.used_cache for state in self.last_snapshot.source_states)
-            self.last_refresh_source_states = list(self.last_snapshot.source_states)
+            self._publish_refresh_outcome(RefreshOutcome(
+                quality=self.last_snapshot.refresh_quality,
+                error=self.last_refresh_error,
+                used_cache=any(state.used_cache for state in self.last_snapshot.source_states),
+                source_states=list(self.last_snapshot.source_states),
+                finished_at=self.last_refresh_finished_at,
+            ))
 
     def _http_proxy(self) -> str:
         plugin_proxy = str(self.value("data_sources", "http_proxy", "", "http_proxy") or "").strip()
@@ -370,64 +384,88 @@ class CalendarService:
     def snapshot_is_fresh(self) -> bool:
         return self._snapshot_is_fresh(self.cache_ttl())
 
+    def _publish_refresh_outcome(self, outcome: RefreshOutcome) -> RefreshOutcome:
+        """把本次刷新结果同步到全局 last_refresh_*，供状态展示等旧调用方使用。"""
+        self.last_refresh_outcome = outcome
+        self.last_refresh_quality = outcome.quality
+        self.last_refresh_error = outcome.error
+        self.last_refresh_used_cache = outcome.used_cache
+        self.last_refresh_source_states = list(outcome.source_states)
+        self.last_refresh_finished_at = outcome.finished_at
+        return outcome
+
     async def snapshot(self, force: bool = False) -> CalendarSnapshot:
+        result, _ = await self.snapshot_with_outcome(force=force)
+        return result
+
+    async def snapshot_with_outcome(self, force: bool = False) -> tuple[CalendarSnapshot, RefreshOutcome]:
+        """返回快照与"本次"刷新结果。
+
+        调用方要判定异常告警时必须用这里返回的 outcome：全局 last_refresh_*
+        会被其他并发任务的刷新覆盖，据此判定会把别的任务的故障算到自己头上。
+        """
         ttl = self.cache_ttl()
         if not force and self._snapshot_is_fresh(ttl):
             self.logger.debug("方舟日历快照缓存命中。")
-            return self.last_snapshot  # type: ignore[return-value]
+            return self.last_snapshot, self.last_refresh_outcome  # type: ignore[return-value]
         async with self.refresh_lock:
             if not force and self._snapshot_is_fresh(ttl):
                 self.logger.debug("方舟日历快照缓存已由并发请求刷新。")
-                return self.last_snapshot  # type: ignore[return-value]
+                return self.last_snapshot, self.last_refresh_outcome  # type: ignore[return-value]
             started = time.monotonic()
             self.logger.info(f"开始{'强制刷新' if force else '刷新'}方舟日历数据。")
             try:
                 result = await self._build_snapshot()
                 quality = self._snapshot_refresh_quality(result.source_states)
                 result.refresh_quality = quality
-                self.last_refresh_source_states = list(result.source_states)
-                self.last_refresh_quality = quality
-                self.last_refresh_used_cache = any(state.used_cache for state in result.source_states)
-                self.last_refresh_finished_at = self._now().isoformat()
+                outcome = RefreshOutcome(
+                    quality=quality,
+                    used_cache=any(state.used_cache for state in result.source_states),
+                    source_states=list(result.source_states),
+                    finished_at=self._now().isoformat(),
+                )
 
                 if quality == "failed" and self._can_use_snapshot(
                     self.last_known_good_snapshot,
                     self.snapshot_fallback_max_age(),
                 ):
                     self.cache.save("snapshot-degraded.json", result.to_dict())
-                    self.last_refresh_error = "关键数据源不可用"
-                    self.last_refresh_quality = "fallback"
-                    self.last_refresh_used_cache = True
+                    outcome.quality = "fallback"
+                    outcome.error = "关键数据源不可用"
+                    outcome.used_cache = True
                     self.last_snapshot = self.last_known_good_snapshot
                     self.logger.warning("关键数据源不可用，已使用最近一次完整快照。")
-                    return self.last_known_good_snapshot  # type: ignore[return-value]
+                    self._publish_refresh_outcome(outcome)
+                    return self.last_known_good_snapshot, outcome  # type: ignore[return-value]
 
                 self.last_snapshot = result
                 if quality == "fresh":
                     self.last_known_good_snapshot = result
                     self.cache.save("snapshot.json", result.to_dict())
                     self.cache.save("last_known_good_snapshot.json", result.to_dict())
-                    self.last_refresh_error = ""
                 else:
                     self.cache.save("snapshot-degraded.json", result.to_dict())
-                    self.last_refresh_error = "关键数据源不可用" if quality == "failed" else ""
+                    outcome.error = "关键数据源不可用" if quality == "failed" else ""
                 self.logger.info(
                     f"方舟日历数据刷新完成（{quality}），耗时 {time.monotonic() - started:.2f} 秒。"
                 )
-                return result
+                self._publish_refresh_outcome(outcome)
+                return result, outcome
             except Exception as exc:
-                self.last_refresh_error = self._short_error(exc)
-                self.last_refresh_quality = "failed"
-                self.last_refresh_used_cache = False
-                self.last_refresh_source_states = []
-                self.last_refresh_finished_at = self._now().isoformat()
-                self.logger.error(f"方舟日历刷新失败：{self.last_refresh_error}", exc_info=True)
+                outcome = RefreshOutcome(
+                    quality="failed",
+                    error=self._short_error(exc),
+                    finished_at=self._now().isoformat(),
+                )
+                self.logger.error(f"方舟日历刷新失败：{outcome.error}", exc_info=True)
                 if self._can_use_snapshot(self.last_known_good_snapshot, self.snapshot_fallback_max_age()):
-                    self.last_refresh_quality = "fallback"
-                    self.last_refresh_used_cache = True
+                    outcome.quality = "fallback"
+                    outcome.used_cache = True
                     self.last_snapshot = self.last_known_good_snapshot
                     self.logger.warning("方舟日历刷新失败，已使用最近一次完整快照。")
-                    return self.last_known_good_snapshot  # type: ignore[return-value]
+                    self._publish_refresh_outcome(outcome)
+                    return self.last_known_good_snapshot, outcome  # type: ignore[return-value]
+                self._publish_refresh_outcome(outcome)
                 raise
 
     def _snapshot_is_fresh(self, ttl: timedelta) -> bool:

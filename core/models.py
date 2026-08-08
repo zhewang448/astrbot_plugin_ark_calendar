@@ -17,6 +17,23 @@ class SourceState:
 
 
 @dataclass(slots=True)
+class RefreshOutcome:
+    """单次刷新自身的结果。
+
+    与 CalendarSnapshot 分开：降级时 snapshot() 返回的是历史完整快照，
+    快照上的 refresh_quality 记录的是它当初生成时的状态，无法表达"本次
+    刷新降级了"。异常告警必须按本次结果判定，不能读服务上会被其他任务
+    覆盖的全局 last_refresh_*。
+    """
+
+    quality: str = "failed"
+    error: str = ""
+    used_cache: bool = False
+    source_states: list[SourceState] = field(default_factory=list)
+    finished_at: str = ""
+
+
+@dataclass(slots=True)
 class Operator:
     name: str
     birthday_month: int | None = None
