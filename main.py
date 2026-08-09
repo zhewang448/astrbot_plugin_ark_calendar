@@ -168,8 +168,10 @@ class ArkCalendarPlugin(Star):
     async def initialize(self) -> None:
         await self.service.initialize()
         self._initialize_scheduler()
-        # 重载后的图片预热：默认关闭以避免阻塞 AstrBot 前端，按需开启可加速首次帮助命令。
-        if self.service.value("cache_and_render", "reload_precache_enabled", False):
+        # 重载后的图片预热：默认开启，让首次帮助命令直接命中缓存。
+        # v0.8.2 起帮助图请求体已降到 1.35 MB，预热不再明显影响 AstrBot 前端；
+        # 需要彻底避免重载时的后台渲染可手动关闭。
+        if self.service.value("cache_and_render", "reload_precache_enabled", True):
             self._startup_precache_task = asyncio.create_task(
                 self._precache_help_images_after_reload(),
                 name="ark_calendar_startup_help_precache",
