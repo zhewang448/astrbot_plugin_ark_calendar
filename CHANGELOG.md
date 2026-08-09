@@ -4,6 +4,12 @@
 
 版本号遵循 `主版本.次版本.修订号`。日期为 `Asia/Shanghai` 时区。
 
+## 0.8.0 - 2026-08-09
+
+### 修复
+
+- **模板添加 charset 声明防止 T2I 渲染端编码回退导致中文乱码。** `templates/calendar.html`、`help.html`、`history_schedule.html` 三个模板原先直接从 `<style>` 开始，缺少 `<meta charset="utf-8">` 和 HTML 文档骨架。当渲染服务端点的 Chromium 回退到 windows-1252 等单字节码页时，UTF-8 编码的中文会被按西文字节流解码，产生 mojibake（如 `罗德岛行动日历` 显示为 `ç½—å¾·å²›è¡Œåš¨æ—¥åŽ†`）。现在三个模板都添加了 `<html lang="zh-CN"><head><meta charset="utf-8"></head><body>` 骨架，消除对渲染端默认编码的依赖。同时保留 `</head>` 结束标签以确保 AstrBot 的 `inject_shiki_runtime` 将 ~1.2MB Shiki 脚本注入到 head 内部而非文首，避免 meta 标签被顶出浏览器前 1024 字节编码预扫描窗口。故意不添加 `<!doctype html>` 以保持 quirks mode，避免意外改动渲染行为。（[#1](https://github.com/zhewang448/astrbot_plugin_ark_calendar/issues/1)）
+
 ## 0.7.99 - 2026-08-07
 
 ### 重要 ###
