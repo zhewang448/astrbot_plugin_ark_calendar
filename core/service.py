@@ -33,6 +33,26 @@ from ..sources.prts import PrtsSource, game_weekday
 
 CN_TZ = ZoneInfo("Asia/Shanghai")
 
+# 各类图片在 calendar.html 里的 CSS 显示尺寸（宽, 高），单位 px。
+# 渲染用 scale:"css"（1 CSS px = 1 device px），所以直接取 CSS 尺寸、不乘 DPR。
+# 内嵌前按这些尺寸等比缩小，避免把远大于显示尺寸的原图整份塞进请求体。
+# 数值由 body width:1440px 与各容器的 padding/gap 推算，取整时向上取以留余量。
+TIMELINE_IMAGE_BOX = (1022, 84)      # .bar img.bg，时间轴条背景（.bar 宽度可变，按最宽箱体取）
+TIMELINE_PORTRAIT_BOX = (122, 122)   # .bar .portrait，height:145% of 84px
+OPERATOR_AVATAR_BOX = (73, 73)       # .op img，近期新增干员
+BIRTHDAY_AVATAR_BOX = (88, 88)       # .birth-op img，当天生日干员
+HIGHLIGHT_IMAGE_BOX = (100, 100)     # .highlight-item img，首页亮点（428px 面板 4 列，实测 96px）
+STAGE_IMAGE_BOX = (176, 70)          # .stage-media img，物资/芯片关卡（4 列时 170px，取 176 覆盖两种列数）
+
+# _hydrate_home_highlights 一次处理 5 个字段，但它们落在两种不同尺寸的容器里。
+HOME_HIGHLIGHT_BOXES = {
+    "resource_schedule": STAGE_IMAGE_BOX,
+    "chip_schedule": STAGE_IMAGE_BOX,
+    "voucher_exchange": HIGHLIGHT_IMAGE_BOX,
+    "new_skins": HIGHLIGHT_IMAGE_BOX,
+    "new_modules": HIGHLIGHT_IMAGE_BOX,
+}
+
 
 class CalendarService:
     # 类级默认值：绕过 __init__ 构造的实例（例如测试里用 __new__ 创建）
@@ -600,7 +620,10 @@ class CalendarService:
                 if not name:
                     continue
                 info = operator_index.get(name, {})
-                avatar = await self.assets.data_uri(item.get("avatar") or avatar_urls.get(name, ""))
+                avatar = await self.assets.data_uri(
+                    item.get("avatar") or avatar_urls.get(name, ""),
+                    box=OPERATOR_AVATAR_BOX,
+                )
                 recent_operators.append(Operator(
                     name,
                     profession=info.get("profession", ""),
@@ -683,14 +706,15 @@ class CalendarService:
         assert self.assets
         result = dict(home)
 
-        async def hydrate(item: dict) -> dict:
+        async def hydrate(item: dict, box: tuple[int, int]) -> dict:
             current = dict(item)
-            current["image"] = await self.assets.data_uri(current.get("image", ""))
+            current["image"] = await self.assets.data_uri(current.get("image", ""), box=box)
             return current
 
         for key in ("resource_schedule", "chip_schedule", "voucher_exchange", "new_skins", "new_modules"):
             items = [item for item in home.get(key, []) or [] if isinstance(item, dict)]
-            result[key] = list(await asyncio.gather(*(hydrate(item) for item in items)))
+            box = HOME_HIGHLIGHT_BOXES[key]
+            result[key] = list(await asyncio.gather(*(hydrate(item, box) for item in items)))
         return result
 
     async def _build_events(
@@ -715,7 +739,10 @@ class CalendarService:
         )
         normalized_details = [detail if isinstance(detail, dict) else {} for detail in details]
         images = await asyncio.gather(
-            *(self.assets.data_uri(detail.get("image_url", "")) for detail in normalized_details),
+            *(
+                self.assets.data_uri(detail.get("image_url", ""), box=TIMELINE_IMAGE_BOX)
+                for detail in normalized_details
+            ),
         )
         event_items: list[TimelineItem] = []
         long_items: list[TimelineItem] = []
@@ -853,7 +880,10 @@ class CalendarService:
         assert self.prts and self.gacha and self.assets
         previous = {item.id: item for item in self.last_snapshot.gacha_pools} if self.last_snapshot else {}
         primary_images = await asyncio.gather(
-            *(self.assets.data_uri(pool.get("image", "")) for pool in pools_raw),
+            *(
+                self.assets.data_uri(pool.get("image", ""), box=TIMELINE_IMAGE_BOX)
+                for pool in pools_raw
+            ),
         )
         result: list[TimelineItem] = []
         for pool, image in zip(pools_raw, primary_images):
@@ -864,7 +894,10 @@ class CalendarService:
             if not image and six:
                 urls = await self._safe_avatar_urls(six[:2])
                 images = list(await asyncio.gather(
-                    *(self.assets.data_uri(urls.get(name, "")) for name in six[:2]),
+                    *(
+                        self.assets.data_uri(urls.get(name, ""), box=TIMELINE_PORTRAIT_BOX)
+                        for name in six[:2]
+                    ),
                 ))
                 images = [item for item in images if item]
             result.append(TimelineItem(
@@ -891,7 +924,7 @@ class CalendarService:
         birthday = record.get("birthday") or {}
         info = self._operator_index.get(name, {})
         urls = avatar_urls or await self._safe_avatar_urls([name])
-        avatar = await self.assets.data_uri(urls.get(name, ""))
+        avatar = await self.assets.data_uri(urls.get(name, ""), box=BIRTHDAY_AVATAR_BOX)
         return Operator(
             name=name,
             birthday_month=birthday.get("month"),

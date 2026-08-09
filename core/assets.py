@@ -16,6 +16,8 @@ from uuid import uuid4
 
 import aiohttp
 
+from .image_scale import ImageScaler
+
 
 class UnsafeAssetUrl(ValueError):
     """当图片地址可能指向不安全的网络地址时抛出。"""
@@ -37,7 +39,7 @@ class AssetCache:
     DOWNLOAD_FAILURE_CACHE_ENTRIES = 64
     DISK_CACHE_PRUNE_INTERVAL = 16
     ALLOWED_MIME_TYPES = {"image/png", "image/jpeg", "image/gif", "image/webp"}
-    LOCAL_MIME_TYPES = {"font/otf", "font/ttf", "application/font-sfnt", "application/x-font-opentype"}
+    LOCAL_MIME_TYPES = {"font/otf", "font/ttf", "font/woff2", "application/font-sfnt", "application/x-font-opentype", "application/font-woff2"}
     MIME_SUFFIXES = {
         "image/png": ".png",
         "image/jpeg": ".jpg",
@@ -65,8 +67,18 @@ class AssetCache:
         self._failed_download_urls: OrderedDict[str, None] = OrderedDict()
         self._downloads_since_prune = 0
         self._disk_cache_prune_initialized = False
+        # 字体单独缓存，避免被图片 LRU 挤掉导致每次渲染重新 base64 编码
+        self._font_cache: dict[tuple[str, int, int], str] = {}
+        # 图片缩放器，缓存在 root/images/ 下
+        self.image_scaler = ImageScaler(self.root / "images", logger=logger)
 
-    async def data_uri(self, source: str) -> str:
+    async def data_uri(self, source: str, box: tuple[int, int] | None = None) -> str:
+        """把图片或字体转成 data URI。
+
+        box 给出该图在模板里的 CSS 显示尺寸（宽, 高）时，先按 cover 语义等比
+        缩放到刚好覆盖该尺寸再转 webp，避免把远大于显示尺寸的原图整份内嵌。
+        缩放不可用或失败时回退到原图，保证不丢图。
+        """
         async with self._data_uri_semaphore:
             if not source:
                 return ""
@@ -78,8 +90,16 @@ class AssetCache:
                 except Exception as exc:
                     self._log_download_failure(source, exc)
                     return ""
-                return self._data_uri_from_path(path, require_image=True)
-            return self._data_uri_from_path(Path(source), require_image=False)
+                return await self._encode(path, require_image=True, box=box)
+            return await self._encode(Path(source), require_image=False, box=box)
+
+    async def _encode(self, path: Path, require_image: bool, box: tuple[int, int] | None) -> str:
+        """按需缩放后编码；缩放拿不到结果时退回原图的同步编码路径。"""
+        if box is not None:
+            scaled = await self.image_scaler.data_uri(path, box)
+            if scaled:
+                return scaled
+        return self._data_uri_from_path(path, require_image=require_image)
 
     def _data_uri_from_path(self, path: Path, require_image: bool) -> str:
         try:
@@ -90,22 +110,35 @@ class AssetCache:
         if not path.is_file() or not 0 < stat.st_size <= max_bytes:
             return ""
         cache_key = (str(path.resolve()), stat.st_mtime_ns, stat.st_size)
-        cached = self._data_uri_cache.get(cache_key)
-        if cached is not None:
-            self._data_uri_cache.move_to_end(cache_key)
-            return cached
+
+        # 字体文件用单独缓存，避免被图片 LRU 挤掉
+        is_font = path.suffix.lower() in {".otf", ".ttf", ".woff", ".woff2"}
+        if is_font:
+            cached = self._font_cache.get(cache_key)
+            if cached is not None:
+                return cached
+        else:
+            cached = self._data_uri_cache.get(cache_key)
+            if cached is not None:
+                self._data_uri_cache.move_to_end(cache_key)
+                return cached
+
         try:
             payload = path.read_bytes()
         except OSError:
             return ""
-        mime = self._detect_image_mime(payload) or mimetypes.guess_type(path.name)[0] or {".otf": "font/otf", ".ttf": "font/ttf"}.get(path.suffix.lower())
+        mime = self._detect_image_mime(payload) or mimetypes.guess_type(path.name)[0] or {".otf": "font/otf", ".ttf": "font/ttf", ".woff2": "font/woff2"}.get(path.suffix.lower())
         if require_image:
             if mime not in self.ALLOWED_MIME_TYPES or not self._matches_image_mime(payload, mime):
                 return ""
         elif mime not in self.ALLOWED_MIME_TYPES | self.LOCAL_MIME_TYPES:
             return ""
         value = f"data:{mime};base64,{base64.b64encode(payload).decode('ascii')}"
-        self._remember_data_uri(cache_key, value)
+
+        if is_font:
+            self._font_cache[cache_key] = value
+        else:
+            self._remember_data_uri(cache_key, value)
         return value
 
     def _remember_data_uri(self, cache_key: tuple[str, int, int], value: str) -> None:

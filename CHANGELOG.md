@@ -4,6 +4,52 @@
 
 版本号遵循 `主版本.次版本.修订号`。日期为 `Asia/Shanghai` 时区。
 
+## 0.8.3 - 2026-08-09
+
+### 变更
+
+- **插件重载时的帮助图预热改回默认开启。** `cache_and_render.reload_precache_enabled` 默认值由 `false` 改为 `true`。该项在 0.8.1 中默认关闭，原因是当时帮助图单次 POST 体积为 15.68 MB，重载后连续渲染 `full` 与 `subscribe` 两张图会明显拖慢 AstrBot 前端。0.8.2 起帮助图请求体已降至 1.35 MB（`json.dumps` 阻塞 33.0 ms → 3.1 ms），预热对前端的影响已不再显著，恢复默认开启可让重载后首次 `/方舟日历帮助`、`/方舟订阅帮助` 直接命中当日缓存。`main.py` 中 `service.value()` 的代码兜底默认值一并同步为 `True`，避免配置缺少该键时出现「WebUI 显示开启、实际行为关闭」的不一致。
+  - **已有安装不会自动切换。** AstrBot 在插件首次加载时会把 schema 默认值写入 `data/config/astrbot_plugin_ark_calendar_config.json`，此后存储值优先于 schema。从 0.8.1 或 0.8.2 升级上来的实例，配置里保存的仍是 `false`，需要在 WebUI 中手动开启。此处不做自动迁移：无法区分 `false` 是用户主动关闭还是首次加载时自动写入的默认值，静默改写会覆盖用户的真实意图。
+
+## 0.8.2 - 2026-08-09
+
+### 修复
+
+- **字体子集漏收模板字面量导致模板固定文案渲染为豆腐块（回归自 0.8.1）。** `collect_charset()` 依赖的 `_walk()` 有一条「字符串长度超过 `MAX_SCANNED_STRING`（4096）则跳过」的规则，本意是避免扫描 base64 图片数据；但模板源码本身远超该长度（`calendar.html` 15187 字符、`help.html` 6688 字符），整份被这条规则跳过，模板里的固定文案（「今日作战信息」「临期事项」「近期新增干员」「罗德岛终端手册」等）从未进入子集字符集。实测 0.8.1 下 `calendar.html` 模板内 117 个 CJK 有 108 个未被收集、`help.html` 105 个中有 97 个未被收集，渲染出的长图标题与标签为缺字方块。现在 `collect_charset(template, *sources)` 将模板源码作为独立首参处理，不受长度上限约束（模板是打包内的可信文件，长度上限只针对数据侧的不可信字符串），数据侧仍照原规则跳过 base64。修复后模板 CJK 未收集数为 0。
+  - `SUBSET_VERSION` 自 1 提升至 2，使 0.8.1 已写入 `render/fonts/` 的错误子集自动失效重建，无需手动清理。
+  - 0.8.1 的验证只比对了快照数据中的 CJK 覆盖情况，未覆盖模板字面量，故未能发现该缺陷；本次新增「渲染产物字符集回归」校验，直接以 Jinja2 渲染结果中出现的全部字符为基准。
+
+### 性能
+
+- **图片按模板实际显示尺寸预缩放并转 webp，日历请求体再降 75%。** 此前所有图片均以原始尺寸整份 base64 内嵌，存在严重过采样：`gacha-standard.png` 源图 1650×900（2.29 MB）实际只显示在 `.bar img.bg` 的 1022×84 区域内，`operator-angelina.png` 源图 180×180 显示于 `.op img` 的 73×73。新增 `core/image_scale.py`，按 cover 语义等比缩放至刚好覆盖显示尺寸后编码为 webp，并按 `(SCALE_VERSION, 源图 mtime/size, 目标尺寸)` 的 SHA-256 做内存 + 磁盘双层缓存。
+  - 实测 7 张真实图片合计 4249.3 KB → 338.8 KB（-92.0%）：`gacha-standard.png` -93.1%、`event-blackforest.png` -96.5%、`operator-angelina.png` -93.8%。
+  - 显示尺寸由模板 CSS 逐层实算得出（页宽 1440px、`.main` 内容宽 1312px、`.highlight-panel` 428px、`.highlight-item` 96px 等），非估值；渲染使用 `scale:"css"`，故按 1x 取值、不乘设备像素比。
+  - `.bar` 宽度为 `var(--width)` 动态值，因此按最宽箱体（1022px）等比缩放而不做裁剪，由浏览器按 `object-fit:cover` 自行裁切，避免窄条目被过度裁剪。
+  - 缩放后仍大于源图时回退原图（小图不放大），RGBA 图保留 alpha 通道避免透明区域变黑底。
+  - 缩放在 `asyncio.to_thread` 中执行，不占用事件循环；内存命中 0.18 ms、磁盘命中 0.61 ms；并发渲染共享构建锁，同一 (图, 尺寸) 只构建一次。
+  - 设置 `Image.MAX_IMAGE_PIXELS` 上限以防御解压炸弹；缺少 Pillow 或缩放失败时返回空串交由调用方回退原图，仅警告一次。
+  - 新增依赖 `Pillow>=9.0.0`。
+- **模板数据改为只传模板实际读取的字段，移除冗余快照。** 此前 `data["snapshot"] = snapshot.to_dict()` 将整份快照序列化传入，其中 `events`、`gacha_pools`、`long_term_events` 三个字段的 base64 图片合计约 3.5 MB，而模板从不读取它们——活动与卡池是经 `_timeline()` 拷贝进 `data["events"]`/`["pools"]`/`["longs"]` 后渲染的，等于同一批图片传输两遍。现在仅传递模板真实引用的 7 个字段，`calendar.html` 中 16 处 `snapshot.` 前缀相应移除。
+  - 该字段部分 5.969 MB → 2.387 MB（-60.0%），`json.dumps` 14.3 ms → 5.2 ms。
+  - 等价性已验证：新旧组合渲染出的 HTML 在剔除 base64 后逐字符完全一致（14416 字符）。
+- **累计效果。** 日历 / 日报单次 POST 体积 9.960 MB → 2.506 MB（-74.8%），`json.dumps` 阻塞 58.0 ms → 6.7 ms（-88%）。实际运行中日报生成耗时由约 2 分钟降至约 10 秒。
+
+## 0.8.1 - 2026-08-09
+
+### 性能
+
+- **字体改为按实际用到的字形动态子集化，请求体缩小 91%。** 此前每次渲染都把 `assets/SourceHanSerifCN-Medium-6.otf`（10.85 MB）整份 base64 内嵌进模板数据（14.46 MB 字符串），叠加 AstrBot 注入的 ~1.2 MB Shiki 运行时后，帮助图单次 POST 体积达 15.68 MB、日历达 24.23 MB。由于 AstrBot 的 dashboard 与插件通过 `asyncio.gather(core_task, dashboard.run())` 跑在同一个事件循环上，而 `aiohttp` 的 `json=` 参数会在事件循环内同步执行 `json.dumps`，每次渲染都会阻塞前端。现在新增 `core/font_subset.py`，收集本次渲染真正出现的字符后子集化为 woff2（135–194 KB），按 `(SUBSET_VERSION, 源字体 mtime/size, 字符集)` 的 SHA-256 做内存 + 磁盘双层缓存，磁盘缓存落在 `render/fonts/` 下、重启后仍然命中。
+  - 帮助图 / 订阅图：15.68 MB → 1.35 MB（-91%），`json.dumps` 阻塞 33.0 ms → 3.1 ms。
+  - 日历 / 日报：24.23 MB → 9.96 MB（-59%），`json.dumps` 阻塞 58.0 ms → 23.1 ms；剩余体积中 8.53 MB 为活动与卡池图片的 base64，字体已不再是主要来源。
+  - 子集化耗时约 0.66–0.68 s，放在 `asyncio.to_thread` 中执行，不占用事件循环；内存命中 0.087 ms，磁盘命中 0.8 ms。并发渲染共享构建锁，同一字符集只构建一次。
+  - 字符收集会跳过 `data:`、`http(s)://` 前缀与超过 4096 字符的字符串，避免扫描 base64 图片数据。
+  - 新增依赖 `fonttools[woff]>=4.40.0`。缺少 fonttools 或子集化失败时回退为内嵌完整字体并只警告一次，保证不会缺字。
+- **字体 data URI 改用独立缓存。** 字体此前与图片共用 `AssetCache` 的 32 MB LRU，而字体自身的 base64 已占 14.46 MB、图片合计 8.53 MB，接近上限；一旦字体条目被图片挤出，下次渲染就要重新读取并 base64 编码 11 MB 源文件。现在字体走独立的 `_font_cache`，不参与图片 LRU 淘汰。
+
+### 变更
+
+- **插件重载时的帮助图预热改为默认关闭。** 新增配置项 `cache_and_render.reload_precache_enabled`，默认 `false`。此前每次重载插件都会在后台连续渲染 `full` 与 `subscribe` 两张帮助图，两次 T2I 请求叠加会明显拖慢 AstrBot 前端。关闭后首次发送 `/方舟日历帮助` 或 `/方舟订阅帮助` 时按需渲染，仍会写入当日缓存；需要保留预热行为的可手动开启。
+
 ## 0.8.0 - 2026-08-09
 
 ### 修复
