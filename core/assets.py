@@ -16,6 +16,8 @@ from uuid import uuid4
 
 import aiohttp
 
+from .image_scale import ImageScaler
+
 
 class UnsafeAssetUrl(ValueError):
     """当图片地址可能指向不安全的网络地址时抛出。"""
@@ -67,8 +69,16 @@ class AssetCache:
         self._disk_cache_prune_initialized = False
         # 字体单独缓存，避免被图片 LRU 挤掉导致每次渲染重新 base64 编码
         self._font_cache: dict[tuple[str, int, int], str] = {}
+        # 图片缩放器，缓存在 root/images/ 下
+        self.image_scaler = ImageScaler(self.root / "images", logger=logger)
 
-    async def data_uri(self, source: str) -> str:
+    async def data_uri(self, source: str, box: tuple[int, int] | None = None) -> str:
+        """把图片或字体转成 data URI。
+
+        box 给出该图在模板里的 CSS 显示尺寸（宽, 高）时，先按 cover 语义等比
+        缩放到刚好覆盖该尺寸再转 webp，避免把远大于显示尺寸的原图整份内嵌。
+        缩放不可用或失败时回退到原图，保证不丢图。
+        """
         async with self._data_uri_semaphore:
             if not source:
                 return ""
@@ -80,8 +90,16 @@ class AssetCache:
                 except Exception as exc:
                     self._log_download_failure(source, exc)
                     return ""
-                return self._data_uri_from_path(path, require_image=True)
-            return self._data_uri_from_path(Path(source), require_image=False)
+                return await self._encode(path, require_image=True, box=box)
+            return await self._encode(Path(source), require_image=False, box=box)
+
+    async def _encode(self, path: Path, require_image: bool, box: tuple[int, int] | None) -> str:
+        """按需缩放后编码；缩放拿不到结果时退回原图的同步编码路径。"""
+        if box is not None:
+            scaled = await self.image_scaler.data_uri(path, box)
+            if scaled:
+                return scaled
+        return self._data_uri_from_path(path, require_image=require_image)
 
     def _data_uri_from_path(self, path: Path, require_image: bool) -> str:
         try:

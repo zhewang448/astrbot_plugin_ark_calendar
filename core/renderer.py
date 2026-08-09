@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+from dataclasses import asdict
 from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -49,7 +50,21 @@ class CalendarRenderer:
         timeline_days = max(1, (end - start).days)
         ticks = self._ticks(start, now, timeline_days)
         data = {
-            "snapshot": snapshot.to_dict(), "events": items, "pools": pools, "longs": longs, "ticks": ticks,
+            # 只传模板真正读的字段，不再整份 snapshot.to_dict()。
+            # to_dict() 会把 events/gacha_pools/long_term_events 里的图片 base64 再带一份，
+            # 而模板读的是下面 _timeline() 加工过的 events/pools/longs，那三个字段从未被使用。
+            "today_info": asdict(snapshot.today_info),
+            "today_birthdays": [asdict(item) for item in snapshot.today_birthdays],
+            "upcoming_birthdays": [
+                {
+                    "month": group.month,
+                    "day": group.day,
+                    "operators": [asdict(item) for item in group.operators],
+                }
+                for group in snapshot.upcoming_birthdays
+            ],
+            "recent_operators": [asdict(item) for item in snapshot.recent_operators],
+            "events": items, "pools": pools, "longs": longs, "ticks": ticks,
             "timeline_days": timeline_days,
             "today_left": max(0, min(100, (now-start).total_seconds()/(end-start).total_seconds()*100)),
             "date_cn": now.strftime("%Y / %m / %d"), "data_date_text": snapshot.calendar_date,

@@ -8,7 +8,8 @@ from pathlib import Path
 from typing import Any
 
 # subset 逻辑版本；改动字符收集规则或 subset 参数时 +1，让磁盘上的旧缓存自然失效。
-SUBSET_VERSION = 1
+# v2: 修复模板源码因超过 MAX_SCANNED_STRING 被整份跳过、导致模板字面量缺字的问题。
+SUBSET_VERSION = 2
 
 # 无论当期数据里有没有出现，都固定收进子集的字符。
 # 覆盖数字、拉丁、常用标点和日期词，避免个别渲染因为数据里恰好没出现而缺字。
@@ -52,9 +53,15 @@ def _walk(value: Any, out: set[str]) -> None:
             _walk(item, out)
 
 
-def collect_charset(*sources: Any) -> str:
-    """把模板数据、模板源码等来源里实际出现的字符汇总成排序后的字符集。"""
+def collect_charset(template: str, *sources: Any) -> str:
+    """汇总本次渲染会用到的字符：模板源码里的字面量 + 数据里的动态内容。
+
+    模板源码必须单独作为第一个参数传入、并整份扫描：它是本地可信文件，
+    且长度远超 MAX_SCANNED_STRING，走 _walk 会被当成 base64 直接跳过，
+    导致标题、表头这类模板字面量的字形全部漏收（渲染出来是豆腐块）。
+    """
     chars: set[str] = set(BASE_CHARS)
+    chars.update(template)
     for source in sources:
         _walk(source, chars)
     # 控制字符不需要字形。
