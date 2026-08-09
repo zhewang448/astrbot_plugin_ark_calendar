@@ -168,11 +168,12 @@ class ArkCalendarPlugin(Star):
     async def initialize(self) -> None:
         await self.service.initialize()
         self._initialize_scheduler()
-        # 重载后的图片预热放到独立任务中，避免阻塞插件初始化和主事件循环。
-        self._startup_precache_task = asyncio.create_task(
-            self._precache_help_images_after_reload(),
-            name="ark_calendar_startup_help_precache",
-        )
+        # 重载后的图片预热：默认关闭以避免阻塞 AstrBot 前端，按需开启可加速首次帮助命令。
+        if self.service.value("cache_and_render", "reload_precache_enabled", False):
+            self._startup_precache_task = asyncio.create_task(
+                self._precache_help_images_after_reload(),
+                name="ark_calendar_startup_help_precache",
+            )
         logger.info(f"罗德岛行动日历插件 v{self.service.plugin_version} 已初始化。")
 
     async def terminate(self) -> None:

@@ -4,6 +4,22 @@
 
 版本号遵循 `主版本.次版本.修订号`。日期为 `Asia/Shanghai` 时区。
 
+## 0.8.1 - 2026-08-09
+
+### 性能
+
+- **字体改为按实际用到的字形动态子集化，请求体缩小 91%。** 此前每次渲染都把 `assets/SourceHanSerifCN-Medium-6.otf`（10.85 MB）整份 base64 内嵌进模板数据（14.46 MB 字符串），叠加 AstrBot 注入的 ~1.2 MB Shiki 运行时后，帮助图单次 POST 体积达 15.68 MB、日历达 24.23 MB。由于 AstrBot 的 dashboard 与插件通过 `asyncio.gather(core_task, dashboard.run())` 跑在同一个事件循环上，而 `aiohttp` 的 `json=` 参数会在事件循环内同步执行 `json.dumps`，每次渲染都会阻塞前端。现在新增 `core/font_subset.py`，收集本次渲染真正出现的字符后子集化为 woff2（135–194 KB），按 `(SUBSET_VERSION, 源字体 mtime/size, 字符集)` 的 SHA-256 做内存 + 磁盘双层缓存，磁盘缓存落在 `render/fonts/` 下、重启后仍然命中。
+  - 帮助图 / 订阅图：15.68 MB → 1.35 MB（-91%），`json.dumps` 阻塞 33.0 ms → 3.1 ms。
+  - 日历 / 日报：24.23 MB → 9.96 MB（-59%），`json.dumps` 阻塞 58.0 ms → 23.1 ms；剩余体积中 8.53 MB 为活动与卡池图片的 base64，字体已不再是主要来源。
+  - 子集化耗时约 0.66–0.68 s，放在 `asyncio.to_thread` 中执行，不占用事件循环；内存命中 0.087 ms，磁盘命中 0.8 ms。并发渲染共享构建锁，同一字符集只构建一次。
+  - 字符收集会跳过 `data:`、`http(s)://` 前缀与超过 4096 字符的字符串，避免扫描 base64 图片数据。
+  - 新增依赖 `fonttools[woff]>=4.40.0`。缺少 fonttools 或子集化失败时回退为内嵌完整字体并只警告一次，保证不会缺字。
+- **字体 data URI 改用独立缓存。** 字体此前与图片共用 `AssetCache` 的 32 MB LRU，而字体自身的 base64 已占 14.46 MB、图片合计 8.53 MB，接近上限；一旦字体条目被图片挤出，下次渲染就要重新读取并 base64 编码 11 MB 源文件。现在字体走独立的 `_font_cache`，不参与图片 LRU 淘汰。
+
+### 变更
+
+- **插件重载时的帮助图预热改为默认关闭。** 新增配置项 `cache_and_render.reload_precache_enabled`，默认 `false`。此前每次重载插件都会在后台连续渲染 `full` 与 `subscribe` 两张帮助图，两次 T2I 请求叠加会明显拖慢 AstrBot 前端。关闭后首次发送 `/方舟日历帮助` 或 `/方舟订阅帮助` 时按需渲染，仍会写入当日缓存；需要保留预热行为的可手动开启。
+
 ## 0.8.0 - 2026-08-09
 
 ### 修复

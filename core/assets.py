@@ -37,7 +37,7 @@ class AssetCache:
     DOWNLOAD_FAILURE_CACHE_ENTRIES = 64
     DISK_CACHE_PRUNE_INTERVAL = 16
     ALLOWED_MIME_TYPES = {"image/png", "image/jpeg", "image/gif", "image/webp"}
-    LOCAL_MIME_TYPES = {"font/otf", "font/ttf", "application/font-sfnt", "application/x-font-opentype"}
+    LOCAL_MIME_TYPES = {"font/otf", "font/ttf", "font/woff2", "application/font-sfnt", "application/x-font-opentype", "application/font-woff2"}
     MIME_SUFFIXES = {
         "image/png": ".png",
         "image/jpeg": ".jpg",
@@ -65,6 +65,8 @@ class AssetCache:
         self._failed_download_urls: OrderedDict[str, None] = OrderedDict()
         self._downloads_since_prune = 0
         self._disk_cache_prune_initialized = False
+        # 字体单独缓存，避免被图片 LRU 挤掉导致每次渲染重新 base64 编码
+        self._font_cache: dict[tuple[str, int, int], str] = {}
 
     async def data_uri(self, source: str) -> str:
         async with self._data_uri_semaphore:
@@ -90,22 +92,35 @@ class AssetCache:
         if not path.is_file() or not 0 < stat.st_size <= max_bytes:
             return ""
         cache_key = (str(path.resolve()), stat.st_mtime_ns, stat.st_size)
-        cached = self._data_uri_cache.get(cache_key)
-        if cached is not None:
-            self._data_uri_cache.move_to_end(cache_key)
-            return cached
+
+        # 字体文件用单独缓存，避免被图片 LRU 挤掉
+        is_font = path.suffix.lower() in {".otf", ".ttf", ".woff", ".woff2"}
+        if is_font:
+            cached = self._font_cache.get(cache_key)
+            if cached is not None:
+                return cached
+        else:
+            cached = self._data_uri_cache.get(cache_key)
+            if cached is not None:
+                self._data_uri_cache.move_to_end(cache_key)
+                return cached
+
         try:
             payload = path.read_bytes()
         except OSError:
             return ""
-        mime = self._detect_image_mime(payload) or mimetypes.guess_type(path.name)[0] or {".otf": "font/otf", ".ttf": "font/ttf"}.get(path.suffix.lower())
+        mime = self._detect_image_mime(payload) or mimetypes.guess_type(path.name)[0] or {".otf": "font/otf", ".ttf": "font/ttf", ".woff2": "font/woff2"}.get(path.suffix.lower())
         if require_image:
             if mime not in self.ALLOWED_MIME_TYPES or not self._matches_image_mime(payload, mime):
                 return ""
         elif mime not in self.ALLOWED_MIME_TYPES | self.LOCAL_MIME_TYPES:
             return ""
         value = f"data:{mime};base64,{base64.b64encode(payload).decode('ascii')}"
-        self._remember_data_uri(cache_key, value)
+
+        if is_font:
+            self._font_cache[cache_key] = value
+        else:
+            self._remember_data_uri(cache_key, value)
         return value
 
     def _remember_data_uri(self, cache_key: tuple[str, int, int], value: str) -> None:

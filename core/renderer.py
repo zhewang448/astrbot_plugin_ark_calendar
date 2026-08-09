@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+from .font_subset import FontSubsetError, FontSubsetter, collect_charset
 from .models import CalendarSnapshot, parse_iso
 from .render_cache import validate_rendered_png
 
@@ -12,6 +13,9 @@ CN_TZ = ZoneInfo("Asia/Shanghai")
 
 # 帮助页头图固定使用打包内的这张图，不随当期活动变化；文件缺失时模板回退到纯 CSS 背景。
 HELP_HERO_ASSET = "help-hero.jpg"
+
+# 源字体；实际内嵌的是按当次渲染用到的字形裁出来的 woff2 子集，不是这个完整文件。
+SOURCE_FONT_ASSET = "SourceHanSerifCN-Medium-6.otf"
 
 
 class CalendarRenderer:
@@ -25,6 +29,12 @@ class CalendarRenderer:
         self.history_template = (templates / "history_schedule.html").read_text("utf-8")
         self.help_template = (templates / "help.html").read_text("utf-8")
         self.template_hash = hashlib.sha256(self.template.encode("utf-8")).hexdigest()[:16]
+        self.source_font = Path(__file__).parent.parent / "assets" / SOURCE_FONT_ASSET
+        self.font_subsetter = FontSubsetter(
+            self.source_font,
+            service.data_dir / "render" / "fonts",
+            logger=getattr(service, "logger", None),
+        )
 
     async def calendar(self, snapshot: CalendarSnapshot) -> str:
         start, end = parse_iso(snapshot.timeline_start), parse_iso(snapshot.timeline_end)
@@ -32,7 +42,6 @@ class CalendarRenderer:
         items = [self._timeline(x, start, end, now) for x in snapshot.events]
         pools = [self._timeline(x, start, end, now) for x in snapshot.gacha_pools]
         longs = [self._timeline(x, start, end, now) for x in snapshot.long_term_events]
-        static = await self._static_assets()
         hero = next(
             (x["image"] for x in [*items, *pools, *longs] if x["image"]),
             "",
@@ -45,9 +54,11 @@ class CalendarRenderer:
             "today_left": max(0, min(100, (now-start).total_seconds()/(end-start).total_seconds()*100)),
             "date_cn": now.strftime("%Y / %m / %d"), "data_date_text": snapshot.calendar_date,
             "weekday": "星期" + "一二三四五六日"[now.weekday()],
-            "hero": hero, "static": static,
+            "hero": hero,
             "show_footer": self.service.value("basic", "show_source_footer", True, "show_source_footer"),
         }
+        # 字体子集要按最终数据里出现的字形来裁，所以放在 data 组装之后。
+        data["static"] = await self._static_assets(collect_charset(self.template, data))
         return await self._html_render(self.template, data, options={"type": "png", "full_page": True, "animations": "disabled", "scale": "css", "timeout": self._render_timeout_ms()})
 
     async def historical_calendar(self, snapshot: CalendarSnapshot) -> str:
@@ -66,8 +77,8 @@ class CalendarRenderer:
             "pools": pools,
             "event_count": len(events),
             "pool_count": len(pools),
-            "static": await self._static_assets(),
         }
+        data["static"] = await self._static_assets(collect_charset(self.history_template, data))
         return await self._html_render(self.history_template, data, options={"type": "png", "full_page": True, "animations": "disabled", "scale": "css", "timeout": self._render_timeout_ms()})
 
     @staticmethod
@@ -139,11 +150,18 @@ class CalendarRenderer:
         width = max(1.5, min(100 - left, right - left))
         return {**base, "left": left, "width": width, "start_text": s.astimezone(CN_TZ).strftime("%m.%d %H:%M"), "end_text": e.astimezone(CN_TZ).strftime("%m.%d %H:%M"), "countdown": countdown, "color": self.COLORS.get(item.item_type, self.COLORS.get(item.category, "#4d8a72"))}
 
-    async def _static_assets(self):
+    async def _static_assets(self, charset: str):
+        """按本次实际用到的字形提供子集字体，避免把 10.85 MB 完整字体塞进请求体。"""
+        return {"font": await self._font_data_uri(charset)}
+
+    async def _font_data_uri(self, charset: str) -> str:
+        """优先返回子集 woff2；子集化不可用时回退到内嵌完整字体，保证不缺字。"""
+        try:
+            return await self.font_subsetter.data_uri(charset)
+        except FontSubsetError as exc:
+            self.font_subsetter.log_unavailable_once(exc)
         assert self.service.assets
-        base = Path(__file__).parent.parent / "assets"
-        font = base / "SourceHanSerifCN-Medium-6.otf"
-        return {"font": await self.service.assets.data_uri(str(font))}
+        return await self.service.assets.data_uri(str(self.source_font))
 
     async def _help_hero(self) -> str:
         """帮助页固定头图；打包里没有这张图时返回空串，模板会退到纯 CSS 背景。"""
@@ -183,8 +201,8 @@ class CalendarRenderer:
             "weekday": "星期" + "一二三四五六日"[now.weekday()],
             "data_date_text": snapshot.calendar_date,
             "hero": hero,
-            "static": await self._static_assets(),
         }
+        data["static"] = await self._static_assets(collect_charset(self.help_template, data))
         return await self._html_render(
             self.help_template,
             data,
