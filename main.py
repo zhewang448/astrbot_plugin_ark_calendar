@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import time
+import re
 from collections import defaultdict
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -114,9 +115,9 @@ REFRESH_COMMAND = CommandSpec(
 HISTORICAL_COMMAND = CommandSpec(
     "方舟历史日程测试",
     ("方舟回溯测试", "方舟日历历史测试"),
-    "生成仅含活动与寻访时间轴的历史测试图片，例如：/方舟历史日程测试 2026-07-01 2026-07-31。",
-    argument_hint="<开始日期> <结束日期>",
-    example="/方舟历史日程测试 2026-07-01 2026-07-31",
+    "按指定日期生成与正常日报相同布局的历史测试图片，时间轴长度跟随配置；例如：/方舟历史日程测试 2026-07-01。",
+    argument_hint="<日期>",
+    example="/方舟历史日程测试 2026-07-01",
 )
 
 # 发送侧确认会把 Comp.At 转成平台原生提醒的适配器类型（PlatformMetadata.name）。
@@ -432,17 +433,16 @@ class ArkCalendarPlugin(Star):
     async def historical_schedule_command(
         self,
         event: AstrMessageEvent,
-        start_date: str = "",
-        end_date: str = "",
+        date_text: str = "",
     ):
-        """管理员渲染指定过去日期区间的活动与寻访时间轴。"""
+        """管理员按指定日期渲染与正常日报相同布局的历史测试图片。"""
         try:
-            start, end = self._historical_range(start_date, end_date)
+            target_day = self._historical_day(self._argument_text(event, HISTORICAL_COMMAND, date_text))
         except ValueError as exc:
             yield event.plain_result(self.messages.text("historical_range_invalid", error=exc))
             return
         try:
-            snapshot = await self.service.historical_snapshot(start, end)
+            snapshot = await self.service.historical_snapshot(target_day)
             image = await self.renderer.historical_calendar(snapshot)
             yield event.image_result(str(image))
         except Exception:
@@ -535,25 +535,27 @@ class ArkCalendarPlugin(Star):
 
 
     @staticmethod
-    def _historical_range(start_text: str, end_text: str) -> tuple[datetime, datetime]:
-        if not start_text.strip() or not end_text.strip():
-            raise ValueError("需要开始日期和结束日期")
-        try:
-            start_day = datetime.strptime(start_text.strip(), "%Y-%m-%d").date()
-            end_day = datetime.strptime(end_text.strip(), "%Y-%m-%d").date()
-        except ValueError as exc:
-            raise ValueError("日期格式必须是 YYYY-MM-DD") from exc
-        today = datetime.now(CN_TZ).date()
-        if start_day > end_day:
-            raise ValueError("开始日期不能晚于结束日期")
-        if end_day > today:
-            raise ValueError("只能测试今天及以前的历史区间")
-        if (end_day - start_day).days + 1 > 90:
-            raise ValueError("单次最多测试 90 天")
-        return (
-            datetime.combine(start_day, datetime.min.time(), CN_TZ),
-            datetime.combine(end_day, datetime.max.time(), CN_TZ),
+    def _historical_day(value: str) -> date:
+        """解析单个历史日期，兼容 ISO、斜线、点号、紧凑数字和中文格式。"""
+        text = re.sub(r"\s+", "", value or "").strip()
+        if not text:
+            raise ValueError("需要一个具体日期")
+        formats = (
+            "%Y-%m-%d", "%Y/%m/%d", "%Y.%m.%d", "%Y%m%d",
+            "%Y年%m月%d日", "%Y年%m月%d号",
         )
+        for fmt in formats:
+            try:
+                target_day = datetime.strptime(text, fmt).date()
+                break
+            except ValueError:
+                continue
+        else:
+            raise ValueError("日期格式不受支持，可用 YYYY-MM-DD、YYYY/MM/DD、YYYY.MM.DD、YYYYMMDD 或 YYYY年MM月DD日")
+        today = datetime.now(CN_TZ).date()
+        if target_day > today:
+            raise ValueError("只能测试今天及以前的日期")
+        return target_day
 
     @staticmethod
     def _help_text() -> str:
@@ -574,9 +576,12 @@ class ArkCalendarPlugin(Star):
         return {
             "timeline_days": self.service.timeline_days(),
             "template_hash": self.renderer.template_hash,
+            "render_image_type": self._value("cache_and_render", "render_image_type", "png"),
+            "render_device_scale_factor_level": self._value("cache_and_render", "render_device_scale_factor_level", "high"),
             "include_recent_operators": self._value("basic", "include_recent_operators", True, "include_recent_operators"),
             "include_long_term": self._value("basic", "include_long_term", True, "include_long_term"),
             "show_source_footer": self._value("basic", "show_source_footer", True, "show_source_footer"),
+            "pool_detail_cards": self._value("basic", "pool_detail_cards", True, "pool_detail_cards"),
         }
 
     def _value(self, section: str, key: str, default: Any, legacy_key: str | None = None) -> Any:

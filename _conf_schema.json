@@ -19,6 +19,12 @@
         "type": "bool",
         "default": true
       },
+      "pool_detail_cards": {
+        "description": "寻访日程下显示卡池详情卡片",
+        "type": "bool",
+        "default": true,
+        "hint": "默认在寻访日程下方追加固定尺寸卡池卡片，避免短卡池图片和文字被压缩；可关闭以仅保留时间轴。"
+      },
       "show_source_footer": {
         "description": "显示数据来源页脚",
         "type": "bool",
@@ -156,6 +162,22 @@
         "type": "int",
         "default": 60,
         "hint": "超过该时间会记录警告日志。"
+      },
+      "render_image_type": {
+        "description": "日历图片格式",
+        "type": "string",
+        "options": ["png", "jpeg"],
+        "labels": ["PNG（无损，推荐）", "JPEG（文件更小）"],
+        "default": "png",
+        "hint": "PNG 保留文字和细线的清晰度；JPEG 适合需要减小图片体积的场景。"
+      },
+      "render_device_scale_factor_level": {
+        "description": "日历渲染清晰度",
+        "type": "string",
+        "options": ["normal", "high", "ultra"],
+        "labels": ["normal", "high", "ultra"],
+        "default": "high",
+        "hint": "档位越高，文字与卡面越清晰，但渲染耗时和图片体积也会增加。"
       },
       "render_timeout_seconds": {
         "description": "T2I 渲染超时（秒）",

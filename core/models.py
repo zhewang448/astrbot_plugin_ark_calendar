@@ -60,6 +60,7 @@ class TimelineItem:
     start: str
     end: str
     image: str = ""
+    detail_image: str = ""
     images: list[str] = field(default_factory=list)
     detail: str = ""
     six_star_up: list[str] = field(default_factory=list)

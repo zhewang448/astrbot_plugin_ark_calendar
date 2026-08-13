@@ -6,7 +6,7 @@ import hashlib
 import json
 import re
 import time
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 from zoneinfo import ZoneInfo
@@ -34,11 +34,12 @@ from ..sources.prts import PrtsSource, game_weekday
 CN_TZ = ZoneInfo("Asia/Shanghai")
 
 # 各类图片在 calendar.html 里的 CSS 显示尺寸（宽, 高），单位 px。
-# 渲染用 scale:"css"（1 CSS px = 1 device px），所以直接取 CSS 尺寸、不乘 DPR。
+# 图片资源按 CSS 布局尺寸预缩放；最终截图的设备像素倍率由 render_device_scale_factor_level 控制。
 # 内嵌前按这些尺寸等比缩小，避免把远大于显示尺寸的原图整份塞进请求体。
 # 数值由 body width:1440px 与各容器的 padding/gap 推算，取整时向上取以留余量。
 TIMELINE_IMAGE_BOX = (1022, 84)      # .bar img.bg，时间轴条背景（.bar 宽度可变，按最宽箱体取）
 TIMELINE_PORTRAIT_BOX = (122, 122)   # .bar .portrait，height:145% of 84px
+POOL_DETAIL_IMAGE_BOX = (640, 360)    # 两列详情卡图片区域，完整显示 16:9 卡面
 OPERATOR_AVATAR_BOX = (73, 73)       # .op img，近期新增干员
 BIRTHDAY_AVATAR_BOX = (88, 88)       # .birth-op img，当天生日干员
 HIGHLIGHT_IMAGE_BOX = (100, 100)     # .highlight-item img，首页亮点（428px 面板 4 列，实测 96px）
@@ -59,7 +60,7 @@ class CalendarService:
     # 仍然能读到该属性。
     plugin_version = "dev"
 
-    SNAPSHOT_SCHEMA_VERSION = 4
+    SNAPSHOT_SCHEMA_VERSION = 5
     SOURCE_CACHE_SCHEMA_VERSION = 1
     CRITICAL_SOURCE_NAMES = frozenset({
         "anything-ics / 生日",
@@ -218,6 +219,7 @@ class CalendarService:
             "timeline_days": self.timeline_days(),
             "include_recent_operators": bool(self.value("basic", "include_recent_operators", True, "include_recent_operators")),
             "include_long_term": bool(self.value("basic", "include_long_term", True, "include_long_term")),
+            "pool_detail_cards": bool(self.value("basic", "pool_detail_cards", True, "pool_detail_cards")),
             "anything_ics_base_url": str(self.value("data_sources", "anything_ics_base_url", "", "anything_ics_base_url") or ""),
             "prts_base_url": str(self.value("data_sources", "prts_base_url", "", "prts_base_url") or ""),
             "gacha_data_url": str(self.value("data_sources", "gacha_data_url", "", "gacha_data_url") or ""),
@@ -779,11 +781,13 @@ class CalendarService:
             return None
         return task.exception()
 
-    async def historical_snapshot(self, start: datetime, end: datetime) -> CalendarSnapshot:
-        """复用常规的数据与图片流程，构造历史区间的 CalendarSnapshot。"""
+    async def historical_snapshot(self, target_day: date) -> CalendarSnapshot:
+        """按指定日期和配置长度构造历史快照；仅首页即时区块保留为空。"""
         assert self.anything and self.prts and self.gacha and self.assets
-        if start > end:
-            raise ValueError("开始日期不能晚于结束日期")
+        target_now = datetime.combine(target_day, datetime.min.time(), CN_TZ).replace(hour=12)
+        start = datetime.combine(target_day - timedelta(days=1), datetime.min.time(), CN_TZ)
+        end = start + timedelta(days=self.timeline_days())
+        await self._ensure_reference_data()
         events_raw, overview = await asyncio.gather(
             self.anything.events(),
             self.prts.gacha_overview(),
@@ -795,13 +799,27 @@ class CalendarService:
         events, long_events = await self._build_events(events_raw, start, end)
         pools_raw = await self.gacha.pools(start, end, overview)
         pools = await self._build_gacha_items(pools_raw)
-        now = self._now()
+        today_records = self._birthdays_by_date.get((target_day.month, target_day.day), ())
+        upcoming_groups: list[BirthdayGroup] = []
+        for offset in range(1, 10):
+            day = target_now + timedelta(days=offset)
+            records = self._birthdays_by_date.get((day.month, day.day), ())
+            if records:
+                upcoming_groups.append(BirthdayGroup(
+                    day.month,
+                    day.day,
+                    [Operator(name=item["name"], birthday_month=day.month, birthday_day=day.day) for item in records],
+                ))
+        avatar_urls = await self._safe_avatar_urls([item["name"] for item in today_records])
+        today_birthdays = [await self._operator_from_record(item, avatar_urls) for item in today_records]
         return CalendarSnapshot(
-            generated_at=now.isoformat(),
-            calendar_date=now.date().isoformat(),
+            generated_at=target_now.isoformat(),
+            calendar_date=target_now.date().isoformat(),
             timeline_start=start.isoformat(),
             timeline_end=end.isoformat(),
             today_info=TodayInfo(),
+            today_birthdays=today_birthdays,
+            upcoming_birthdays=upcoming_groups,
             events=events,
             gacha_pools=pools,
             long_term_events=long_events,
@@ -885,8 +903,15 @@ class CalendarService:
                 for pool in pools_raw
             ),
         )
+        detail_images = []
+        if self.value("basic", "pool_detail_cards", True, "pool_detail_cards"):
+            detail_images = await asyncio.gather(
+                *(self.assets.data_uri(pool.get("image", ""), box=POOL_DETAIL_IMAGE_BOX, quality=100, fit="contain", force_webp=True) for pool in pools_raw),
+            )
+        else:
+            detail_images = [""] * len(pools_raw)
         result: list[TimelineItem] = []
-        for pool, image in zip(pools_raw, primary_images):
+        for pool, image, detail_image in zip(pools_raw, primary_images, detail_images):
             cached = previous.get(pool.get("id", ""))
             six = list(pool.get("six", [])) or (list(cached.six_star_up) if cached else [])
             weighted = list(pool.get("weighted", [])) or (list(cached.weighted_up) if cached else [])
@@ -908,6 +933,7 @@ class CalendarService:
                 start=pool["start"].isoformat(),
                 end=pool["end"].isoformat(),
                 image=image,
+                detail_image=detail_image,
                 images=images,
                 six_star_up=six,
                 weighted_up=weighted,

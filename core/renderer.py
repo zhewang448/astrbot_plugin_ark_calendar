@@ -37,7 +37,7 @@ class CalendarRenderer:
             logger=getattr(service, "logger", None),
         )
 
-    async def calendar(self, snapshot: CalendarSnapshot) -> str:
+    async def calendar(self, snapshot: CalendarSnapshot, *, historical: bool = False) -> str:
         start, end = parse_iso(snapshot.timeline_start), parse_iso(snapshot.timeline_end)
         now = parse_iso(snapshot.generated_at)
         items = [self._timeline(x, start, end, now) for x in snapshot.events]
@@ -71,30 +71,16 @@ class CalendarRenderer:
             "weekday": "星期" + "一二三四五六日"[now.weekday()],
             "hero": hero,
             "show_footer": self.service.value("basic", "show_source_footer", True, "show_source_footer"),
+            "pool_detail_cards": bool(self.service.value("basic", "pool_detail_cards", True, "pool_detail_cards")),
+            "historical": historical,
         }
         # 字体子集要按最终数据里出现的字形来裁，所以放在 data 组装之后。
         data["static"] = await self._static_assets(collect_charset(self.template, data))
-        return await self._html_render(self.template, data, options={"type": "png", "full_page": True, "animations": "disabled", "scale": "css", "timeout": self._render_timeout_ms()})
+        return await self._html_render(self.template, data, options=self._render_options())
 
     async def historical_calendar(self, snapshot: CalendarSnapshot) -> str:
-        """按与主日历相同的时间轴与图片准备流程渲染历史快照。"""
-        start, end = parse_iso(snapshot.timeline_start), parse_iso(snapshot.timeline_end)
-        now = parse_iso(snapshot.generated_at)
-        events = [self._timeline(item, start, end, now) for item in snapshot.events]
-        pools = [self._timeline(item, start, end, now) for item in snapshot.gacha_pools]
-        total_days = max(1, (end.date() - start.date()).days + 1)
-        data = {
-            "start_text": start.astimezone(CN_TZ).strftime("%Y-%m-%d"),
-            "end_text": end.astimezone(CN_TZ).strftime("%Y-%m-%d"),
-            "timeline_days": total_days,
-            "ticks": self._range_ticks(start, total_days),
-            "events": events,
-            "pools": pools,
-            "event_count": len(events),
-            "pool_count": len(pools),
-        }
-        data["static"] = await self._static_assets(collect_charset(self.history_template, data))
-        return await self._html_render(self.history_template, data, options={"type": "png", "full_page": True, "animations": "disabled", "scale": "css", "timeout": self._render_timeout_ms()})
+        """保留旧调用入口，但历史测试改用正常日报模板和布局。"""
+        return await self.calendar(snapshot, historical=True)
 
     @staticmethod
     def _ticks(start: datetime, now: datetime, timeline_days: int) -> list[dict]:
@@ -125,6 +111,21 @@ class CalendarRenderer:
             for offset in sorted(offsets)
         ]
 
+    def _render_options(self) -> dict:
+        image_type = str(self.service.value("cache_and_render", "render_image_type", "png") or "png").lower()
+        scale_level = str(self.service.value("cache_and_render", "render_device_scale_factor_level", "high") or "high").lower()
+        if image_type not in {"png", "jpeg"}:
+            image_type = "png"
+        if scale_level not in {"normal", "high", "ultra"}:
+            scale_level = "high"
+        return {
+            "type": image_type,
+            "full_page": True,
+            "animations": "disabled",
+            "scale": "device",
+            "device_scale_factor_level": scale_level,
+            "timeout": self._render_timeout_ms(),
+        }
     def _render_timeout_ms(self) -> int:
         try:
             seconds = int(self.service.value("cache_and_render", "render_timeout_seconds", 300))
@@ -221,13 +222,7 @@ class CalendarRenderer:
         return await self._html_render(
             self.help_template,
             data,
-            options={
-                "type": "png",
-                "full_page": True,
-                "animations": "disabled",
-                "scale": "css",
-                "timeout": self._render_timeout_ms(),
-            },
+            options=self._render_options(),
         )
 
     def subscribable_items(self, snapshot: CalendarSnapshot) -> list[dict]:
