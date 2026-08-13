@@ -10,7 +10,7 @@
 
 - **寻访详情卡片可选展示。** 新增 `basic.pool_detail_cards`，默认开启；在“寻访日程”时间轴下方追加每行两张的卡池详情卡。时间轴仍准确表达起止时间，详情卡独立展示完整卡面、名称、时间与六星 UP，不改动活动区布局；可关闭以仅显示时间轴。
 - **日历输出格式与清晰度配置。** 新增 `cache_and_render.render_image_type`（`png` / `jpeg`，默认 `png`）及 `cache_and_render.render_device_scale_factor_level`（`normal` / `high` / `ultra`，默认 `high`）。主日历、历史日程与帮助长图统一使用设备像素渲染；配置变化会进入最终图片缓存签名，自动生成新图。
-- **历史日程测试改为单日期日报预览。** `/方舟历史日程测试 <日期>` 支持 `YYYY-MM-DD`、`YYYY/MM/DD`、`YYYY.MM.DD`、`YYYYMMDD` 和中文日期格式。渲染窗口与 `basic.timeline_days` 配置保持一致，并复用正常日报模板；历史时点无法回溯的今日作战、生日、近期干员和首页亮点区块保留为空，不再省略版面。
+- **历史日程测试改为单日期日报预览。** `/方舟历史日程测试 <日期>` 支持 `YYYY-MM-DD`、`YYYY/MM/DD`、`YYYY.MM.DD`、`YYYYMMDD` 和中文日期格式。渲染窗口与 `basic.timeline_days` 配置保持一致，并复用正常日报模板；生日按指定日期计算，历史时点无法回溯的今日作战、近期干员和首页亮点区块保留为空，不再省略版面。
 
 ### 修复
 

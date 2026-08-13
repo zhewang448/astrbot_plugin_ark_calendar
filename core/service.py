@@ -782,11 +782,12 @@ class CalendarService:
         return task.exception()
 
     async def historical_snapshot(self, target_day: date) -> CalendarSnapshot:
-        """按指定日期和配置长度构造历史快照；今日专属区块保留为空。"""
+        """按指定日期和配置长度构造历史快照；仅首页即时区块保留为空。"""
         assert self.anything and self.prts and self.gacha and self.assets
         target_now = datetime.combine(target_day, datetime.min.time(), CN_TZ).replace(hour=12)
         start = datetime.combine(target_day - timedelta(days=1), datetime.min.time(), CN_TZ)
         end = start + timedelta(days=self.timeline_days())
+        await self._ensure_reference_data()
         events_raw, overview = await asyncio.gather(
             self.anything.events(),
             self.prts.gacha_overview(),
@@ -798,13 +799,27 @@ class CalendarService:
         events, long_events = await self._build_events(events_raw, start, end)
         pools_raw = await self.gacha.pools(start, end, overview)
         pools = await self._build_gacha_items(pools_raw)
-        now = target_now
+        today_records = self._birthdays_by_date.get((target_day.month, target_day.day), ())
+        upcoming_groups: list[BirthdayGroup] = []
+        for offset in range(1, 10):
+            day = target_now + timedelta(days=offset)
+            records = self._birthdays_by_date.get((day.month, day.day), ())
+            if records:
+                upcoming_groups.append(BirthdayGroup(
+                    day.month,
+                    day.day,
+                    [Operator(name=item["name"], birthday_month=day.month, birthday_day=day.day) for item in records],
+                ))
+        avatar_urls = await self._safe_avatar_urls([item["name"] for item in today_records])
+        today_birthdays = [await self._operator_from_record(item, avatar_urls) for item in today_records]
         return CalendarSnapshot(
-            generated_at=now.isoformat(),
-            calendar_date=now.date().isoformat(),
+            generated_at=target_now.isoformat(),
+            calendar_date=target_now.date().isoformat(),
             timeline_start=start.isoformat(),
             timeline_end=end.isoformat(),
             today_info=TodayInfo(),
+            today_birthdays=today_birthdays,
+            upcoming_birthdays=upcoming_groups,
             events=events,
             gacha_pools=pools,
             long_term_events=long_events,
