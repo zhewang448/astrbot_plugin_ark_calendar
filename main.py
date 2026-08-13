@@ -574,9 +574,12 @@ class ArkCalendarPlugin(Star):
         return {
             "timeline_days": self.service.timeline_days(),
             "template_hash": self.renderer.template_hash,
+            "render_image_type": self._value("cache_and_render", "render_image_type", "png"),
+            "render_device_scale_factor_level": self._value("cache_and_render", "render_device_scale_factor_level", "high"),
             "include_recent_operators": self._value("basic", "include_recent_operators", True, "include_recent_operators"),
             "include_long_term": self._value("basic", "include_long_term", True, "include_long_term"),
             "show_source_footer": self._value("basic", "show_source_footer", True, "show_source_footer"),
+            "pool_detail_cards": self._value("basic", "pool_detail_cards", True, "pool_detail_cards"),
         }
 
     def _value(self, section: str, key: str, default: Any, legacy_key: str | None = None) -> Any:

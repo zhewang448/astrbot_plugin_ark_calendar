@@ -34,11 +34,12 @@ from ..sources.prts import PrtsSource, game_weekday
 CN_TZ = ZoneInfo("Asia/Shanghai")
 
 # 各类图片在 calendar.html 里的 CSS 显示尺寸（宽, 高），单位 px。
-# 渲染用 scale:"css"（1 CSS px = 1 device px），所以直接取 CSS 尺寸、不乘 DPR。
+# 图片资源按 CSS 布局尺寸预缩放；最终截图的设备像素倍率由 render_device_scale_factor_level 控制。
 # 内嵌前按这些尺寸等比缩小，避免把远大于显示尺寸的原图整份塞进请求体。
 # 数值由 body width:1440px 与各容器的 padding/gap 推算，取整时向上取以留余量。
 TIMELINE_IMAGE_BOX = (1022, 84)      # .bar img.bg，时间轴条背景（.bar 宽度可变，按最宽箱体取）
 TIMELINE_PORTRAIT_BOX = (122, 122)   # .bar .portrait，height:145% of 84px
+POOL_DETAIL_IMAGE_BOX = (640, 360)    # 两列详情卡图片区域，完整显示 16:9 卡面
 OPERATOR_AVATAR_BOX = (73, 73)       # .op img，近期新增干员
 BIRTHDAY_AVATAR_BOX = (88, 88)       # .birth-op img，当天生日干员
 HIGHLIGHT_IMAGE_BOX = (100, 100)     # .highlight-item img，首页亮点（428px 面板 4 列，实测 96px）
@@ -59,7 +60,7 @@ class CalendarService:
     # 仍然能读到该属性。
     plugin_version = "dev"
 
-    SNAPSHOT_SCHEMA_VERSION = 4
+    SNAPSHOT_SCHEMA_VERSION = 5
     SOURCE_CACHE_SCHEMA_VERSION = 1
     CRITICAL_SOURCE_NAMES = frozenset({
         "anything-ics / 生日",
@@ -218,6 +219,7 @@ class CalendarService:
             "timeline_days": self.timeline_days(),
             "include_recent_operators": bool(self.value("basic", "include_recent_operators", True, "include_recent_operators")),
             "include_long_term": bool(self.value("basic", "include_long_term", True, "include_long_term")),
+            "pool_detail_cards": bool(self.value("basic", "pool_detail_cards", True, "pool_detail_cards")),
             "anything_ics_base_url": str(self.value("data_sources", "anything_ics_base_url", "", "anything_ics_base_url") or ""),
             "prts_base_url": str(self.value("data_sources", "prts_base_url", "", "prts_base_url") or ""),
             "gacha_data_url": str(self.value("data_sources", "gacha_data_url", "", "gacha_data_url") or ""),
@@ -885,8 +887,15 @@ class CalendarService:
                 for pool in pools_raw
             ),
         )
+        detail_images = []
+        if self.value("basic", "pool_detail_cards", True, "pool_detail_cards"):
+            detail_images = await asyncio.gather(
+                *(self.assets.data_uri(pool.get("image", ""), box=POOL_DETAIL_IMAGE_BOX, quality=100, fit="contain", force_webp=True) for pool in pools_raw),
+            )
+        else:
+            detail_images = [""] * len(pools_raw)
         result: list[TimelineItem] = []
-        for pool, image in zip(pools_raw, primary_images):
+        for pool, image, detail_image in zip(pools_raw, primary_images, detail_images):
             cached = previous.get(pool.get("id", ""))
             six = list(pool.get("six", [])) or (list(cached.six_star_up) if cached else [])
             weighted = list(pool.get("weighted", [])) or (list(cached.weighted_up) if cached else [])
@@ -908,6 +917,7 @@ class CalendarService:
                 start=pool["start"].isoformat(),
                 end=pool["end"].isoformat(),
                 image=image,
+                detail_image=detail_image,
                 images=images,
                 six_star_up=six,
                 weighted_up=weighted,

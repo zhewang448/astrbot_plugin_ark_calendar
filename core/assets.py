@@ -72,7 +72,7 @@ class AssetCache:
         # 图片缩放器，缓存在 root/images/ 下
         self.image_scaler = ImageScaler(self.root / "images", logger=logger)
 
-    async def data_uri(self, source: str, box: tuple[int, int] | None = None) -> str:
+    async def data_uri(self, source: str, box: tuple[int, int] | None = None, *, quality: int | None = None, fit: str = "cover", force_webp: bool = False) -> str:
         """把图片或字体转成 data URI。
 
         box 给出该图在模板里的 CSS 显示尺寸（宽, 高）时，先按 cover 语义等比
@@ -90,13 +90,13 @@ class AssetCache:
                 except Exception as exc:
                     self._log_download_failure(source, exc)
                     return ""
-                return await self._encode(path, require_image=True, box=box)
-            return await self._encode(Path(source), require_image=False, box=box)
+                return await self._encode(path, require_image=True, box=box, quality=quality, fit=fit, force_webp=force_webp)
+            return await self._encode(Path(source), require_image=False, box=box, quality=quality, fit=fit, force_webp=force_webp)
 
-    async def _encode(self, path: Path, require_image: bool, box: tuple[int, int] | None) -> str:
+    async def _encode(self, path: Path, require_image: bool, box: tuple[int, int] | None, quality: int | None, fit: str, force_webp: bool) -> str:
         """按需缩放后编码；缩放拿不到结果时退回原图的同步编码路径。"""
         if box is not None:
-            scaled = await self.image_scaler.data_uri(path, box)
+            scaled = await self.image_scaler.data_uri(path, box, quality=quality, fit=fit, force_webp=force_webp)
             if scaled:
                 return scaled
         return self._data_uri_from_path(path, require_image=require_image)

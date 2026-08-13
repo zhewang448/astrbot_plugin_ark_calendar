@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 # 缩放逻辑版本；改动尺寸计算、编码参数时 +1，让磁盘上的旧缓存自然失效。
-SCALE_VERSION = 1
+SCALE_VERSION = 2
 
 # webp 编码参数。method 越大压得越狠也越慢，4 是体积与耗时的平衡点。
 WEBP_QUALITY = 82
@@ -32,8 +32,7 @@ ALPHA_MODES = {"RGBA", "LA", "PA", "P"}
 class ImageScaler:
     """把图片按模板里的 CSS 显示尺寸等比缩小并转 webp，按内容与目标尺寸缓存。
 
-    渲染用的是 scale:"css"（1 CSS px = 1 device px），所以目标尺寸直接取
-    CSS 尺寸、不乘 DPR。缩放是 CPU 活，放线程池执行，并按
+    图片按 CSS 布局尺寸生成；最终截图的设备像素倍率由渲染配置控制。缩放是 CPU 活，放线程池执行，并按
     (SCALE_VERSION, 源文件 mtime/size, 目标尺寸) 哈希做内存 + 磁盘双层缓存。
 
     失败时一律返回空串，由调用方回退到原图——宁可请求体大，也不能丢图。
@@ -48,13 +47,13 @@ class ImageScaler:
         self._locks_guard = asyncio.Lock()
         self._unavailable_logged = False
 
-    async def data_uri(self, path: Path, box: tuple[int, int]) -> str:
+    async def data_uri(self, path: Path, box: tuple[int, int], *, quality: int | None = None, fit: str = "cover", force_webp: bool = False) -> str:
         """返回缩放后 webp 的 data URI；任何一步不成立时返回空串。"""
         width, height = box
         if width <= 0 or height <= 0:
             return ""
 
-        key = self._cache_key(path, width, height)
+        key = self._cache_key(path, width, height, quality, fit, force_webp)
         if key is None:
             return ""
 
@@ -71,7 +70,7 @@ class ImageScaler:
                     return cached
                 try:
                     payload = await asyncio.to_thread(
-                        self._load_or_build, key, path, width, height
+                        self._load_or_build, key, path, width, height, quality, fit, force_webp
                     )
                 except Exception as exc:
                     self._log_unavailable_once(exc)
@@ -85,18 +84,18 @@ class ImageScaler:
             # 锁已释放后再回收，否则 locked() 恒为真、字典只增不减。
             await self._release_lock(key)
 
-    def _cache_key(self, path: Path, width: int, height: int) -> str | None:
+    def _cache_key(self, path: Path, width: int, height: int, quality: int | None, fit: str, force_webp: bool) -> str | None:
         try:
             stat = path.stat()
         except OSError:
             return None
         fingerprint = f"{path.resolve()}:{stat.st_size}:{stat.st_mtime_ns}"
         digest = hashlib.sha256(
-            f"{SCALE_VERSION}\x00{fingerprint}\x00{width}x{height}".encode("utf-8")
+            f"{SCALE_VERSION}\x00{fingerprint}\x00{width}x{height}\x00{quality}\x00{fit}\x00{force_webp}".encode("utf-8")
         ).hexdigest()
         return digest[:32]
 
-    def _load_or_build(self, key: str, path: Path, width: int, height: int) -> bytes:
+    def _load_or_build(self, key: str, path: Path, width: int, height: int, quality: int | None, fit: str, force_webp: bool) -> bytes:
         """线程池里执行：命中磁盘缓存就直接读，否则缩放一份写回磁盘。"""
         target = self.cache_dir / f"{key}.webp"
         try:
@@ -105,7 +104,7 @@ class ImageScaler:
         except OSError:
             pass
 
-        payload = self._build(path, width, height)
+        payload = self._build(path, width, height, quality, fit, force_webp)
         if not payload:
             return b""
 
@@ -121,7 +120,7 @@ class ImageScaler:
                 self.logger.warning(f"图片缩放缓存写入失败，本次直接使用内存结果：{exc}")
         return payload
 
-    def _build(self, path: Path, width: int, height: int) -> bytes:
+    def _build(self, path: Path, width: int, height: int, quality: int | None, fit: str, force_webp: bool) -> bytes:
         """缩放并编码。返回空串表示"不值得缩放"，由调用方回退原图。"""
         from PIL import Image
 
@@ -141,11 +140,12 @@ class ImageScaler:
             # 按 cover 语义取缩放比：让缩放后的图刚好覆盖显示框。
             # 不做裁剪——时间轴条的宽度是 CSS 变量、运行时才定，裁了会错。
             # contain 场景（.stage-media）用 cover 比例只会略大于所需，不会欠采样。
-            ratio = max(width / source_width, height / source_height)
+            ratio = (max if fit == "cover" else min)(width / source_width, height / source_height)
             if ratio >= 1:
                 # 源图本来就不比显示尺寸大，放大没有意义，让调用方用原图。
                 return b""
 
+            ratio = min(1, ratio)
             target_width = max(1, round(source_width * ratio))
             target_height = max(1, round(source_height * ratio))
 
@@ -158,13 +158,13 @@ class ImageScaler:
         resized.save(
             buffer,
             format="WEBP",
-            quality=WEBP_QUALITY_ALPHA if has_alpha else WEBP_QUALITY,
+            quality=quality if quality is not None else (WEBP_QUALITY_ALPHA if has_alpha else WEBP_QUALITY),
             method=WEBP_METHOD,
         )
         payload = buffer.getvalue()
 
         # 小图转 webp 后偶尔反而更大，那就没必要换。
-        if not payload or len(payload) >= source_size:
+        if not payload or (not force_webp and len(payload) >= source_size):
             return b""
         return payload
 
