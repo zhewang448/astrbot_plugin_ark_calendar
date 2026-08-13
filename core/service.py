@@ -6,7 +6,7 @@ import hashlib
 import json
 import re
 import time
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 from zoneinfo import ZoneInfo
@@ -781,11 +781,12 @@ class CalendarService:
             return None
         return task.exception()
 
-    async def historical_snapshot(self, start: datetime, end: datetime) -> CalendarSnapshot:
-        """复用常规的数据与图片流程，构造历史区间的 CalendarSnapshot。"""
+    async def historical_snapshot(self, target_day: date) -> CalendarSnapshot:
+        """按指定日期和配置长度构造历史快照；今日专属区块保留为空。"""
         assert self.anything and self.prts and self.gacha and self.assets
-        if start > end:
-            raise ValueError("开始日期不能晚于结束日期")
+        target_now = datetime.combine(target_day, datetime.min.time(), CN_TZ).replace(hour=12)
+        start = datetime.combine(target_day - timedelta(days=1), datetime.min.time(), CN_TZ)
+        end = start + timedelta(days=self.timeline_days())
         events_raw, overview = await asyncio.gather(
             self.anything.events(),
             self.prts.gacha_overview(),
@@ -797,7 +798,7 @@ class CalendarService:
         events, long_events = await self._build_events(events_raw, start, end)
         pools_raw = await self.gacha.pools(start, end, overview)
         pools = await self._build_gacha_items(pools_raw)
-        now = self._now()
+        now = target_now
         return CalendarSnapshot(
             generated_at=now.isoformat(),
             calendar_date=now.date().isoformat(),
