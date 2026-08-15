@@ -371,12 +371,17 @@ class ArkCalendarPlugin(Star):
 
         try:
             snapshot = await self.service.snapshot()
-            item = self._find_timeline_item(snapshot, name)
-            if not item:
+            matches = self._find_timeline_items(snapshot, name)
+            if not matches:
                 yield event.plain_result(
                     self.messages.text("subscription_item_not_found", name=name)
                 )
                 return
+            if len(matches) > 1:
+                candidates = "\n".join(f"- {item.name}" for item in matches)
+                yield event.plain_result(f"找到多个活动或卡池，请使用更完整的名称订阅：\n{candidates}")
+                return
+            item = matches[0]
 
             user_id = str(event.message_obj.sender.user_id)
             # 必须存完整 SID（platform_id:message_type:session_id），
@@ -699,22 +704,26 @@ class ArkCalendarPlugin(Star):
         now = datetime.now(CN_TZ)
         return operator.birthday_month == now.month and operator.birthday_day == now.day
 
-    def _find_timeline_item(self, snapshot, name: str):
-        """根据名称查找活动或卡池"""
+    def _find_timeline_items(self, snapshot, name: str) -> list:
+        """根据名称查找全部匹配的活动或卡池。"""
         name_normalized = name.lower().strip()
         all_items = snapshot.events + snapshot.gacha_pools + snapshot.long_term_events
 
         # 精确匹配
-        for item in all_items:
-            if item.name.lower() == name_normalized:
-                return item
+        exact = [item for item in all_items if item.name.lower() == name_normalized]
+        if exact:
+            return exact
 
         # 模糊匹配
-        for item in all_items:
-            if name_normalized in item.name.lower() or item.name.lower() in name_normalized:
-                return item
+        return [
+            item for item in all_items
+            if name_normalized in item.name.lower() or item.name.lower() in name_normalized
+        ]
 
-        return None
+    def _find_timeline_item(self, snapshot, name: str):
+        """兼容旧调用方：仅在唯一匹配时返回条目。"""
+        matches = self._find_timeline_items(snapshot, name)
+        return matches[0] if len(matches) == 1 else None
 
     # ── 配置读取（简化包装） ───────────────────────────────────
 

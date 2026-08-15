@@ -78,6 +78,7 @@ class SubscriptionManager:
         key = self._subscription_key(item.id, user_id, session_id)
         if key in subs:
             self.logger.info(f"用户 {user_id} 已订阅 {item.name}，更新提醒时间为 {remind_time}")
+            subs[key].end_time = item.end
             subs[key].remind_time = remind_time
             subs[key].notified = False  # 重置通知状态
         else:
@@ -129,17 +130,20 @@ class SubscriptionManager:
         subs = self._load_all_subscriptions()
         pending: list[tuple[Subscription, TimelineItem]] = []
 
-        # 当前快照只用于补充条目详情；订阅自身保存的结束时间才是提醒真值。
+        # 当前快照中的结束时间是最新真值；条目离开快照后才回退到订阅记录。
         items_map: dict[str, TimelineItem] = {}
         for item in snapshot.events + snapshot.gacha_pools + snapshot.long_term_events:
             items_map[item.id] = item
 
+        changed = False
         for sub in subs.values():
-            if sub.notified:
-                continue
-
             item = items_map.get(sub.item_id)
-            if not item:
+            if item:
+                if sub.end_time != item.end:
+                    sub.end_time = item.end
+                    sub.notified = False
+                    changed = True
+            else:
                 item = TimelineItem(
                     id=sub.item_id,
                     name=sub.item_name,
@@ -148,6 +152,9 @@ class SubscriptionManager:
                     start="",
                     end=sub.end_time,
                 )
+
+            if sub.notified:
+                continue
 
             try:
                 end_time = parse_iso(sub.end_time).astimezone(CN_TZ)
@@ -168,6 +175,8 @@ class SubscriptionManager:
             if now >= remind_datetime and now < end_time:
                 pending.append((sub, item))
 
+        if changed:
+            self._save_all_subscriptions(subs)
         return pending
 
     def mark_notified(self, subscription: Subscription) -> None:

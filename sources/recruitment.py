@@ -116,7 +116,6 @@ class RecruitmentSource:
             self._characters_cache = data if isinstance(data, dict) else {}
             return self._characters_cache
         except Exception:
-            self._characters_cache = {}
             return {}
 
     async def _fetch_gacha_table(self) -> dict[str, Any]:
@@ -129,7 +128,6 @@ class RecruitmentSource:
             self._gacha_table_cache = data if isinstance(data, dict) else {}
             return self._gacha_table_cache
         except Exception:
-            self._gacha_table_cache = {}
             return {}
 
     @staticmethod

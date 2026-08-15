@@ -220,17 +220,20 @@ class CalendarRenderer:
             "hero": hero,
         }
         data["static"] = await self._static_assets(collect_charset(self.help_template, data))
+        # 帮助缓存固定为 PNG，避免跟随日历 JPEG 配置而无法写入 HelpImageCache。
+        render_options = self._render_options()
+        render_options["type"] = "png"
         return await self._html_render(
             self.help_template,
             data,
-            options=self._render_options(),
+            options=render_options,
         )
 
     def subscribable_items(self, snapshot: CalendarSnapshot) -> list[dict]:
-        """未结束的活动与卡池，按结束时间排序，供帮助页与订阅提示复用。"""
+        """未结束的活动、卡池与长期活动，按结束时间排序，供帮助页与订阅提示复用。"""
         now = parse_iso(snapshot.generated_at)
         items: list[dict] = []
-        for item in [*snapshot.events, *snapshot.gacha_pools]:
+        for item in [*snapshot.events, *snapshot.gacha_pools, *snapshot.long_term_events]:
             try:
                 start_time, end_time = parse_iso(item.start), parse_iso(item.end)
             except (TypeError, ValueError):

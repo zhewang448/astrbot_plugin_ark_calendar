@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from core.models import CalendarSnapshot, TimelineItem
 from core.recruitment_calculator import RecruitmentCalculator, format_result
 from core.render_cache import CalendarImageCache, validate_rendered_image
+from core.renderer import CalendarRenderer
 from core.subscription import SubscriptionManager
 from sources.recruitment import RecruitmentSource
 
@@ -62,6 +63,69 @@ def test_subscription_reminder_uses_saved_record_when_item_left_snapshot(tmp_pat
     assert pending[0][0].item_name == "长期活动"
 
 
+def test_subscription_syncs_changed_end_time_and_resets_notification(tmp_path: Path):
+    logger = SimpleNamespace(warning=lambda *a, **k: None, info=lambda *a, **k: None)
+    manager = SubscriptionManager(tmp_path, logger=logger)
+    now = datetime.now().astimezone()
+    original = TimelineItem(
+        id="event-1", name="延期活动", category="event", item_type="event",
+        start=(now - timedelta(days=3)).isoformat(), end=(now + timedelta(hours=6)).isoformat(),
+    )
+    manager.add_subscription(original, "u", "platform:Group:1", "00:00")
+    manager.mark_notified(manager.get_user_subscriptions("u")[0])
+    updated = TimelineItem(
+        id="event-1", name="延期活动", category="event", item_type="event",
+        start=original.start, end=(now + timedelta(hours=30)).isoformat(),
+    )
+    snapshot = _snapshot()
+    snapshot.events = [updated]
+
+    pending = manager.get_pending_reminders(snapshot)
+
+    stored = manager.get_user_subscriptions("u")[0]
+    assert stored.end_time == updated.end
+    assert stored.notified is False
+    assert len(pending) == 1
+
+
+def test_help_subscription_items_include_long_term_events():
+    now = datetime.now().astimezone()
+    snapshot = _snapshot()
+    snapshot.long_term_events = [TimelineItem(
+        id="long-1", name="长期活动", category="event", item_type="event",
+        start=(now - timedelta(days=1)).isoformat(), end=(now + timedelta(days=10)).isoformat(),
+    )]
+    renderer = CalendarRenderer.__new__(CalendarRenderer)
+    renderer.COLORS = {"event": "#000000"}
+
+    assert [item["name"] for item in renderer.subscribable_items(snapshot)] == ["长期活动"]
+
+
+def test_help_page_forces_png_even_when_calendar_uses_jpeg():
+    renderer = CalendarRenderer.__new__(CalendarRenderer)
+    renderer.help_template = "help"
+    renderer.service = SimpleNamespace(plugin_version="test")
+    renderer._help_hero = lambda: _empty_async("")
+    renderer._static_assets = lambda _charset: _empty_async({})
+    renderer._render_options = lambda: {"type": "jpeg", "timeout": 1000}
+
+    captured = {}
+
+    async def fake_render(_template, _data, options):
+        captured.update(options)
+        return b"rendered"
+
+    renderer._html_render = fake_render
+    result = asyncio.run(renderer.help_page(_snapshot(), [], []))
+
+    assert result == b"rendered"
+    assert captured["type"] == "png"
+
+
+async def _empty_async(value):
+    return value
+
+
 def test_recruitment_source_uses_gacha_detail_allowlist():
     class FakeHttp:
         async def json(self, url: str):
@@ -94,6 +158,22 @@ def test_recruitment_source_uses_gacha_detail_allowlist():
 
     pool = asyncio.run(RecruitmentSource(FakeHttp()).get_recruitment_pool())
     assert {item["name"] for item in pool["characters"]} == {"小车", "公招干员"}
+
+
+def test_recruitment_source_retries_after_temporary_fetch_failure():
+    class FakeHttp:
+        def __init__(self):
+            self.calls = 0
+
+        async def json(self, _url: str):
+            self.calls += 1
+            if self.calls == 1:
+                raise RuntimeError("temporary failure")
+            return {"char": {"name": "干员"}}
+
+    source = RecruitmentSource(FakeHttp())
+    assert asyncio.run(source._fetch_character_table()) == {}
+    assert asyncio.run(source._fetch_character_table()) == {"char": {"name": "干员"}}
 
 
 def test_recruitment_aliases_sorting_and_full_output():

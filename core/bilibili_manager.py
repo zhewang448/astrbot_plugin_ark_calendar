@@ -59,6 +59,9 @@ class BilibiliDynamicManager:
             if not isinstance(state.get("dynamics"), dict):
                 state["dynamics"] = {}
             baseline_established = bool(state.get("baseline_established"))
+            push_enabled = bool(self.config.get("bilibili_dynamic", {}).get("push_enabled", False))
+            # 旧状态没有该字段时，按当前配置迁移，避免已启用实例重载后误丢新动态。
+            push_ever_enabled = bool(state.get("push_ever_enabled", push_enabled))
 
             # 拉取最近的动态（不下载图片，只获取元数据）
             dynamics = await self.source.recent_dynamics(limit=20, download_images=False)
@@ -77,8 +80,15 @@ class BilibiliDynamicManager:
                     "seen_at": now_text,
                     # 首次建立基线：历史动态直接视为已推送，之后的新动态才推。
                     # 基线已存在时说明这是重载，此处新出现的动态是真·新动态，留给定时任务推。
-                    "pushed": not baseline_established,
+                    # 未启用期间发现的动态属于历史；启用后重载期间发现的动态才进入推送队列。
+                    "pushed": not baseline_established or not push_enabled or not push_ever_enabled,
                 }
+            if push_enabled and not push_ever_enabled and baseline_established:
+                # disabled -> enabled 的首次切换建立新的发送基线，避免补发停用期间的历史动态。
+                for dyn in dynamics:
+                    state["dynamics"].setdefault(dyn["id"], {})["pushed"] = True
+                logger.info("B站动态首次启用：已将当前动态设为历史基线，不补发停用期间内容。")
+            state["push_ever_enabled"] = push_ever_enabled or push_enabled
             state["last_update"] = now_text
             state["baseline_established"] = True
             self.source.save_state(state)
@@ -111,6 +121,15 @@ class BilibiliDynamicManager:
         """获取单条消息最多图片数。"""
         value = self.config.get("bilibili_dynamic", {}).get("max_images_per_message", 3)
         return max(1, min(9, int(value)))
+
+    def _push_types(self) -> list[str]:
+        """获取允许自动推送的动态类型。空列表表示不做类型过滤。"""
+        raw = self.config.get("bilibili_dynamic", {}).get("push_types", ["video", "image", "text"])
+        if isinstance(raw, str):
+            raw = raw.split(",")
+        if not isinstance(raw, list):
+            return []
+        return [str(item).strip().lower() for item in raw if str(item).strip()]
 
     async def query_list(self, limit: int = 5) -> list[dict[str, Any]]:
         """查询最近的动态列表（不下载图片）。"""
@@ -162,8 +181,25 @@ class BilibiliDynamicManager:
                 state = self.source.load_state()
                 records = state.get("dynamics", {})
                 new_dynamics = []
+                push_types = self._push_types()
                 for dynamic in dynamics:
                     record = records.get(dynamic["id"], {})
+                    if not self.source.should_push(dynamic, push_types):
+                        record.update({
+                            "title": dynamic.get("title", ""),
+                            "pushed": True,
+                            "suppressed": True,
+                            "suppressed_type": dynamic.get("dynamic_type", ""),
+                            "suppressed_at": datetime.now().isoformat(),
+                        })
+                        records[dynamic["id"]] = record
+                        continue
+                    if record.get("suppressed"):
+                        # 配置后来放开该类型时，允许重新进入投递队列。
+                        record.pop("suppressed", None)
+                        record.pop("suppressed_type", None)
+                        record.pop("suppressed_at", None)
+                        record["pushed"] = False
                     # 旧版只有全局 pushed 标志。无投递台账的旧记录保持原语义，避免
                     # 升级后把已推过的历史动态再次广播。
                     if record.get("pushed") and "delivered_to" not in record:
@@ -173,6 +209,7 @@ class BilibiliDynamicManager:
                         continue
                     new_dynamics.append(dynamic)
 
+                self.source.save_state(state)
                 if not new_dynamics:
                     logger.debug("B站动态推送：没有新动态。")
                     return 0, 0
@@ -334,18 +371,21 @@ class BilibiliDynamicManager:
             footer_text = "\n".join(footer_lines)
 
             # 检测平台：aiocqhttp 使用合并转发，避免刷屏
-            from ..core.platform_utils import split_sid
+            from .platform_utils import split_sid
             parsed = split_sid(target_sid)
             platform_id = parsed[0] if parsed else ""
 
             # 尝试从 context 获取平台类型
             use_forward = False
             try:
+                use_forward_config = bool(
+                    self.config.get("bilibili_dynamic", {}).get("use_forward_on_qq", True)
+                )
                 platform_inst = self.context.get_platform_inst(platform_id)
                 if platform_inst:
                     platform_name = platform_inst.meta().name
                     # aiocqhttp 且图片数量 > 1 时使用合并转发
-                    use_forward = platform_name == "aiocqhttp" and len(display_images) > 1
+                    use_forward = use_forward_config and platform_name == "aiocqhttp" and len(display_images) > 1
             except Exception:
                 pass
 
