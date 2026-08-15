@@ -74,10 +74,9 @@ class RecruitmentCalculator:
         Args:
             characters: 公招池干员列表，每条包含 id/name/rarity/tags
         """
-        # 剔除 1★（无标签小兵），避免拉低保底；
-        # 也剔除 2★（支援机械），它们只出现在特定标签组合，由特殊逻辑处理
-        # 注：其实 2★ 在常规标签组合中已经因为不含其他常见标签而不影响大多数计算
-        self._pool = [c for c in characters if c["rarity"] >= 2]
+        # 1★ 支援机械属于公开招募池，不能在建池时过滤掉。其招募时长规则由
+        # 上层交互在支持时长参数后处理；这里保留标签组合的候选结果。
+        self._pool = [c for c in characters if c["rarity"] >= 1]
 
         # 预计算每个干员所有有效的"检索标签"（职业 + 位置 + 词缀）
         # 游戏数据中 tagList 只有词缀，职业和位置需要从 profession/position 推算。
@@ -156,12 +155,12 @@ class RecruitmentCalculator:
                 # - 常规：当前组合中所有可能干员的最低稀有度
                 min_rarity = min(op["rarity"] for op in operators)
                 if has_top_senior:
-                    # 过滤掉非 6★（游戏规则：高资保证 6★，5★ 不出现）
-                    operators = [op for op in operators if op["rarity"] >= 6]
+                    # 高级资深干员仅出现 6★。
+                    operators = [op for op in operators if op["rarity"] == 6]
                     min_rarity = 6 if operators else min_rarity
                 elif has_senior:
-                    # 过滤掉非 5★/6★
-                    operators = [op for op in operators if op["rarity"] >= 5]
+                    # 资深干员仅出现 5★；6★只能通过高级资深干员出现。
+                    operators = [op for op in operators if op["rarity"] == 5]
                     min_rarity = min(op["rarity"] for op in operators) if operators else min_rarity
 
                 results.append({
@@ -193,9 +192,11 @@ class RecruitmentCalculator:
             rarity = char["rarity"]
 
             # 稀有度门槛过滤
-            if has_top_senior and rarity < 6:
+            if has_top_senior and rarity != 6:
                 continue
-            if has_senior and not has_top_senior and rarity < 5:
+            if has_senior and not has_top_senior and rarity != 5:
+                continue
+            if not has_top_senior and rarity >= 6:
                 continue
 
             # 普通标签全部命中

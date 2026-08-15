@@ -119,25 +119,35 @@ class SubscriptionManager:
                     result.append(sub)
         return sorted(result, key=lambda s: s.end_time)
 
+    def has_subscriptions(self) -> bool:
+        """返回是否存在任意未清理的订阅，供调度任务快速短路。"""
+        return bool(self._load_all_subscriptions())
+
     def get_pending_reminders(self, snapshot: CalendarSnapshot) -> list[tuple[Subscription, TimelineItem]]:
         """获取需要提醒的订阅列表（结束前一天且未通知）"""
         now = datetime.now(CN_TZ)
         subs = self._load_all_subscriptions()
         pending: list[tuple[Subscription, TimelineItem]] = []
 
-        # 构建当前活动/卡池索引
+        # 当前快照只用于补充条目详情；订阅自身保存的结束时间才是提醒真值。
         items_map: dict[str, TimelineItem] = {}
-        for item in snapshot.events + snapshot.gacha_pools:
+        for item in snapshot.events + snapshot.gacha_pools + snapshot.long_term_events:
             items_map[item.id] = item
 
         for sub in subs.values():
             if sub.notified:
                 continue
 
-            # 检查对应的活动/卡池是否还存在
             item = items_map.get(sub.item_id)
             if not item:
-                continue
+                item = TimelineItem(
+                    id=sub.item_id,
+                    name=sub.item_name,
+                    category=sub.item_type,
+                    item_type=sub.item_type,
+                    start="",
+                    end=sub.end_time,
+                )
 
             try:
                 end_time = parse_iso(sub.end_time).astimezone(CN_TZ)
@@ -177,19 +187,14 @@ class SubscriptionManager:
         now = datetime.now(CN_TZ)
         subs = self._load_all_subscriptions()
 
-        # 构建当前活动/卡池索引
-        active_ids = {item.id for item in snapshot.events + snapshot.gacha_pools}
-
         expired_keys = []
         for key, sub in subs.items():
-            # 如果活动/卡池不再存在，或已过期
-            if sub.item_id not in active_ids:
-                try:
-                    end_time = parse_iso(sub.end_time).astimezone(CN_TZ)
-                    if now > end_time:
-                        expired_keys.append(key)
-                except (TypeError, ValueError):
+            try:
+                end_time = parse_iso(sub.end_time).astimezone(CN_TZ)
+                if now > end_time:
                     expired_keys.append(key)
+            except (TypeError, ValueError):
+                expired_keys.append(key)
 
         for key in expired_keys:
             del subs[key]

@@ -10,6 +10,8 @@ from zoneinfo import ZoneInfo
 import astrbot.api.message_components as Comp
 from astrbot.api.event import MessageChain
 
+from .platform_utils import platform_supports_proactive_send
+
 CN_TZ = ZoneInfo("Asia/Shanghai")
 
 
@@ -149,6 +151,10 @@ class NotificationManager:
         succeeded: list[str] = []
         failed: list[str] = []
         for sid in targets or self._admin_sids():
+            if not platform_supports_proactive_send(sid, self.context):
+                failed.append(sid)
+                self.logger.warning(f"方舟日历管理员 SID {sid} 不支持主动投递。")
+                continue
             try:
                 delivered = await self.context.send_message(
                     sid, MessageChain([Comp.Plain(text=text)])

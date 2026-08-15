@@ -8,7 +8,7 @@ from zoneinfo import ZoneInfo
 
 from .font_subset import FontSubsetError, FontSubsetter, collect_charset
 from .models import CalendarSnapshot, parse_iso
-from .render_cache import validate_rendered_png
+from .render_cache import validate_rendered_image
 
 CN_TZ = ZoneInfo("Asia/Shanghai")
 
@@ -135,12 +135,13 @@ class CalendarRenderer:
 
     async def _html_render(self, template: str, data: dict, options: dict) -> str | Path | bytes:
         rendered = await self.plugin.html_render(template, data, return_url=False, options=options)
+        image_type = str(options.get("type", "png") or "png").lower()
         try:
-            validate_rendered_png(rendered)
+            validate_rendered_image(rendered, image_type)
         except (FileNotFoundError, TypeError, ValueError) as exc:
             timeout_seconds = max(1, int(options.get("timeout", 0)) // 1000)
             raise RuntimeError(
-                f"T2I 渲染未返回有效 PNG 图片（超时设置：{timeout_seconds} 秒）：{exc}"
+                f"T2I 渲染未返回有效 {image_type.upper()} 图片（超时设置：{timeout_seconds} 秒）：{exc}"
             ) from exc
         return rendered
 

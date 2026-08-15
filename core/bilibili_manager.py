@@ -11,6 +11,8 @@ import astrbot.api.message_components as Comp
 from astrbot.api import logger
 from astrbot.api.event import MessageChain
 
+from .platform_utils import platform_supports_proactive_send
+
 if TYPE_CHECKING:
     from ..sources.bilibili_dynamic import BilibiliDynamicSource
 
@@ -158,9 +160,18 @@ class BilibiliDynamicManager:
                 # 获取未推送的新动态（带图片）
                 dynamics = await self.source.recent_dynamics(limit=10, download_images=True)
                 state = self.source.load_state()
-                new_dynamics = [
-                    d for d in dynamics if not state.get("dynamics", {}).get(d["id"], {}).get("pushed", False)
-                ]
+                records = state.get("dynamics", {})
+                new_dynamics = []
+                for dynamic in dynamics:
+                    record = records.get(dynamic["id"], {})
+                    # 旧版只有全局 pushed 标志。无投递台账的旧记录保持原语义，避免
+                    # 升级后把已推过的历史动态再次广播。
+                    if record.get("pushed") and "delivered_to" not in record:
+                        continue
+                    delivered_to = record.get("delivered_to", {})
+                    if isinstance(delivered_to, dict) and all(sid in delivered_to for sid in targets):
+                        continue
+                    new_dynamics.append(dynamic)
 
                 if not new_dynamics:
                     logger.debug("B站动态推送：没有新动态。")
@@ -173,30 +184,39 @@ class BilibiliDynamicManager:
 
                 for dynamic in new_dynamics:
                     dyn_id = dynamic["id"]
-                    success_targets = []
+                    record = state.setdefault("dynamics", {}).setdefault(dyn_id, {})
+                    delivered_to = record.get("delivered_to")
+                    if not isinstance(delivered_to, dict):
+                        delivered_to = {}
+                        record["delivered_to"] = delivered_to
 
                     for sid in targets:
+                        if sid in delivered_to:
+                            continue
+                        if not platform_supports_proactive_send(sid, self.context):
+                            failed_count += 1
+                            logger.warning(f"B站动态不支持主动投递：动态={dyn_id}，目标={sid}")
+                            continue
                         try:
                             components = await self.build_message_components(dynamic, sid)
-                            await self.context.send_message(sid, MessageChain(components))
-                            success_targets.append(sid)
+                            delivered = await self.context.send_message(sid, MessageChain(components))
+                            if delivered is False:
+                                failed_count += 1
+                                logger.warning(f"B站动态未投递：动态={dyn_id}，目标={sid}")
+                                continue
+                            delivered_to[sid] = datetime.now().isoformat()
+                            sent_count += 1
                             await asyncio.sleep(0.5)  # 限流
                         except Exception:
                             logger.error(f"B站动态推送失败：动态={dyn_id}，目标={sid}", exc_info=True)
                             failed_count += 1
 
-                    if success_targets:
-                        # 标记为已推送
-                        if "dynamics" not in state:
-                            state["dynamics"] = {}
-                        if dyn_id not in state["dynamics"]:
-                            state["dynamics"][dyn_id] = {}
-                        state["dynamics"][dyn_id]["pushed"] = True
-                        state["dynamics"][dyn_id]["pushed_at"] = datetime.now().isoformat()
-                        self.source.save_state(state)
-                        sent_count += 1
+                    record["pushed"] = all(sid in delivered_to for sid in targets)
+                    if record["pushed"]:
+                        record["pushed_at"] = datetime.now().isoformat()
+                    self.source.save_state(state)
 
-                logger.info(f"B站动态推送完成：成功 {sent_count} 条，失败 {failed_count} 条。")
+                logger.info(f"B站动态推送完成：成功 {sent_count} 次投递，失败 {failed_count} 次。")
                 return sent_count, failed_count
 
             except Exception:
@@ -222,9 +242,17 @@ class BilibiliDynamicManager:
             failed_count = 0
 
             for sid in targets:
+                if not platform_supports_proactive_send(sid, self.context):
+                    failed_count += 1
+                    logger.warning(f"B站动态测试推送不支持主动投递：目标={sid}")
+                    continue
                 try:
                     components = await self.build_message_components(dynamic, sid)
-                    await self.context.send_message(sid, MessageChain(components))
+                    delivered = await self.context.send_message(sid, MessageChain(components))
+                    if delivered is False:
+                        failed_count += 1
+                        logger.warning(f"B站动态测试推送未投递：目标={sid}")
+                        continue
                     sent_count += 1
                     await asyncio.sleep(0.5)
                 except Exception:

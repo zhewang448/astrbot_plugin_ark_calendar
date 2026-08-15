@@ -7,6 +7,9 @@ from astrbot.api.platform import MessageType
 # 发送侧确认会把 Comp.At 转成平台原生提醒的适配器类型（PlatformMetadata.name）。
 # 其余平台要么只降级成纯文本，要么直接忽略 At 组件，因此统一走纯文本前缀。
 AT_CAPABLE_PLATFORMS = frozenset({"aiocqhttp", "discord", "kook", "lark", "satori"})
+# Context.send_message() 当前不能向 QQ 官方 API 平台主动发消息；命令的被动回复
+# 不受此限制，因此平台仍保留在 metadata 的 support_platforms 中。
+PROACTIVE_SEND_UNSUPPORTED_PLATFORMS = frozenset({"qq_official"})
 
 
 def split_sid(session_id: str) -> tuple[str, str] | None:
@@ -48,3 +51,17 @@ def platform_supports_at(session_id: str, context) -> bool:
     if platform is None:
         return False
     return platform.meta().name in AT_CAPABLE_PLATFORMS
+
+
+def platform_supports_proactive_send(session_id: str, context) -> bool:
+    """判断当前适配器是否支持 Context.send_message() 主动投递。"""
+    parsed = split_sid(session_id)
+    if not parsed:
+        return True
+    try:
+        platform = context.get_platform_inst(parsed[0])
+    except Exception:
+        return True
+    if platform is None:
+        return True
+    return platform.meta().name not in PROACTIVE_SEND_UNSUPPORTED_PLATFORMS

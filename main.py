@@ -23,7 +23,7 @@ from .core.image_cache_manager import CalendarImageManager, CalendarImageResult
 from .core.messages import MessageCatalog
 from .core.models import parse_iso
 from .core.notification_manager import NotificationManager, image_state_label
-from .core.platform_utils import is_group_session, platform_supports_at
+from .core.platform_utils import is_group_session, platform_supports_at, platform_supports_proactive_send
 from .core.render_cache import CalendarImageCache, HelpImageCache
 from .core.renderer import CalendarRenderer
 from .core.scheduler_utils import normalize_weekdays, parse_schedule_times
@@ -401,21 +401,28 @@ class ArkCalendarPlugin(Star):
             return
 
         try:
-            snapshot = await self.service.snapshot()
-            item = self._find_timeline_item(snapshot, name)
-            if not item:
-                yield event.plain_result(
-                    self.messages.text("subscription_item_not_found", name=name)
-                )
-                return
-
             user_id = str(event.message_obj.sender.user_id)
             session_id = event.unified_msg_origin
+            subscriptions = self.subscription_manager.get_user_subscriptions(user_id, session_id)
+            normalized = name.casefold()
+            exact = [sub for sub in subscriptions if sub.item_name.casefold() == normalized]
+            matches = exact or [
+                sub for sub in subscriptions
+                if normalized in sub.item_name.casefold() or sub.item_name.casefold() in normalized
+            ]
+            if not matches:
+                yield event.plain_result(self.messages.text("subscription_not_found", name=name))
+                return
+            if len(matches) > 1:
+                candidates = "\n".join(f"- {sub.item_name}" for sub in matches)
+                yield event.plain_result(f"找到多个订阅，请使用更完整的名称取消：\n{candidates}")
+                return
+            sub = matches[0]
 
-            if self.subscription_manager.remove_subscription(item.id, user_id, session_id):
-                yield event.plain_result(self.messages.text("subscription_removed", name=item.name))
+            if self.subscription_manager.remove_subscription(sub.item_id, user_id, session_id):
+                yield event.plain_result(self.messages.text("subscription_removed", name=sub.item_name))
             else:
-                yield event.plain_result(self.messages.text("subscription_not_found", name=item.name))
+                yield event.plain_result(self.messages.text("subscription_not_found", name=sub.item_name))
         except Exception:
             logger.error("取消订阅失败。", exc_info=True)
             yield event.plain_result("取消订阅失败，请稍后重试。")
@@ -1107,6 +1114,9 @@ class ArkCalendarPlugin(Star):
             return
         async with self._scheduled_subscription_reminder_lock:
             try:
+                if not self.subscription_manager.has_subscriptions():
+                    logger.debug("订阅提醒任务：没有订阅记录，本次跳过数据刷新。")
+                    return
                 snapshot = await self.service.snapshot()
                 self.subscription_manager.cleanup_expired(snapshot)
                 pending = self.subscription_manager.get_pending_reminders(snapshot)
@@ -1130,6 +1140,9 @@ class ArkCalendarPlugin(Star):
                 success_count = 0
                 for (session_id, user_id), subs in grouped.items():
                     try:
+                        if not platform_supports_proactive_send(session_id, self.context):
+                            logger.warning(f"订阅提醒不支持主动投递至 {session_id}。")
+                            continue
                         use_at = platform_supports_at(session_id, self.context)
                         # 白名单平台由 At 组件负责提醒，正文不再拼 @；其他群聊退化为纯文本 @。
                         if use_at:
@@ -1197,8 +1210,16 @@ class ArkCalendarPlugin(Star):
         sent: list[str] = []
         failed: list[str] = []
         for sid in targets:
+            if not platform_supports_proactive_send(sid, self.context):
+                failed.append(sid)
+                logger.warning(f"自动生日祝贺不支持主动投递至 SID {sid}。")
+                continue
             try:
-                await self.context.send_message(sid, MessageChain([Comp.Plain(text=text)]))
+                delivered = await self.context.send_message(sid, MessageChain([Comp.Plain(text=text)]))
+                if delivered is False:
+                    failed.append(sid)
+                    logger.warning(f"自动生日祝贺未投递至 SID {sid}。")
+                    continue
                 sent.append(sid)
             except Exception:
                 failed.append(sid)
@@ -1209,9 +1230,17 @@ class ArkCalendarPlugin(Star):
         sent = 0
         failed: list[str] = []
         for sid in targets:
+            if not platform_supports_proactive_send(sid, self.context):
+                failed.append(sid)
+                logger.warning(f"定时方舟日报不支持主动投递至 SID {sid}。")
+                continue
             try:
                 components = [Comp.Plain(text=caption), Comp.Image.fromFileSystem(str(image))]
-                await self.context.send_message(sid, MessageChain(components))
+                delivered = await self.context.send_message(sid, MessageChain(components))
+                if delivered is False:
+                    failed.append(sid)
+                    logger.warning(f"定时方舟日报未投递至 SID {sid}。")
+                    continue
                 sent += 1
             except Exception:
                 failed.append(sid)
