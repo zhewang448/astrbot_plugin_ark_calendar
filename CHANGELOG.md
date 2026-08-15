@@ -4,6 +4,26 @@
 
 版本号遵循 `主版本.次版本.修订号`。日期为 `Asia/Shanghai` 时区。
 
+## 0.9.0 - 2026-08-15
+
+### 修复
+
+- **B站动态时区解析错误。** RSS 时间（UTC/GMT）现在能正确转换为中国时区，不再使用错误的 `replace(tzinfo=CN_TZ)` 直接替换时区标签。
+
+### 重构
+
+- **代码模块化重构。** 将 `main.py` 中的辅助函数按功能分类迁移至独立模块，提升代码可维护性：
+  - `core/platform_utils.py` - 平台识别与会话工具（`split_sid`, `is_group_session`, `platform_supports_at`）
+  - `core/status_formatter.py` - 状态格式化（`format_status`, `data_quality_notice`, `birthday_details`, `parse_historical_day`）
+  - `core/help_manager.py` - 帮助长图管理（`HelpManager` 类，缓存查询与渲染协调）
+  - `core/image_cache_manager.py` - 日历图片缓存管理（`CalendarImageManager` 类，图片缓存、渲染、锁管理、降级处理）
+  - `core/notification_manager.py` - 管理员通知（`NotificationManager` 类，通知发送、健康监控、异常追踪）
+- **main.py 瘦身。** 从约 1659 行精简至 1220 行（-26%），保留核心业务逻辑与定时任务协调层，辅助方法迁移至功能模块。
+
+### 变更
+
+- **插件显示名称简化。** 由"罗德岛行动日历"改为"方舟日历"，更简洁易记。
+
 ## 0.8.4 - 2026-08-13
 
 ### 新增

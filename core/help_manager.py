@@ -6,8 +6,10 @@ import asyncio
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from .render_cache import HelpImageCache
+
 if TYPE_CHECKING:
-    from .render_cache import HelpImageCache
+    pass
 
 
 class HelpManager:
