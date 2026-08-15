@@ -467,6 +467,83 @@
     },
     "hint": "设置管理员 SID 与异常通知规则；仅在需要运维告警时启用。"
   },
+  "bilibili_dynamic": {
+    "description": "B站动态推送",
+    "type": "object",
+    "items": {
+      "push_enabled": {
+        "description": "启用定时推送",
+        "type": "bool",
+        "default": false,
+        "hint": "定时检查明日方舟官方B站动态，有新动态时自动推送到下方配置的会话。"
+      },
+      "target_sid_list": {
+        "description": "推送目标 SID",
+        "type": "list",
+        "default": [],
+        "hint": "接收B站动态推送的会话 SID 列表，可在对应会话发送 /sid 获取。"
+      },
+      "check_interval_minutes": {
+        "description": "检查间隔（分钟）",
+        "type": "int",
+        "default": 5,
+        "hint": "定时检查新动态的间隔，建议5-15分钟。过于频繁可能被RSSHub限流。"
+      },
+      "push_types": {
+        "description": "推送类型过滤",
+        "type": "list",
+        "options": [
+          "video",
+          "image",
+          "text",
+          "repost"
+        ],
+        "labels": [
+          "视频（PV、预告片）",
+          "图片（立绘、时装）",
+          "文字（公告、活动说明）",
+          "转发（互动、转发）"
+        ],
+        "default": [
+          "video",
+          "image",
+          "text"
+        ],
+        "hint": "选择要推送的动态类型，默认不推送转发类动态。"
+      },
+      "list_default_count": {
+        "description": "列表默认显示条数",
+        "type": "int",
+        "default": 5,
+        "hint": "手动查询 /方舟动态 时默认显示的动态数量。"
+      },
+      "render_image_count_threshold": {
+        "description": "渲染阈值（图片数量）",
+        "type": "int",
+        "default": 1,
+        "hint": "图片数≤此值时尝试渲染为长图，>此值时分离发送。当前渲染功能未实现，实际效果为≤阈值时发送文字+原图。"
+      },
+      "max_images_per_message": {
+        "description": "单条消息最多图片数",
+        "type": "int",
+        "default": 3,
+        "hint": "图片数超过渲染阈值时，单条消息最多显示几张图片，避免刷屏。"
+      },
+      "use_forward_on_qq": {
+        "description": "QQ平台使用合并转发",
+        "type": "bool",
+        "default": true,
+        "hint": "仅对QQ平台（aiocqhttp）有效。启用后多图动态将使用合并转发消息，更美观；禁用则所有平台统一为单条消息。"
+      },
+      "rsshub_base_url": {
+        "description": "自定义 RSSHub 地址",
+        "type": "string",
+        "default": "",
+        "hint": "留空使用默认公共实例（已验证可用）。如果你自建了RSSHub，可以填写基础URL，如：https://rsshub.example.com"
+      }
+    },
+    "hint": "明日方舟官方B站动态自动推送与查询。首次启用时不会推送历史动态，仅推送之后新增的内容。"
+  },
   "data_sources": {
     "description": "数据源与网络",
     "type": "object",
