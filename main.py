@@ -1130,7 +1130,7 @@ class ArkCalendarPlugin(Star):
                 success_count = 0
                 for (session_id, user_id), subs in grouped.items():
                     try:
-                        use_at = platform_supports_at(session_id)
+                        use_at = platform_supports_at(session_id, self.context)
                         # 白名单平台由 At 组件负责提醒，正文不再拼 @；其他群聊退化为纯文本 @。
                         if use_at:
                             mention = ""

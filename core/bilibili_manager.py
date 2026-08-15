@@ -43,37 +43,50 @@ class BilibiliDynamicManager:
         self._push_lock = asyncio.Lock()
 
     async def initialize_state(self) -> None:
-        """插件加载/重载时初始化动态状态。
+        """插件加载/重载时建立动态基线。
 
-        拉取当前动态，保存到状态缓存中，标记为已知。这样可以避免：
-        1. 首次启用时推送历史动态
-        2. 插件重载时重复推送已推送过的动态
+        首次运行（状态缓存里没有 baseline_established 标记）时，把当前拉到的动态
+        全部记为已推送：它们是安装前就存在的历史动态，不应该在第一次定时检查时发出去。
+        基线建立之后，只有此刻还没出现过的动态才会被判为新动态并推送。
+
+        不受 push_enabled 影响：用户先装插件、之后才开推送时，基线必须已经存在，
+        否则开启那一刻会把整页历史动态一次性发出。
         """
-        push_enabled = bool(self.config.get("bilibili_dynamic", {}).get("push_enabled", False))
-        if not push_enabled:
-            return
-
         try:
+            state = self.source.load_state()
+            if not isinstance(state.get("dynamics"), dict):
+                state["dynamics"] = {}
+            baseline_established = bool(state.get("baseline_established"))
+
             # 拉取最近的动态（不下载图片，只获取元数据）
             dynamics = await self.source.recent_dynamics(limit=20, download_images=False)
-            if dynamics:
-                state = self.source.load_state()
-                # 将当前动态标记为已知，但不标记为已推送
-                if "dynamics" not in state:
-                    state["dynamics"] = {}
-                for dyn in dynamics:
-                    dyn_id = dyn["id"]
-                    if dyn_id not in state["dynamics"]:
-                        state["dynamics"][dyn_id] = {
-                            "title": dyn.get("title", ""),
-                            "seen_at": datetime.now().isoformat(),
-                            "pushed": False,
-                        }
-                state["last_update"] = datetime.now().isoformat()
-                self.source.save_state(state)
+            if not dynamics:
+                # 拉取失败时不要写基线标记，留到下次重载再建，避免把空基线固化下来。
+                logger.warning("B站动态基线未建立：本次未取到任何动态，将在下次重载时重试。")
+                return
+
+            now_text = datetime.now().isoformat()
+            for dyn in dynamics:
+                dyn_id = dyn["id"]
+                if dyn_id in state["dynamics"]:
+                    continue
+                state["dynamics"][dyn_id] = {
+                    "title": dyn.get("title", ""),
+                    "seen_at": now_text,
+                    # 首次建立基线：历史动态直接视为已推送，之后的新动态才推。
+                    # 基线已存在时说明这是重载，此处新出现的动态是真·新动态，留给定时任务推。
+                    "pushed": not baseline_established,
+                }
+            state["last_update"] = now_text
+            state["baseline_established"] = True
+            self.source.save_state(state)
+
+            if baseline_established:
+                logger.info(f"B站动态状态已刷新：已知 {len(state['dynamics'])} 条，新增动态将在下次检查时推送。")
+            else:
                 logger.info(
-                    f"B站动态状态已初始化：记录 {len(dynamics)} 条当前动态，"
-                    f"插件重载后新增的动态将在下次检查时推送。"
+                    f"B站动态基线已建立：{len(dynamics)} 条现有动态记为历史、不会推送，"
+                    "此后新发布的动态才会推送。"
                 )
         except Exception:
             logger.warning("B站动态状态初始化失败，不影响后续功能。", exc_info=True)
@@ -228,7 +241,7 @@ class BilibiliDynamicManager:
         self,
         dynamic: dict[str, Any],
         target_sid: str,
-    ) -> list[Comp.Plain | Comp.Image]:
+    ) -> list:
         """构建消息组件列表。
 
         Args:
@@ -236,9 +249,9 @@ class BilibiliDynamicManager:
             target_sid: 目标会话ID
 
         Returns:
-            消息组件列表
+            消息组件列表，QQ平台含多图时返回 [Nodes]，其他平台返回 [Plain, Image, ...]
         """
-        components: list[Comp.Plain | Comp.Image] = []
+        components: list = []
 
         # 构建头部文字
         icon_map = {"video": "🎬", "image": "🎨", "text": "📢", "repost": "🔄"}
@@ -271,7 +284,7 @@ class BilibiliDynamicManager:
             header_lines.append(description)
             header_lines.append("")
 
-        components.append(Comp.Plain(text="\n".join(header_lines)))
+        header_text = "\n".join(header_lines)
 
         # 图片处理：使用已下载的本地缓存路径
         cached_images = dynamic.get("cached_images", [])
@@ -279,9 +292,6 @@ class BilibiliDynamicManager:
 
         if cached_images:
             display_images = cached_images[:max_images]
-            for img_path in display_images:
-                if Path(img_path).exists():
-                    components.append(Comp.Image.fromFileSystem(img_path))
 
             # 底部提示
             footer_lines = []
@@ -293,13 +303,64 @@ class BilibiliDynamicManager:
                 footer_lines.append(f"🔗 查看完整动态：{link}")
 
             footer_lines.append("━━━━━━━━━━━━━━━━━━━━")
+            footer_text = "\n".join(footer_lines)
 
-            if footer_lines:
-                components.append(Comp.Plain(text="\n".join(footer_lines)))
+            # 检测平台：aiocqhttp 使用合并转发，避免刷屏
+            from ..core.platform_utils import split_sid
+            parsed = split_sid(target_sid)
+            platform_id = parsed[0] if parsed else ""
+
+            # 尝试从 context 获取平台类型
+            use_forward = False
+            try:
+                platform_inst = self.context.get_platform_inst(platform_id)
+                if platform_inst:
+                    platform_name = platform_inst.meta().name
+                    # aiocqhttp 且图片数量 > 1 时使用合并转发
+                    use_forward = platform_name == "aiocqhttp" and len(display_images) > 1
+            except Exception:
+                pass
+
+            if use_forward:
+                # QQ合并转发：每张图一个节点
+                try:
+                    from astrbot.core.message.components import Node, Nodes
+                    nodes = []
+                    # 第一个节点：标题 + 第一张图
+                    first_content = [Comp.Plain(text=header_text)]
+                    if display_images and Path(display_images[0]).exists():
+                        first_content.append(Comp.Image.fromFileSystem(display_images[0]))
+                    nodes.append(Node(content=first_content, name="明日方舟官方", uin="161775300"))
+
+                    # 后续图片各一个节点
+                    for img_path in display_images[1:]:
+                        if Path(img_path).exists():
+                            nodes.append(Node(
+                                content=[Comp.Image.fromFileSystem(img_path)],
+                                name="明日方舟官方",
+                                uin="161775300"
+                            ))
+
+                    # 最后一个节点：底部提示
+                    nodes.append(Node(content=[Comp.Plain(text=footer_text)], name="明日方舟官方", uin="161775300"))
+
+                    return [Nodes(nodes=nodes)]
+                except Exception:
+                    # 合并转发构建失败，回退到普通消息
+                    pass
+
+            # 普通消息：逐个发送
+            components.append(Comp.Plain(text=header_text))
+            for img_path in display_images:
+                if Path(img_path).exists():
+                    components.append(Comp.Image.fromFileSystem(img_path))
+            components.append(Comp.Plain(text=footer_text))
         else:
             # 无图片，只加链接
             link = dynamic.get("link", "")
             if link:
-                components.append(Comp.Plain(text=f"🔗 {link}\n━━━━━━━━━━━━━━━━━━━━"))
+                components.append(Comp.Plain(text=f"{header_text}🔗 {link}\n━━━━━━━━━━━━━━━━━━━━"))
+            else:
+                components.append(Comp.Plain(text=header_text + "━━━━━━━━━━━━━━━━━━━━"))
 
         return components

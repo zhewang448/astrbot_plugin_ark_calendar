@@ -53,12 +53,12 @@ class RecruitmentSource:
             if "招募" not in obtain_approach:
                 continue
 
-            # 解析稀有度（TIER_1 -> 2星，TIER_6 -> 7星）
+            # 解析稀有度（TIER_1 = 1星，TIER_6 = 6星，直接取数字）
             rarity_str = char_data.get("rarity", "")
             if not rarity_str.startswith("TIER_"):
                 continue
             try:
-                rarity = int(rarity_str.split("_")[1]) + 1
+                rarity = int(rarity_str.split("_")[1])
             except (ValueError, IndexError):
                 continue
 

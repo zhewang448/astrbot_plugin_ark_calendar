@@ -173,6 +173,10 @@ class FontSubsetter:
             raise FontSubsetError(f"源字体解析失败：{self.source}") from exc
 
         try:
+            # fontTools 自身会输出大量 INFO 日志（Glyph names、tables 等），统一升到 WARNING 屏蔽噪音。
+            import logging
+            logging.getLogger("fontTools").setLevel(logging.WARNING)
+
             subsetter = ft_subset.Subsetter(options=options)
             subsetter.populate(text=charset)
             subsetter.subset(font)

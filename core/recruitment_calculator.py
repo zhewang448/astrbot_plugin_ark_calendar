@@ -172,8 +172,8 @@ class RecruitmentCalculator:
                     "has_top_senior": has_top_senior,
                 })
 
-        # 排序：高保底优先；同保底则标签数少的优先（组合越少越精准）
-        results.sort(key=lambda r: (-r["min_rarity"], len(r["tags"])))
+        # 排序：高保底优先；同保底则标签数多的优先（词条越多命中范围越窄、结果越精准）
+        results.sort(key=lambda r: (-r["min_rarity"], -len(r["tags"])))
         return results
 
     def _match_operators(self, tags: list[str]) -> list[dict[str, Any]]:
