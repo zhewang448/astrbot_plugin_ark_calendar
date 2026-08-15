@@ -48,6 +48,20 @@ class CalendarImageManager:
     def send_rendering_notice(self) -> bool:
         return bool(self._value("send_rendering_notice", True))
 
+    def _display_config(self) -> dict[str, Any]:
+        """构造影响最终图片内容的展示配置，用于缓存签名。"""
+        from .config import config_value
+        return {
+            "timeline_days": self.service.timeline_days(),
+            "template_hash": self.renderer.template_hash,
+            "render_image_type": self._value("render_image_type", "png"),
+            "render_device_scale_factor_level": self._value("render_device_scale_factor_level", "high"),
+            "include_recent_operators": config_value(self.config, "basic", "include_recent_operators", True, "include_recent_operators"),
+            "include_long_term": config_value(self.config, "basic", "include_long_term", True, "include_long_term"),
+            "show_source_footer": config_value(self.config, "basic", "show_source_footer", True, "show_source_footer"),
+            "pool_detail_cards": config_value(self.config, "basic", "pool_detail_cards", True, "pool_detail_cards"),
+        }
+
     # ── 图片获取入口 ───────────────────────────────────────────
 
     def current_cached_image(self, display_config: dict[str, Any]) -> Path | None:

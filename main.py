@@ -963,7 +963,7 @@ class ArkCalendarPlugin(Star):
             logger.info("每日预缓存开始：强制刷新数据并生成当天图片缓存。")
             try:
                 snapshot, outcome = await self.service.snapshot_with_outcome(force=True)
-                calendar_image, image_state, _ = await self.image_manager.get_calendar_image(snapshot)
+                calendar_image, image_state, _ = await self.image_manager.get_calendar_image(snapshot, self.image_manager._display_config())
 
                 # 任务补跑或凌晨前曾生成帮助图时，先清除当天旧版本，确保使用新快照重渲染。
                 self.help_cache.invalidate()
