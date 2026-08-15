@@ -4,7 +4,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from core.models import CalendarSnapshot, TimelineItem
-from core.recruitment_calculator import RecruitmentCalculator
+from core.recruitment_calculator import RecruitmentCalculator, format_result
 from core.render_cache import CalendarImageCache, validate_rendered_image
 from core.subscription import SubscriptionManager
 from sources.recruitment import RecruitmentSource
@@ -94,3 +94,28 @@ def test_recruitment_source_uses_gacha_detail_allowlist():
 
     pool = asyncio.run(RecruitmentSource(FakeHttp()).get_recruitment_pool())
     assert {item["name"] for item in pool["characters"]} == {"小车", "公招干员"}
+
+
+def test_recruitment_aliases_sorting_and_full_output():
+    calculator = RecruitmentCalculator([
+        {"name": "甲", "rarity": 4, "tags": ["输出"]},
+        {"name": "乙", "rarity": 4, "tags": ["输出"]},
+        {"name": "丙", "rarity": 4, "tags": ["输出", "生存"]},
+    ])
+    assert calculator.normalize_tag("快活") == "快速复活"
+    assert calculator.normalize_tag("DPS") == "输出"
+    assert calculator.normalize_tag("奶") == "治疗"
+    assert calculator.normalize_tag("术士") == "术师干员"
+
+    results = calculator.calculate(["输出", "生存"])
+    assert results[0]["tags"] == ["输出", "生存"]
+    assert results[1]["tags"] == ["生存"]
+    assert results[2]["tags"] == ["输出"]
+
+    all_names = [{"name": f"干员{i}", "rarity": 4} for i in range(10)]
+    text = format_result(
+        [{"tags": ["输出"], "operators": all_names, "min_rarity": 4, "has_senior": False, "has_top_senior": False}],
+        selected_tags=["输出"],
+    )
+    assert "干员9" in text
+    assert "…共" not in text

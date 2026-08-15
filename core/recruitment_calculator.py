@@ -29,15 +29,36 @@ ALL_TAGS = {
 # 标签别名：用户可能输入的非标准写法 -> 标准标签名
 TAG_ALIASES: dict[str, str] = {
     # 职业别名
-    "近卫": "近卫干员", "狙击": "狙击干员", "术师": "术师干员",
-    "医疗": "医疗干员", "重装": "重装干员", "辅助": "辅助干员",
-    "特种": "特种干员", "先锋": "先锋干员",
+    "近卫": "近卫干员", "guard": "近卫干员",
+    "狙": "狙击干员", "狙击": "狙击干员", "sniper": "狙击干员",
+    "术": "术师干员", "术师": "术师干员", "术士": "术师干员", "法师": "术师干员", "caster": "术师干员",
+    "医": "医疗干员", "医疗": "医疗干员", "medic": "医疗干员",
+    "盾": "重装干员", "重装": "重装干员", "坦克": "重装干员", "defender": "重装干员",
+    "拐": "辅助干员", "辅助": "辅助干员", "supporter": "辅助干员",
+    "特": "特种干员", "特种": "特种干员", "specialist": "特种干员",
+    "回费先锋": "先锋干员", "先锋": "先锋干员", "vanguard": "先锋干员",
     # 位置别名
-    "近战": "近战位", "远程": "远程位",
+    "近战": "近战位", "近战位": "近战位", "melee": "近战位",
+    "远程": "远程位", "远程位": "远程位", "ranged": "远程位",
     # 稀有标签别名
-    "高资": "高级资深干员", "资深": "资深干员",
+    "高资": "高级资深干员", "顶资": "高级资深干员", "高级资深": "高级资深干员",
+    "top": "高级资深干员", "资深": "资深干员", "资深干员": "资深干员", "senior": "资深干员",
     # 词缀别名
-    "小车": "支援机械", "机械": "支援机械",
+    "小车": "支援机械", "机器人": "支援机械", "机械": "支援机械", "robot": "支援机械",
+    "推拉": "位移", "位移": "位移",
+    "元素损伤": "元素", "元素": "元素",
+    "slow": "减速", "减速": "减速",
+    "减防": "削弱", "debuff": "削弱", "削弱": "削弱",
+    "召唤物": "召唤", "召唤": "召唤",
+    "快活": "快速复活", "快复": "快速复活", "快速复活": "快速复活", "fast复活": "快速复活",
+    "控制": "控场", "控场": "控场",
+    "支援": "支援", "新手": "新手",
+    "奶": "治疗", "治疗": "治疗",
+    "aoe": "群攻", "群攻": "群攻",
+    "dps": "输出", "输出": "输出",
+    "回费": "费用回复", "费用回复": "费用回复",
+    "防御": "防护", "防护": "防护",
+    "对空": "高空", "高空": "高空",
 }
 
 # 职业 -> 游戏数据中的英文 profession 字段（仅用于从 char_table 快速过滤）
@@ -94,6 +115,9 @@ class RecruitmentCalculator:
             return raw
         if raw in TAG_ALIASES:
             return TAG_ALIASES[raw]
+        folded = raw.casefold()
+        if folded in TAG_ALIASES:
+            return TAG_ALIASES[folded]
         # 模糊匹配：原始标签是某个标准标签的子串（如"减速"匹配"减速"，"高资"不匹配）
         for tag in ALL_TAGS:
             if raw in tag or tag in raw:
@@ -171,8 +195,8 @@ class RecruitmentCalculator:
                     "has_top_senior": has_top_senior,
                 })
 
-        # 排序：高保底优先；同保底则标签数多的优先（词条越多命中范围越窄、结果越精准）
-        results.sort(key=lambda r: (-r["min_rarity"], -len(r["tags"])))
+        # 排序：高保底优先；同保底时词条越多越优先；词条数相同时，命中干员越少越优先。
+        results.sort(key=lambda r: (-r["min_rarity"], -len(r["tags"]), len(r["operators"]), tuple(r["tags"])))
         return results
 
     def _match_operators(self, tags: list[str]) -> list[dict[str, Any]]:
@@ -224,14 +248,14 @@ def format_result(
     results: list[dict[str, Any]],
     *,
     selected_tags: list[str],
-    max_operators_per_combo: int = 8,
+    max_operators_per_combo: int | None = None,
 ) -> str:
     """将计算结果格式化为可读文本。
 
     Args:
         results: calculate() 的返回值
         selected_tags: 用户选择的原始标签（用于展示）
-        max_operators_per_combo: 每个组合最多列出多少个干员
+        max_operators_per_combo: 兼容旧调用方的可选限制；默认 None 表示完整输出
 
     Returns:
         格式化后的文本
@@ -250,7 +274,7 @@ def format_result(
         "",
     ]
 
-    for i, result in enumerate(results[:6]):  # 最多展示 6 个组合
+    for i, result in enumerate(results):
         combo_tags = " + ".join(result["tags"])
         min_rarity = result["min_rarity"]
         operators = result["operators"]
@@ -272,7 +296,8 @@ def format_result(
 
         # 按星级分组列出干员
         by_rarity: dict[int, list[str]] = {}
-        for op in operators[:max_operators_per_combo]:
+        shown_operators = operators if max_operators_per_combo is None else operators[:max_operators_per_combo]
+        for op in shown_operators:
             by_rarity.setdefault(op["rarity"], []).append(op["name"])
 
         for rarity in sorted(by_rarity.keys(), reverse=True):
@@ -281,7 +306,7 @@ def format_result(
             lines.append(f"   {rarity_stars}：{names_str}")
 
         total = len(operators)
-        if total > max_operators_per_combo:
+        if max_operators_per_combo is not None and total > max_operators_per_combo:
             lines.append(f"   …共 {total} 位干员")
 
         if i < len(results) - 1:
