@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from typing import Any
 
 from .http import HttpClient
@@ -14,14 +15,21 @@ from .http import HttpClient
 class RecruitmentSource:
     """公开招募数据源。
 
-    从 torappu.prts.wiki 获取干员表，筛选可公招的干员及其标签和稀有度。
+    复用游戏数据的公开招募名单与干员表，生成可计算的当前公招池。
+
+    `character_table.itemObtainApproach` 只描述角色的获取途径，不能作为当前
+    公招池白名单：已下线或从未进入公开招募的角色也可能包含“招募”字样。
+    `gacha_table.recruitDetail` 中“全部可能出现的干员”才是客户端当前展示的
+    公招名单；同类开源计算器普遍维护的静态名单也以此为准。
     """
 
     CHARACTER_TABLE_URL = "https://torappu.prts.wiki/gamedata/latest/excel/character_table.json"
+    GACHA_TABLE_URL = "https://torappu.prts.wiki/gamedata/latest/excel/gacha_table.json"
 
     def __init__(self, http: HttpClient):
         self.http = http
         self._characters_cache: dict[str, dict[str, Any]] | None = None
+        self._gacha_table_cache: dict[str, Any] | None = None
 
     async def get_recruitment_pool(self) -> dict[str, Any]:
         """获取公招池干员数据。
@@ -40,17 +48,20 @@ class RecruitmentSource:
                 "tags": ["全部标签"],
             }
         """
-        chars_table = await self._fetch_character_table()
-        if not chars_table:
+        chars_table, gacha_table = await asyncio.gather(
+            self._fetch_character_table(),
+            self._fetch_gacha_table(),
+        )
+        recruit_names = self._recruit_names(gacha_table.get("recruitDetail", ""))
+        if not chars_table or not recruit_names:
             return {"characters": [], "tags": set()}
 
         recruitment_chars = []
         all_tags = set()
 
         for char_id, char_data in chars_table.items():
-            # 筛选可公招的干员
-            obtain_approach = char_data.get("itemObtainApproach", "") or ""
-            if "招募" not in obtain_approach:
+            name = str(char_data.get("name", "") or "")
+            if name not in recruit_names:
                 continue
 
             # 解析稀有度（TIER_1 = 1星，TIER_6 = 6星，直接取数字）
@@ -85,7 +96,7 @@ class RecruitmentSource:
 
             recruitment_chars.append({
                 "id": char_id,
-                "name": char_data.get("name", ""),
+                "name": name,
                 "rarity": rarity,
                 "tags": tags,
             })
@@ -108,6 +119,38 @@ class RecruitmentSource:
             self._characters_cache = {}
             return {}
 
+    async def _fetch_gacha_table(self) -> dict[str, Any]:
+        """获取含当前公招白名单的抽卡表，带内存缓存。"""
+        if self._gacha_table_cache is not None:
+            return self._gacha_table_cache
+
+        try:
+            data = await self.http.json(self.GACHA_TABLE_URL)
+            self._gacha_table_cache = data if isinstance(data, dict) else {}
+            return self._gacha_table_cache
+        except Exception:
+            self._gacha_table_cache = {}
+            return {}
+
+    @staticmethod
+    def _recruit_names(recruit_detail: Any) -> set[str]:
+        """从 gacha_table.recruitDetail 解析客户端展示的公招名单。"""
+        if not isinstance(recruit_detail, str):
+            return set()
+
+        names: set[str] = set()
+        # 分隔符是真实换行；每个星级标题与名单之间则是字面量 ``\\n``。
+        # 第一段名单前有说明文字，不能假定星级标题就是分段首行。
+        pattern = r"^★+\\n(?P<operators>.+?)(?=\r?\n-+|\Z)"
+        for match in re.finditer(re.compile(pattern, flags=re.MULTILINE | re.DOTALL), recruit_detail):
+            operators = re.sub(r"<[^>]*>", "", match.group("operators"))
+            for raw_name in operators.split("/"):
+                name = raw_name.strip()
+                if name:
+                    names.add(name)
+        return names
+
     def clear_cache(self) -> None:
         """清空缓存。"""
         self._characters_cache = None
+        self._gacha_table_cache = None

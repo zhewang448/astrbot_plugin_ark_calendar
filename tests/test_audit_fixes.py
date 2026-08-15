@@ -1,3 +1,4 @@
+import asyncio
 from datetime import datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -6,6 +7,7 @@ from core.models import CalendarSnapshot, TimelineItem
 from core.recruitment_calculator import RecruitmentCalculator
 from core.render_cache import CalendarImageCache, validate_rendered_image
 from core.subscription import SubscriptionManager
+from sources.recruitment import RecruitmentSource
 
 
 def _snapshot() -> CalendarSnapshot:
@@ -58,3 +60,37 @@ def test_subscription_reminder_uses_saved_record_when_item_left_snapshot(tmp_pat
     pending = manager.get_pending_reminders(_snapshot())
     assert len(pending) == 1
     assert pending[0][0].item_name == "长期活动"
+
+
+def test_recruitment_source_uses_gacha_detail_allowlist():
+    class FakeHttp:
+        async def json(self, url: str):
+            if url.endswith("gacha_table.json"):
+                return {
+                    "recruitDetail": (
+                        "说明文字\r\n★\\n<@rc.eml>小车</>\r\n"
+                        "--------------------\r\n"
+                        "★★★★\\n<@rc.eml>公招干员</>\r\n"
+                        "--------------------\r\n"
+                    )
+                }
+            return {
+                "robot": {
+                    "name": "小车", "rarity": "TIER_1", "tagList": ["支援机械"],
+                    "profession": "SPECIALIST", "position": "MELEE",
+                    "itemObtainApproach": "招募",
+                },
+                "recruitable": {
+                    "name": "公招干员", "rarity": "TIER_4", "tagList": ["输出"],
+                    "profession": "WARRIOR", "position": "MELEE",
+                    "itemObtainApproach": "招募",
+                },
+                "not_in_pool": {
+                    "name": "普通干员", "rarity": "TIER_4", "tagList": ["输出"],
+                    "profession": "WARRIOR", "position": "MELEE",
+                    "itemObtainApproach": "招募",
+                },
+            }
+
+    pool = asyncio.run(RecruitmentSource(FakeHttp()).get_recruitment_pool())
+    assert {item["name"] for item in pool["characters"]} == {"小车", "公招干员"}
