@@ -38,13 +38,35 @@
 
 ## 效果预览
 
-### 今日行动日历
+### 1. 日历总览
 
-![罗德岛行动终端预览](assets/readme/daily-calendar.webp)
+<details>
+<summary>展开查看日历总览</summary>
+<p align="center">
+  <img src="assets/readme/daily-calendar.webp" alt="罗德岛行动终端日历总览" width="900">
+</p>
+</details>
 
-### 指令手册
+### 2. B 站动态
 
-![罗德岛终端手册预览](assets/readme/command-manual.webp)
+<p align="center">
+  <img src="assets/readme/bilibili-dynamic-image.webp" alt="B站动态预览" width="700">
+</p>
+
+### 3. 公招计算
+
+<details>
+<summary>展开查看公招计算结果</summary>
+<p align="center">
+  <img src="assets/readme/recruitment.webp" alt="公开招募计算结果" width="700">
+</p>
+</details>
+
+### 4.指令手册
+
+<p align="center">
+  <img src="assets/readme/command-manual.webp" alt="罗德岛终端手册预览" width="900">
+</p>
 
 ## 🙏 致谢
 
