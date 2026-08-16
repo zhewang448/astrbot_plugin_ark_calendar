@@ -156,15 +156,15 @@ class NotificationManager:
                 self.logger.warning(f"方舟日历管理员 SID {sid} 不支持主动投递。")
                 continue
             try:
-                delivered = await self.context.send_message(
+                dispatched = await self.context.send_message(
                     sid, MessageChain([Comp.Plain(text=text)])
                 )
-                if delivered:
+                if dispatched is not False:
                     succeeded.append(sid)
                 else:
                     failed.append(sid)
                     self.logger.warning(
-                        f"向方舟日历管理员 SID {sid} 发送通知未被消息平台接收。"
+                        f"向方舟日历管理员 SID {sid} 提交通知未被消息平台接收。"
                         "请使用该会话 /sid 返回的完整 SID，并确认对应平台在线。"
                     )
             except Exception:

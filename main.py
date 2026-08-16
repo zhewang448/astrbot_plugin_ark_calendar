@@ -18,11 +18,11 @@ from astrbot.core.utils.astrbot_path import get_astrbot_plugin_data_path
 
 from .core.command_args import split_name_and_time, strip_command_prefix
 from .core.config import config_int, config_strings, config_value, sync_builtin_message_previews
-from .core.help_manager import HelpManager, command_rows, generate_help_text
-from .core.image_cache_manager import CalendarImageManager, CalendarImageResult
+from .core.help_manager import HelpManager, generate_help_text
+from .core.image_cache_manager import CalendarImageManager
 from .core.messages import MessageCatalog
 from .core.models import parse_iso
-from .core.notification_manager import NotificationManager, image_state_label
+from .core.notification_manager import NotificationManager
 from .core.platform_utils import is_group_session, platform_supports_at, platform_supports_proactive_send
 from .core.render_cache import CalendarImageCache, HelpImageCache
 from .core.renderer import CalendarRenderer
@@ -643,6 +643,8 @@ class ArkCalendarPlugin(Star):
         yield event.plain_result(self.messages.text("force_refresh_started"))
         try:
             snapshot, outcome = await self.service.snapshot_with_outcome(force=True)
+            if self.recruitment_source:
+                self.recruitment_source.clear_cache()
             # 帮助页会展示可订阅日程；强制刷新后不能继续复用旧帮助图。
             self.help_cache.invalidate()
             display_config = self.image_manager._display_config()
@@ -1126,6 +1128,7 @@ class ArkCalendarPlugin(Star):
                     logger.debug("订阅提醒任务：没有订阅记录，本次跳过数据刷新。")
                     return
                 snapshot = await self.service.snapshot()
+                # cleanup_expired 会先按当前快照同步延期后的结束时间，再清理真正过期记录。
                 self.subscription_manager.cleanup_expired(snapshot)
                 pending = self.subscription_manager.get_pending_reminders(snapshot)
                 if not pending:
@@ -1175,8 +1178,8 @@ class ArkCalendarPlugin(Star):
                             components.append(Comp.At(qq=user_id, name=user_id))
                         components.append(Comp.Plain(text="\n\n".join(lines)))
 
-                        delivered = await self.context.send_message(session_id, MessageChain(components))
-                        if delivered is False:
+                        dispatched = await self.context.send_message(session_id, MessageChain(components))
+                        if dispatched is False:
                             logger.warning(
                                 f"订阅提醒未投递至 {session_id}（订阅者 {user_id}）："
                                 "请确认该 SID 对应的平台适配器仍在运行。"
@@ -1189,7 +1192,7 @@ class ArkCalendarPlugin(Star):
 
                         success_count += len(subs)
                         logger.info(
-                            f"订阅提醒已发送至 {session_id}（订阅者 {user_id}，"
+                            f"订阅提醒已提交投递至 {session_id}（订阅者 {user_id}，"
                             f"{len(subs)} 个提醒，At={'是' if use_at else '否'}）。"
                         )
                     except Exception:
@@ -1223,8 +1226,8 @@ class ArkCalendarPlugin(Star):
                 logger.warning(f"自动生日祝贺不支持主动投递至 SID {sid}。")
                 continue
             try:
-                delivered = await self.context.send_message(sid, MessageChain([Comp.Plain(text=text)]))
-                if delivered is False:
+                dispatched = await self.context.send_message(sid, MessageChain([Comp.Plain(text=text)]))
+                if dispatched is False:
                     failed.append(sid)
                     logger.warning(f"自动生日祝贺未投递至 SID {sid}。")
                     continue
@@ -1244,8 +1247,8 @@ class ArkCalendarPlugin(Star):
                 continue
             try:
                 components = [Comp.Plain(text=caption), Comp.Image.fromFileSystem(str(image))]
-                delivered = await self.context.send_message(sid, MessageChain(components))
-                if delivered is False:
+                dispatched = await self.context.send_message(sid, MessageChain(components))
+                if dispatched is False:
                     failed.append(sid)
                     logger.warning(f"定时方舟日报未投递至 SID {sid}。")
                     continue

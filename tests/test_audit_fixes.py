@@ -95,6 +95,27 @@ def test_subscription_syncs_changed_end_time_and_resets_notification(tmp_path: P
     assert len(pending) == 1
 
 
+def test_cleanup_syncs_extended_end_before_expiring_subscription(tmp_path: Path):
+    logger = SimpleNamespace(warning=lambda *a, **k: None, info=lambda *a, **k: None)
+    manager = SubscriptionManager(tmp_path, logger=logger)
+    now = datetime.now().astimezone()
+    original = TimelineItem(
+        id="延期", name="延期活动", category="event", item_type="event",
+        start=(now - timedelta(days=3)).isoformat(), end=(now - timedelta(hours=1)).isoformat(),
+    )
+    manager.add_subscription(original, "u", "platform:Group:1", "00:00")
+    updated = TimelineItem(
+        id=original.id, name=original.name, category=original.category, item_type=original.item_type,
+        start=original.start, end=(now + timedelta(days=2)).isoformat(),
+    )
+    snapshot = _snapshot()
+    snapshot.events = [updated]
+
+    assert manager.cleanup_expired(snapshot) == 0
+    stored = manager.get_user_subscriptions("u")[0]
+    assert stored.end_time == updated.end
+
+
 def test_help_subscription_items_include_long_term_events():
     now = datetime.now().astimezone()
     snapshot = _snapshot()

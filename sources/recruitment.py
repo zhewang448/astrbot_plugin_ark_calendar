@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+from datetime import datetime, timedelta
 from typing import Any
 
 from .http import HttpClient
@@ -30,6 +31,8 @@ class RecruitmentSource:
         self.http = http
         self._characters_cache: dict[str, dict[str, Any]] | None = None
         self._gacha_table_cache: dict[str, Any] | None = None
+        self._cache_expires_at: datetime | None = None
+        self.cache_ttl = timedelta(hours=24)
 
     async def get_recruitment_pool(self) -> dict[str, Any]:
         """获取公招池干员数据。
@@ -108,24 +111,26 @@ class RecruitmentSource:
 
     async def _fetch_character_table(self) -> dict[str, Any]:
         """获取角色表，带缓存。"""
-        if self._characters_cache is not None:
+        if self._characters_cache is not None and self._cache_valid():
             return self._characters_cache
 
         try:
             data = await self.http.json(self.CHARACTER_TABLE_URL)
             self._characters_cache = data if isinstance(data, dict) else {}
+            self._cache_expires_at = datetime.now() + self.cache_ttl
             return self._characters_cache
         except Exception:
             return {}
 
     async def _fetch_gacha_table(self) -> dict[str, Any]:
         """获取含当前公招白名单的抽卡表，带内存缓存。"""
-        if self._gacha_table_cache is not None:
+        if self._gacha_table_cache is not None and self._cache_valid():
             return self._gacha_table_cache
 
         try:
             data = await self.http.json(self.GACHA_TABLE_URL)
             self._gacha_table_cache = data if isinstance(data, dict) else {}
+            self._cache_expires_at = datetime.now() + self.cache_ttl
             return self._gacha_table_cache
         except Exception:
             return {}
@@ -152,3 +157,7 @@ class RecruitmentSource:
         """清空缓存。"""
         self._characters_cache = None
         self._gacha_table_cache = None
+        self._cache_expires_at = None
+
+    def _cache_valid(self) -> bool:
+        return self._cache_expires_at is not None and datetime.now() < self._cache_expires_at

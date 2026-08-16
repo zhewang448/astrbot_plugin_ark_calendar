@@ -181,8 +181,8 @@ class BilibiliDynamicManager:
                 return 0, 0
 
             try:
-                # 获取未推送的新动态（带图片）
-                dynamics = await self.source.recent_dynamics(limit=10, download_images=True)
+                # 先获取元数据，过滤后再下载真正需要投递的图片。
+                dynamics = await self.source.recent_dynamics(limit=10, download_images=False)
                 state = self.source.load_state()
                 records = state.get("dynamics", {})
                 new_dynamics = []
@@ -205,9 +205,15 @@ class BilibiliDynamicManager:
                         record.pop("suppressed_type", None)
                         record.pop("suppressed_at", None)
                         record["pushed"] = False
-                    # New dynamic judgment uses the shared global pushed flag.
-                    # A successfully delivered dynamic is not replayed when targets change.
-                    if record.get("pushed"):
+                    delivered_to = record.get("delivered_to")
+                    if not isinstance(delivered_to, dict):
+                        delivered_to = {}
+                        record["delivered_to"] = delivered_to
+                    eligible_targets = record.get("eligible_targets")
+                    if not isinstance(eligible_targets, list):
+                        eligible_targets = list(targets)
+                        record["eligible_targets"] = eligible_targets
+                    if record.get("pushed") or all(sid in delivered_to for sid in eligible_targets):
                         continue
                     new_dynamics.append(dynamic)
 
@@ -224,6 +230,9 @@ class BilibiliDynamicManager:
                 for dynamic in new_dynamics:
                     dyn_id = dynamic["id"]
                     record = state.setdefault("dynamics", {}).setdefault(dyn_id, {})
+                    hydrate_images = getattr(self.source, "hydrate_images", None)
+                    if hydrate_images:
+                        dynamic = await hydrate_images(dynamic)
                     delivered_to = record.get("delivered_to")
                     if not isinstance(delivered_to, dict):
                         delivered_to = {}
@@ -238,8 +247,8 @@ class BilibiliDynamicManager:
                             continue
                         try:
                             components = await self.build_message_components(dynamic, sid)
-                            delivered = await self.context.send_message(sid, MessageChain(components))
-                            if delivered is False:
+                            dispatched = await self.context.send_message(sid, MessageChain(components))
+                            if dispatched is False:
                                 failed_count += 1
                                 logger.warning(f"B站动态未投递：动态={dyn_id}，目标={sid}")
                                 continue
@@ -251,10 +260,9 @@ class BilibiliDynamicManager:
                             logger.error(f"B站动态推送失败：动态={dyn_id}，目标={sid}", exc_info=True)
                             failed_count += 1
 
-                    # One successful delivery completes global deduplication.
-                    record["pushed"] = bool(record.get("pushed")) or any(
-                        sid in delivered_to for sid in targets
-                    )
+                    eligible_targets = record.get("eligible_targets") or targets
+                    record["eligible_targets"] = list(eligible_targets)
+                    record["pushed"] = all(sid in delivered_to for sid in eligible_targets)
                     if record["pushed"]:
                         record["pushed_at"] = datetime.now().isoformat()
                     self.source.save_state(state)
@@ -291,8 +299,8 @@ class BilibiliDynamicManager:
                     continue
                 try:
                     components = await self.build_message_components(dynamic, sid)
-                    delivered = await self.context.send_message(sid, MessageChain(components))
-                    if delivered is False:
+                    dispatched = await self.context.send_message(sid, MessageChain(components))
+                    if dispatched is False:
                         failed_count += 1
                         logger.warning(f"B站动态测试推送未投递：目标={sid}")
                         continue
@@ -395,8 +403,8 @@ class BilibiliDynamicManager:
             components = await self.build_forward_components(dynamic, target_sid)
             if not components:
                 return
-            delivered = await self.context.send_message(target_sid, MessageChain(components))
-            if delivered is False:
+            dispatched = await self.context.send_message(target_sid, MessageChain(components))
+            if dispatched is False:
                 logger.warning("B站动态原图合并转发未投递：目标=%s", target_sid)
         except Exception:
             logger.warning("B站动态原图合并转发失败：目标=%s", target_sid, exc_info=True)

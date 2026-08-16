@@ -192,12 +192,22 @@ class SubscriptionManager:
             self._save_all_subscriptions(subs)
 
     def cleanup_expired(self, snapshot: CalendarSnapshot) -> int:
-        """清理已过期的订阅"""
+        """按当前快照同步结束时间后清理已过期的订阅。"""
         now = datetime.now(CN_TZ)
         subs = self._load_all_subscriptions()
 
+        items_map: dict[str, TimelineItem] = {}
+        for item in snapshot.events + snapshot.gacha_pools + snapshot.long_term_events:
+            items_map[item.id] = item
+
         expired_keys = []
+        changed = False
         for key, sub in subs.items():
+            item = items_map.get(sub.item_id)
+            if item and item.end != sub.end_time:
+                sub.end_time = item.end
+                sub.notified = False
+                changed = True
             try:
                 end_time = parse_iso(sub.end_time).astimezone(CN_TZ)
                 if now > end_time:
@@ -211,6 +221,8 @@ class SubscriptionManager:
         if expired_keys:
             self._save_all_subscriptions(subs)
             self.logger.info(f"已清理 {len(expired_keys)} 个过期订阅")
+        elif changed:
+            self._save_all_subscriptions(subs)
 
         return len(expired_keys)
 

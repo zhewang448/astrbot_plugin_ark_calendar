@@ -63,6 +63,7 @@ def _install_astrbot_stubs() -> None:
 _install_astrbot_stubs()
 
 from core import bilibili_manager  # noqa: E402
+from core.platform_utils import platform_supports_proactive_send  # noqa: E402
 
 
 class FakeSource:
@@ -86,6 +87,23 @@ class FakeSource:
 
     def save_state(self, state):
         self.state = state
+
+
+def test_proactive_send_uses_platform_metadata_and_fails_closed():
+    supported = SimpleNamespace(
+        get_platform_inst=lambda _: SimpleNamespace(
+            meta=lambda: SimpleNamespace(name="custom", support_proactive_message=True)
+        )
+    )
+    unsupported = SimpleNamespace(
+        get_platform_inst=lambda _: SimpleNamespace(
+            meta=lambda: SimpleNamespace(name="custom", support_proactive_message=False)
+        )
+    )
+
+    assert platform_supports_proactive_send("p:Group:1", supported) is True
+    assert platform_supports_proactive_send("p:Group:1", unsupported) is False
+    assert platform_supports_proactive_send("invalid", supported) is False
 
 
 def test_push_types_suppresses_filtered_dynamic(monkeypatch):
@@ -273,3 +291,30 @@ def test_auto_push_uses_shared_global_dedup_across_targets(monkeypatch):
     assert set(source.state["dynamics"]["shared"]["delivered_to"]) == {
         "p:Group:1", "p:Group:2"
     }
+
+
+def test_auto_push_retries_only_failed_target(monkeypatch):
+    sent = []
+    attempts = {"p:Group:2": 0}
+
+    class Context:
+        async def send_message(self, sid, chain):
+            sent.append(sid)
+            if sid == "p:Group:2" and attempts[sid] == 0:
+                attempts[sid] += 1
+                return False
+            return True
+
+    source = FakeSource([{
+        "id": "partial", "dynamic_type": "text", "title": "Partial",
+        "description_text": "content", "link": "https://example.invalid/dynamic",
+    }])
+    config = {"bilibili_dynamic": {"target_sid_list": ["p:Group:1", "p:Group:2"]}}
+    manager = bilibili_manager.BilibiliDynamicManager(source, Context(), config)
+    monkeypatch.setattr(bilibili_manager, "platform_supports_proactive_send", lambda *_: True)
+
+    assert asyncio.run(manager.check_and_push()) == (1, 1)
+    assert source.state["dynamics"]["partial"]["pushed"] is False
+    assert asyncio.run(manager.check_and_push()) == (1, 0)
+    assert sent == ["p:Group:1", "p:Group:2", "p:Group:2"]
+    assert source.state["dynamics"]["partial"]["pushed"] is True

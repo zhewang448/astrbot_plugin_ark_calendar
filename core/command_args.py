@@ -42,7 +42,9 @@ def strip_command_prefix(message: str, invocations: Iterable[str]) -> str:
             continue
         if text == invocation:
             return ""
-        if text.startswith(invocation):
+        if text.startswith(invocation) and (
+            len(text) == len(invocation) or text[len(invocation)].isspace()
+        ):
             return text[len(invocation):].strip()
     return text
 

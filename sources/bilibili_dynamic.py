@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import re
 from datetime import datetime
+from email.utils import parsedate_to_datetime
 from zoneinfo import ZoneInfo
 
 from bs4 import BeautifulSoup
@@ -21,12 +21,17 @@ class BilibiliDynamicSource:
         "https://rsshub.ktachibana.party/bilibili/user/dynamic/161775300",
         "https://rsshub.pseudoyu.com/bilibili/user/dynamic/161775300",
     ]
+    MAX_STATE_ITEMS = 500
 
     def __init__(self, http: HttpClient, cache, asset_cache):
         self.http = http
         self.cache = cache
         self.asset_cache = asset_cache
         self.last_fetch_ok = True
+        self.last_error = ""
+        self.last_failed_instance = ""
+        self.last_success_at: datetime | None = None
+        self.consecutive_failures = 0
         self.rsshub_instances = self.DEFAULT_RSSHUB_INSTANCES.copy()
 
     def set_custom_rsshub_url(self, base_url: str) -> None:
@@ -72,7 +77,6 @@ class BilibiliDynamicSource:
             try:
                 dynamic = self._parse_item(item)
                 if dynamic:
-                    # 下载图片到本地
                     if download_images and dynamic["images"]:
                         dynamic["cached_images"] = await self._download_images(dynamic["images"])
                     else:
@@ -92,12 +96,26 @@ class BilibiliDynamicSource:
                 xml = await self.http.text(url, timeout=15)
                 if xml and "<?xml" in xml:
                     self.last_fetch_ok = True
+                    self.last_error = ""
+                    self.last_success_at = datetime.now(CN_TZ)
+                    self.consecutive_failures = 0
                     return xml
-            except Exception:
+            except Exception as exc:
+                self.last_error = str(exc)
+                self.last_failed_instance = url
+                self.consecutive_failures += 1
                 continue
 
         self.last_fetch_ok = False
         return ""
+
+    async def hydrate_images(self, dynamic: dict) -> dict:
+        """为已确认需要投递的动态下载图片。"""
+        if dynamic.get("images"):
+            dynamic["cached_images"] = await self._download_images(dynamic["images"])
+        else:
+            dynamic["cached_images"] = []
+        return dynamic
 
     def _parse_item(self, item) -> dict | None:
         """解析单条RSS item为动态数据。"""
@@ -118,12 +136,8 @@ class BilibiliDynamicSource:
         pub_date = None
         if pub_date_tag:
             try:
-                # RSS时间格式: "Mon, 15 Aug 2026 10:00:00 GMT"
-                from datetime import timezone
                 pub_date_str = pub_date_tag.get_text(strip=True)
-                pub_date = datetime.strptime(pub_date_str, "%a, %d %b %Y %H:%M:%S %Z")
-                # RSS 时间通常是 UTC (GMT)，需正确转换为中国时区，不能直接 replace
-                pub_date = pub_date.replace(tzinfo=timezone.utc).astimezone(CN_TZ)
+                pub_date = parsedate_to_datetime(pub_date_str).astimezone(CN_TZ)
             except (ValueError, AttributeError):
                 pass
 
@@ -137,7 +151,7 @@ class BilibiliDynamicSource:
         description_text, images = self._parse_description(description_html)
 
         # 判断动态类型
-        dynamic_type = self._classify_dynamic(title, description_text)
+        dynamic_type = self._classify_dynamic(title, description_text, images)
 
         return {
             "id": dynamic_id,
@@ -169,13 +183,13 @@ class BilibiliDynamicSource:
 
         return text, images
 
-    def _classify_dynamic(self, title: str, text: str) -> str:
+    def _classify_dynamic(self, title: str, text: str, images: list[str] | None = None) -> str:
         """根据标题和内容判断动态类型。"""
         combined = f"{title} {text}".lower()
 
         if any(keyword in combined for keyword in ["pv", "预告", "宣传片"]):
             return "video"
-        elif any(keyword in combined for keyword in ["立绘", "时装", "皮肤"]):
+        elif images or any(keyword in combined for keyword in ["立绘", "时装", "皮肤"]):
             return "image"
         elif any(keyword in combined for keyword in ["转发", "@", "互动"]):
             return "repost"
@@ -189,17 +203,19 @@ class BilibiliDynamicSource:
             return "未知时间"
 
         now = datetime.now(CN_TZ)
-        delta = now - pub_date.astimezone(CN_TZ)
+        delta_seconds = (now - pub_date.astimezone(CN_TZ)).total_seconds()
+        if delta_seconds < 0:
+            return "刚刚"
 
-        if delta.days > 7:
+        if delta_seconds > 7 * 86400:
             return pub_date.strftime("%Y-%m-%d")
-        elif delta.days > 0:
-            return f"{delta.days}天前"
-        elif delta.seconds >= 3600:
-            hours = delta.seconds // 3600
+        elif delta_seconds >= 86400:
+            return f"{int(delta_seconds // 86400)}天前"
+        elif delta_seconds >= 3600:
+            hours = int(delta_seconds // 3600)
             return f"{hours}小时前"
-        elif delta.seconds >= 60:
-            minutes = delta.seconds // 60
+        elif delta_seconds >= 60:
+            minutes = int(delta_seconds // 60)
             return f"{minutes}分钟前"
         else:
             return "刚刚"
@@ -250,6 +266,10 @@ class BilibiliDynamicSource:
         Args:
             state: 状态字典
         """
+        dynamics = state.get("dynamics")
+        if isinstance(dynamics, dict) and len(dynamics) > self.MAX_STATE_ITEMS:
+            # 保留最新状态；插入顺序由首次观察动态的时间决定。
+            state["dynamics"] = dict(list(dynamics.items())[-self.MAX_STATE_ITEMS:])
         self.cache.save("bilibili_dynamic_state.json", state)
 
     def load_state(self) -> dict:
@@ -262,4 +282,3 @@ class BilibiliDynamicSource:
         if not isinstance(state, dict):
             return {"last_update": None, "dynamics": {}}
         return state
-
