@@ -332,7 +332,7 @@ class BilibiliDynamicManager:
             components = [Comp.Plain(text=self._fallback_text(dynamic, ""))]
             components.extend(Comp.Image.fromFileSystem(image) for image in cached_images)
             if link:
-                components.append(Comp.Plain(text=f"🔗 查看完整动态：{link}"))
+                components.append(Comp.Plain(text=f"查看完整动态：{link}"))
             return components
         renderable = declared_count <= threshold and self.renderer is not None
 
@@ -349,13 +349,13 @@ class BilibiliDynamicManager:
                 logger.warning("B站动态文字图片渲染失败，回退到文字链。", exc_info=True)
 
         link = str(dynamic.get("link", "") or "")
-        link_text = f"🔗 查看完整动态：{link}" if link else ""
+        link_text = f"查看完整动态：{link}" if link else ""
         components: list = []
         if rendered is not None and isinstance(rendered, (str, Path)) and Path(str(rendered)).is_file():
-            # 链接与渲染图片处在同一条消息链中，阅读顺序固定为链接、图片。
+            # 链接与渲染图片处在同一条消息链中，阅读顺序固定为图片、链接。
+            components.append(Comp.Image.fromFileSystem(str(rendered)))
             if link_text:
                 components.append(Comp.Plain(text=link_text))
-            components.append(Comp.Image.fromFileSystem(str(rendered)))
         else:
             components.append(Comp.Plain(text=self._fallback_text(dynamic, link_text)))
             if declared_count <= threshold:

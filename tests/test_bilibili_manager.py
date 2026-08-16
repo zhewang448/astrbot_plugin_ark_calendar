@@ -174,8 +174,8 @@ def test_small_dynamic_renders_text_and_all_images_into_one_card(tmp_path: Path)
 
     assert renderer.calls == [True]
     assert len(components) == 2
-    assert components[0].text.endswith("https://example.invalid/dynamic")
-    assert components[1].path == str(rendered)
+    assert components[0].path == str(rendered)
+    assert components[1].text == "查看完整动态：https://example.invalid/dynamic"
 
 
 def test_large_dynamic_uses_text_card_then_forwarded_original_images(tmp_path: Path):
@@ -204,8 +204,8 @@ def test_large_dynamic_uses_text_card_then_forwarded_original_images(tmp_path: P
 
     assert renderer.calls == [False]
     assert len(components) == 2
-    assert components[0].text.endswith("https://example.invalid/dynamic")
-    assert components[1].path == str(rendered)
+    assert components[0].path == str(rendered)
+    assert components[1].text == "查看完整动态：https://example.invalid/dynamic"
     forward_components = asyncio.run(manager.build_forward_components({
         "images": ["https://example.invalid/1", "https://example.invalid/2"],
         "cached_images": source_images,
@@ -243,6 +243,6 @@ def test_auto_push_sends_primary_chain_before_forwarded_images(tmp_path: Path, m
 
     assert asyncio.run(manager.force_push_recent(["p:Group:1"])) == (1, 0)
     assert len(sent) == 2
-    assert sent[0][1][0].text.endswith("https://example.invalid/dynamic")
-    assert sent[0][1][1].path == str(rendered)
+    assert sent[0][1][0].path == str(rendered)
+    assert sent[0][1][1].text == "查看完整动态：https://example.invalid/dynamic"
     assert len(sent[1][1][0].nodes) == 1

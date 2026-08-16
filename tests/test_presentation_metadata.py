@@ -33,3 +33,13 @@ def test_message_previews_cover_the_current_builtin_message_profiles():
             for key, value in PROFILES[profile].items()
         )
         assert items[preview_key]["default"] == expected
+
+
+def test_bilibili_config_order_and_video_delivery_description():
+    schema = json.loads((ROOT / "_conf_schema.json").read_text(encoding="utf-8"))
+    items = schema["bilibili_dynamic"]["items"]
+    assert list(items) == [
+        "push_enabled", "target_sid_list", "check_interval_minutes", "push_types",
+        "render_image_count_threshold", "use_forward_on_qq", "list_default_count", "rsshub_base_url",
+    ]
+    assert "不下载或发送视频文件" in items["push_types"]["hint"]
