@@ -180,7 +180,6 @@ class ArkCalendarPlugin(Star):
         self.subscription_manager = SubscriptionManager(self.data_dir, logger)
         self.bilibili_manager: BilibiliDynamicManager | None = None
         self.recruitment_source: RecruitmentSource | None = None
-        # 新增的管理器
         self.image_manager = CalendarImageManager(
             self.render_cache, self.renderer, self.service, config, logger
         )
@@ -194,6 +193,7 @@ class ArkCalendarPlugin(Star):
         self._daily_precache_lock = asyncio.Lock()
         self._daily_precache_time = "04:00"
         self._startup_precache_task: asyncio.Task[None] | None = None
+        self._bilibili_baseline_task: asyncio.Task[None] | None = None
 
     async def initialize(self) -> None:
         await self.service.initialize()
@@ -211,8 +211,13 @@ class ArkCalendarPlugin(Star):
             context=self.context,
             config=self.config,
             renderer=self.renderer,
+            require_baseline=True,
         )
-        await self.bilibili_manager.initialize_state()
+        # 建立动态历史基线依赖外部 RSSHub，不能阻塞插件加载。
+        self._bilibili_baseline_task = asyncio.create_task(
+            self.bilibili_manager.initialize_state(),
+            name="ark_calendar_bilibili_baseline",
+        )
         # 创建公招数据源
         self.recruitment_source = RecruitmentSource(http=self.service.http)
         self._initialize_scheduler()
@@ -227,6 +232,10 @@ class ArkCalendarPlugin(Star):
         logger.info(f"罗德岛行动终端插件 v{self.service.plugin_version} 已初始化。")
 
     async def terminate(self) -> None:
+        if self._bilibili_baseline_task and not self._bilibili_baseline_task.done():
+            self._bilibili_baseline_task.cancel()
+            await asyncio.gather(self._bilibili_baseline_task, return_exceptions=True)
+        self._bilibili_baseline_task = None
         if self._startup_precache_task and not self._startup_precache_task.done():
             self._startup_precache_task.cancel()
             await asyncio.gather(self._startup_precache_task, return_exceptions=True)
@@ -358,7 +367,11 @@ class ArkCalendarPlugin(Star):
         """订阅活动或卡池，在结束前一天提醒。"""
         # 优先从原文剥命令名后整段解析，避免名称里的空格被框架切碎。
         arg_text = self._argument_text(event, SUBSCRIBE_COMMAND, item_name, remind_time)
-        name, parsed_time = split_name_and_time(arg_text)
+        name, parsed_time, invalid_time = split_name_and_time(arg_text)
+
+        if invalid_time:
+            yield event.plain_result(self.messages.text("subscription_invalid_time"))
+            return
 
         if not name:
             image = await self.help_manager.get_help_image(
@@ -721,11 +734,6 @@ class ArkCalendarPlugin(Star):
             if name_normalized in item.name.lower() or item.name.lower() in name_normalized
         ]
 
-    def _find_timeline_item(self, snapshot, name: str):
-        """兼容旧调用方：仅在唯一匹配时返回条目。"""
-        matches = self._find_timeline_items(snapshot, name)
-        return matches[0] if len(matches) == 1 else None
-
     # ── 配置读取（简化包装） ───────────────────────────────────
 
     def _value(self, section: str, key: str, default: Any, legacy_key: str | None = None) -> Any:
@@ -835,19 +843,19 @@ class ArkCalendarPlugin(Star):
         return 1
 
     def _add_scheduled_subscription_reminder_job(self) -> int:
-        """添加订阅提醒定时任务，每小时检查一次"""
+        """添加订阅提醒定时任务，每分钟检查一次。"""
         assert self.scheduler
         self.scheduler.add_job(
             self._scheduled_subscription_reminder,
             "cron",
-            minute=0,
+            minute="*",
             id="ark_calendar_subscription_reminder",
             name="Ark Calendar Subscription Reminder",
             coalesce=True,
             max_instances=1,
             misfire_grace_time=300,
         )
-        logger.info("已启用订阅提醒任务：每小时检查一次。")
+        logger.info("已启用订阅提醒任务：每分钟检查一次。")
         return 1
 
     def _scheduled_report_times(self) -> list[str]:

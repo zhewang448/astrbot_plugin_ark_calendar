@@ -182,17 +182,17 @@ class CalendarImageCache:
                 temporary.unlink(missing_ok=True)
             except OSError:
                 pass
-        generated = parse_iso(snapshot.generated_at).astimezone(CN_TZ)
+        rendered_at = datetime.now(CN_TZ)
         expires = min(
-            generated + timedelta(minutes=max(1, max_age_minutes)),
-            (generated + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0),
+            rendered_at + timedelta(minutes=max(1, max_age_minutes)),
+            (rendered_at + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0),
         )
         manifest = {
             "signature": signature,
             "image": image_name,
             "snapshot_generated_at": snapshot.generated_at,
             "calendar_date": snapshot.calendar_date,
-            "rendered_at": datetime.now(CN_TZ).isoformat(),
+            "rendered_at": rendered_at.isoformat(),
             "expires_at": expires.isoformat(),
         }
         temporary_manifest = self.manifest_path.with_name(f".{self.manifest_path.name}.{uuid4().hex}.tmp")

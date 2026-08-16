@@ -318,3 +318,52 @@ def test_auto_push_retries_only_failed_target(monkeypatch):
     assert asyncio.run(manager.check_and_push()) == (1, 0)
     assert sent == ["p:Group:1", "p:Group:2", "p:Group:2"]
     assert source.state["dynamics"]["partial"]["pushed"] is True
+
+
+def test_push_does_not_run_until_baseline_is_ready(monkeypatch):
+    sent = []
+
+    class Context:
+        async def send_message(self, sid, chain):
+            sent.append((sid, chain))
+            return True
+
+    source = FakeSource([{
+        "id": "history", "dynamic_type": "text", "title": "历史",
+        "description_text": "内容", "link": "https://example.invalid/history",
+    }])
+    manager = bilibili_manager.BilibiliDynamicManager(
+        source,
+        Context(),
+        {"bilibili_dynamic": {"target_sid_list": ["p:Group:1"]}},
+    )
+    manager._baseline_ready = False
+    async def failed_baseline():
+        return False
+    monkeypatch.setattr(manager, "initialize_state", failed_baseline)
+
+    assert asyncio.run(manager.check_and_push()) == (0, 0)
+    assert sent == []
+
+
+def test_target_changes_reconcile_delivery_state(monkeypatch):
+    sent = []
+
+    class Context:
+        async def send_message(self, sid, chain):
+            sent.append(sid)
+            return True
+
+    source = FakeSource([{
+        "id": "target-change", "dynamic_type": "text", "title": "动态",
+        "description_text": "内容", "link": "https://example.invalid/dynamic",
+    }])
+    config = {"bilibili_dynamic": {"target_sid_list": ["p:Group:1"]}}
+    manager = bilibili_manager.BilibiliDynamicManager(source, Context(), config)
+    monkeypatch.setattr(bilibili_manager, "platform_supports_proactive_send", lambda *_: True)
+
+    assert asyncio.run(manager.check_and_push()) == (1, 0)
+    config["bilibili_dynamic"]["target_sid_list"] = ["p:Group:2"]
+    assert asyncio.run(manager.check_and_push()) == (1, 0)
+    assert sent == ["p:Group:1", "p:Group:2"]
+    assert source.state["dynamics"]["target-change"]["pushed"] is True

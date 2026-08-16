@@ -8,7 +8,7 @@ import socket
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from typing import Any
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import urljoin, urlsplit, urlunsplit
 
 import aiohttp
 from aiohttp.abc import AbstractResolver
@@ -56,6 +56,8 @@ class HttpClient:
     MAX_RETRY_AFTER_SECONDS = 60.0
     MAX_RESPONSE_BYTES = 10 * 1024 * 1024
     CHUNK_BYTES = 64 * 1024
+    MAX_REDIRECTS = 3
+    REDIRECT_STATUSES = {301, 302, 303, 307, 308}
 
     def __init__(
         self,
@@ -77,6 +79,7 @@ class HttpClient:
         self._validate_url(url)
         error: Exception | None = None
         request_kwargs = dict(kwargs)
+        request_kwargs.pop("allow_redirects", None)
         headers = dict(request_kwargs.pop("headers", {}))
         headers.setdefault("Accept-Encoding", "identity")
         request_kwargs["headers"] = headers
@@ -86,13 +89,27 @@ class HttpClient:
         for attempt in range(self.retries + 1):
             retry_after: float | None = None
             try:
-                async with self.session.get(url, **request_kwargs) as response:
-                    status = getattr(response, "status", 200)
-                    if status in self.RETRY_STATUSES:
-                        raw_retry_after = getattr(response, "headers", {}).get("Retry-After", "")
-                        retry_after = self._retry_after_delay(raw_retry_after)
-                    response.raise_for_status()
-                    return await self._decode_response(response, as_json)
+                current_url = url
+                for redirect_count in range(self.MAX_REDIRECTS + 1):
+                    self._validate_url(current_url)
+                    async with self.session.get(
+                        current_url,
+                        allow_redirects=False,
+                        **request_kwargs,
+                    ) as response:
+                        status = getattr(response, "status", 200)
+                        if status in self.REDIRECT_STATUSES:
+                            location = getattr(response, "headers", {}).get("Location", "")
+                            if not location or redirect_count >= self.MAX_REDIRECTS:
+                                raise UnsafeRemoteUrl("远程重定向无效或次数过多")
+                            current_url = urljoin(current_url, location)
+                            continue
+                        if status in self.RETRY_STATUSES:
+                            raw_retry_after = getattr(response, "headers", {}).get("Retry-After", "")
+                            retry_after = self._retry_after_delay(raw_retry_after)
+                        response.raise_for_status()
+                        return await self._decode_response(response, as_json)
+                raise UnsafeRemoteUrl("远程重定向无效或次数过多")
             except aiohttp.ClientResponseError as exc:
                 if exc.status not in self.RETRY_STATUSES:
                     raise self._request_error(url, exc) from exc

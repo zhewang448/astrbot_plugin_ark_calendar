@@ -4,6 +4,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from core.models import CalendarSnapshot, TimelineItem
+from core.command_args import split_name_and_time
 from core.recruitment_calculator import RecruitmentCalculator, format_result
 from core.render_cache import CalendarImageCache, validate_rendered_image
 from core.renderer import CalendarRenderer
@@ -82,7 +83,7 @@ def test_subscription_syncs_changed_end_time_and_resets_notification(tmp_path: P
     manager.mark_notified(manager.get_user_subscriptions("u")[0])
     updated = TimelineItem(
         id="event-1", name="延期活动", category="event", item_type="event",
-        start=original.start, end=(now + timedelta(hours=30)).isoformat(),
+        start=original.start, end=(now + timedelta(hours=23)).isoformat(),
     )
     snapshot = _snapshot()
     snapshot.events = [updated]
@@ -93,6 +94,26 @@ def test_subscription_syncs_changed_end_time_and_resets_notification(tmp_path: P
     assert stored.end_time == updated.end
     assert stored.notified is False
     assert len(pending) == 1
+
+
+def test_subscription_rejects_invalid_time_without_treating_it_as_name():
+    assert split_name_and_time("危机合约 25:99") == ("危机合约", None, True)
+    assert split_name_and_time("危机合约 9:30") == ("危机合约", "09:30", False)
+    assert split_name_and_time("活动:特别篇") == ("活动:特别篇", None, False)
+
+
+def test_render_cache_expiry_starts_at_render_time(tmp_path: Path):
+    cache = CalendarImageCache(tmp_path)
+    snapshot = _snapshot()
+    snapshot.generated_at = (datetime.now().astimezone() - timedelta(minutes=31)).isoformat()
+    image = cache.store(
+        b"\x89PNG\r\n\x1a\nvalid",
+        snapshot,
+        {"render_image_type": "png"},
+        max_age_minutes=30,
+        keep_count=2,
+    )
+    assert cache.lookup(snapshot, {"render_image_type": "png"}) == image
 
 
 def test_cleanup_syncs_extended_end_before_expiring_subscription(tmp_path: Path):

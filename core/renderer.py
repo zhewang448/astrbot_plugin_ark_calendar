@@ -95,7 +95,12 @@ class CalendarRenderer:
         if include_images:
             assert self.service.assets
             for image in dynamic.get("cached_images", []):
-                uri = await self.service.assets.data_uri(str(image), box=(1180, 760), quality=86)
+                encoder = getattr(self.service.assets, "data_uri_local", None)
+                if encoder is None:
+                    encoder = self.service.assets.data_uri
+                    uri = await encoder(str(image), box=(1180, 760), quality=86)
+                else:
+                    uri = await encoder(str(image), box=(1180, 760), quality=86)
                 if uri:
                     images.append(uri)
         data = {
@@ -272,7 +277,10 @@ class CalendarRenderer:
         except FontSubsetError as exc:
             self.font_subsetter.log_unavailable_once(exc)
         assert self.service.assets
-        return await self.service.assets.data_uri(str(self.source_font))
+        encoder = getattr(self.service.assets, "data_uri_local", None)
+        if encoder is None:  # 兼容旧版宿主注入的 Assets 替身。
+            return await self.service.assets.data_uri(str(self.source_font))
+        return await encoder(self.source_font, trusted_roots=(self.source_font.parent,))
 
     async def _help_hero(self) -> str:
         """帮助页固定头图；打包里没有这张图时返回空串，模板会退到纯 CSS 背景。"""
@@ -280,7 +288,10 @@ class CalendarRenderer:
         hero = Path(__file__).parent.parent / "assets" / HELP_HERO_ASSET
         if not hero.is_file():
             return ""
-        return await self.service.assets.data_uri(str(hero))
+        encoder = getattr(self.service.assets, "data_uri_local", None)
+        if encoder is None:
+            return await self.service.assets.data_uri(str(hero))
+        return await encoder(hero, trusted_roots=(hero.parent,))
 
     async def help_page(
         self,

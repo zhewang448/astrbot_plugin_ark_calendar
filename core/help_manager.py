@@ -4,13 +4,9 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from .render_cache import HelpImageCache
-
-if TYPE_CHECKING:
-    pass
-
 
 class HelpManager:
     """帮助长图的缓存查询、渲染协调与文字版本生成。"""

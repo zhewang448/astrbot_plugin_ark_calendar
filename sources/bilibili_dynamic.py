@@ -94,7 +94,7 @@ class BilibiliDynamicSource:
         for url in self.rsshub_instances:
             try:
                 xml = await self.http.text(url, timeout=15)
-                if xml and "<?xml" in xml:
+                if xml and BeautifulSoup(xml, "xml").find("item"):
                     self.last_fetch_ok = True
                     self.last_error = ""
                     self.last_success_at = datetime.now(CN_TZ)

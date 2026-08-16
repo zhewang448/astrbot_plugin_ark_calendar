@@ -32,6 +32,7 @@ class BilibiliDynamicManager:
         context: Any,
         config: dict[str, Any],
         renderer: Any | None = None,
+        require_baseline: bool = False,
     ) -> None:
         """初始化管理器。
 
@@ -45,8 +46,9 @@ class BilibiliDynamicManager:
         self.config = config
         self.renderer = renderer
         self._push_lock = asyncio.Lock()
+        self._baseline_ready = not require_baseline
 
-    async def initialize_state(self) -> None:
+    async def initialize_state(self) -> bool:
         """插件加载/重载时建立动态基线。
 
         首次运行（状态缓存里没有 baseline_established 标记）时，把当前拉到的动态
@@ -56,6 +58,7 @@ class BilibiliDynamicManager:
         不受 push_enabled 影响：用户先装插件、之后才开推送时，基线必须已经存在，
         否则开启那一刻会把整页历史动态一次性发出。
         """
+        self._baseline_ready = False
         try:
             state = self.source.load_state()
             if not isinstance(state.get("dynamics"), dict):
@@ -70,7 +73,7 @@ class BilibiliDynamicManager:
             if not dynamics:
                 # 拉取失败时不要写基线标记，留到下次重载再建，避免把空基线固化下来。
                 logger.warning("B站动态基线未建立：本次未取到任何动态，将在下次重载时重试。")
-                return
+                return False
 
             now_text = datetime.now().isoformat()
             for dyn in dynamics:
@@ -94,6 +97,7 @@ class BilibiliDynamicManager:
             state["last_update"] = now_text
             state["baseline_established"] = True
             self.source.save_state(state)
+            self._baseline_ready = True
 
             if baseline_established:
                 logger.info(f"B站动态状态已刷新：已知 {len(state['dynamics'])} 条，新增动态将在下次检查时推送。")
@@ -102,8 +106,10 @@ class BilibiliDynamicManager:
                     f"B站动态基线已建立：{len(dynamics)} 条现有动态记为历史、不会推送，"
                     "此后新发布的动态才会推送。"
                 )
+            return True
         except Exception:
             logger.warning("B站动态状态初始化失败，不影响后续功能。", exc_info=True)
+            return False
 
     def _list_default_count(self) -> int:
         """获取列表默认显示条数。"""
@@ -175,6 +181,10 @@ class BilibiliDynamicManager:
             return 0, 0
 
         async with self._push_lock:
+            if not self._baseline_ready:
+                logger.info("B站动态基线尚未建立，本次仅建立基线，不投递历史动态。")
+                await self.initialize_state()
+                return 0, 0
             targets = self._push_targets()
             if not targets:
                 logger.warning("B站动态推送：未配置 target_sid_list，跳过推送。")
@@ -209,11 +219,9 @@ class BilibiliDynamicManager:
                     if not isinstance(delivered_to, dict):
                         delivered_to = {}
                         record["delivered_to"] = delivered_to
-                    eligible_targets = record.get("eligible_targets")
-                    if not isinstance(eligible_targets, list):
-                        eligible_targets = list(targets)
-                        record["eligible_targets"] = eligible_targets
-                    if record.get("pushed") or all(sid in delivered_to for sid in eligible_targets):
+                    eligible_targets = list(targets)
+                    record["eligible_targets"] = eligible_targets
+                    if all(sid in delivered_to for sid in eligible_targets):
                         continue
                     new_dynamics.append(dynamic)
 
@@ -260,8 +268,8 @@ class BilibiliDynamicManager:
                             logger.error(f"B站动态推送失败：动态={dyn_id}，目标={sid}", exc_info=True)
                             failed_count += 1
 
-                    eligible_targets = record.get("eligible_targets") or targets
-                    record["eligible_targets"] = list(eligible_targets)
+                    eligible_targets = list(targets)
+                    record["eligible_targets"] = eligible_targets
                     record["pushed"] = all(sid in delivered_to for sid in eligible_targets)
                     if record["pushed"]:
                         record["pushed_at"] = datetime.now().isoformat()
