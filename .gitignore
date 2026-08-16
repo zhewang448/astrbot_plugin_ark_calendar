@@ -3,6 +3,8 @@ __pycache__/
 *.pyo
 .testdeps/
 .pytest_cache/
+.pytest-tmp/
+.pytest-run/
 .codegraph/
 .venv/
 dist/

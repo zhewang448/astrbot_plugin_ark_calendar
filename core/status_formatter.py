@@ -17,7 +17,7 @@ def format_status(snapshot, outcome, cache_status: dict) -> str:
         outcome: 刷新结果
         cache_status: render_cache.status() 返回的状态字典
     """
-    lines = ["罗德岛行动日历状态", f"快照时间：{snapshot.generated_at}"]
+    lines = ["罗德岛行动终端状态", f"快照时间：{snapshot.generated_at}"]
     quality = outcome.quality
     quality_text = {
         "fresh": "正常",

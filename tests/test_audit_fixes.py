@@ -50,6 +50,13 @@ def test_recruitment_keeps_robot_and_excludes_six_star_from_normal_tags():
     assert [item["name"] for item in calculator._match_operators(["高级资深干员"])] == ["六星"]
 
 
+def test_recruitment_removes_obsolete_high_air_tag():
+    calculator = RecruitmentCalculator([])
+    assert calculator.normalize_tag("新手") == "新手"
+    assert calculator.normalize_tag("高空") is None
+    assert calculator.normalize_tag("对空") is None
+
+
 def test_subscription_reminder_uses_saved_record_when_item_left_snapshot(tmp_path: Path):
     manager = SubscriptionManager(tmp_path, logger=SimpleNamespace(warning=lambda *a, **k: None, info=lambda *a, **k: None))
     now = datetime.now().astimezone()

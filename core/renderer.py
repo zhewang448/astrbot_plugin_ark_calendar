@@ -301,7 +301,7 @@ class CalendarRenderer:
                 "下面是当前可以订阅的活动与寻访，复制卡片里的命令就能订阅；"
                 "在结束前一天的设定时间提醒你，不填时间默认中午 12:00。"
                 if mode == "subscribe"
-                else "罗德岛行动日历的全部指令与当前可订阅日程都在这里，"
+                else "罗德岛行动终端的全部指令与当前可订阅日程都在这里，"
                 "指令支持别名，订阅提醒在结束前一天送达。"
             ),
             "version": self.service.plugin_version,

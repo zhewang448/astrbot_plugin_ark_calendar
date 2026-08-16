@@ -119,7 +119,7 @@ def command_rows(commands: tuple | list) -> list[dict[str, Any]]:
 def generate_help_text(user_commands: tuple, admin_commands: tuple, help_command_name: str) -> str:
     """由命令定义生成帮助文本，使别名只需在一处维护。"""
     sections = [
-        "罗德岛行动日历 · 使用说明",
+        "罗德岛行动终端 · 使用说明",
         "【普通指令】\n" + "\n\n".join(spec.help_entry() for spec in user_commands),
         "【管理员指令】\n" + "\n\n".join(spec.help_entry() for spec in admin_commands),
         "【自动日报】\n请在插件配置的「自动方舟日报」中启用任务，填写星期、发送时间和目标 SID。",

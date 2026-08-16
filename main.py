@@ -224,7 +224,7 @@ class ArkCalendarPlugin(Star):
                 self._precache_help_images_after_reload(),
                 name="ark_calendar_startup_help_precache",
             )
-        logger.info(f"罗德岛行动日历插件 v{self.service.plugin_version} 已初始化。")
+        logger.info(f"罗德岛行动终端插件 v{self.service.plugin_version} 已初始化。")
 
     async def terminate(self) -> None:
         if self._startup_precache_task and not self._startup_precache_task.done():
@@ -565,16 +565,16 @@ class ArkCalendarPlugin(Star):
                 "可用位置标签：近战位、远程位\n\n"
                 "特殊标签：资深干员（保底5★）、高级资深干员（保底6★）\n\n"
                 "词缀标签：输出、治疗、生存、防护、控场、爆发、支援、减速、\n"
-                "          削弱、群攻、位移、召唤、快速复活、费用回复、高空、\n"
-                "          支援机械（小车）、元素、新手\n"
+                "          削弱、群攻、位移、召唤、快速复活、费用回复、\n"
+                "          支援机械（小车）、元素\n"
                 "━━━━━━━━━━━━━━━━━━━━"
             )
             try:
                 rendered_help = await self.renderer.recruitment_help({
                     "职业": ["近卫干员", "狙击干员", "术师干员", "医疗干员", "重装干员", "辅助干员", "特种干员", "先锋干员"],
                     "位置": ["近战位", "远程位"],
-                    "稀有度": ["资深干员（保底5★）", "高级资深干员（保底6★）"],
-                    "词缀": ["输出", "治疗", "生存", "防护", "控场", "爆发", "支援", "减速", "削弱", "群攻", "位移", "召唤", "快速复活", "费用回复", "高空", "支援机械", "元素", "新手"],
+                    "稀有度": ["新手", "资深干员（保底5★）", "高级资深干员（保底6★）"],
+                    "词缀": ["输出", "治疗", "生存", "防护", "控场", "爆发", "支援", "减速", "削弱", "群攻", "位移", "召唤", "快速复活", "费用回复", "支援机械", "元素"],
                 })
                 if isinstance(rendered_help, (str, Path)) and Path(str(rendered_help)).is_file():
                     yield event.image_result(str(rendered_help))
