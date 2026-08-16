@@ -29,6 +29,8 @@ class CalendarRenderer:
         self.template = (templates / "calendar.html").read_text("utf-8")
         self.history_template = (templates / "history_schedule.html").read_text("utf-8")
         self.help_template = (templates / "help.html").read_text("utf-8")
+        self.bilibili_template = (templates / "bilibili_dynamic.html").read_text("utf-8")
+        self.recruitment_template = (templates / "recruitment.html").read_text("utf-8")
         self.template_hash = hashlib.sha256(self.template.encode("utf-8")).hexdigest()[:16]
         self.source_font = Path(__file__).parent.parent / "assets" / SOURCE_FONT_ASSET
         self.font_subsetter = FontSubsetter(
@@ -82,6 +84,92 @@ class CalendarRenderer:
         """保留旧调用入口，但历史测试改用正常日报模板和布局。"""
         return await self.calendar(snapshot, historical=True)
 
+    async def bilibili_dynamic(
+        self,
+        dynamic: dict,
+        *,
+        include_images: bool,
+    ) -> str | Path | bytes:
+        """将单条 B 站动态渲染为终端风格图片。"""
+        images: list[str] = []
+        if include_images:
+            assert self.service.assets
+            for image in dynamic.get("cached_images", []):
+                uri = await self.service.assets.data_uri(str(image), box=(1180, 760), quality=86)
+                if uri:
+                    images.append(uri)
+        data = {
+            "mode": "detail",
+            "dynamic": {
+                "title": str(dynamic.get("title", "") or "未命名动态"),
+                "description": str(dynamic.get("description_text", "") or "该动态未提供文字内容。"),
+                "type": str(dynamic.get("dynamic_type", "text") or "text").upper(),
+                "published": self._dynamic_time(dynamic.get("pub_date")),
+                "image_count": len(dynamic.get("images") or dynamic.get("cached_images") or []),
+            },
+            "images": images,
+            "static": await self._static_assets(collect_charset(self.bilibili_template, dynamic)),
+        }
+        return await self._html_render(self.bilibili_template, data, options=self._card_render_options())
+
+    async def bilibili_dynamic_list(self, dynamics: list[dict]) -> str | Path | bytes:
+        """将动态索引渲染为可供编号查询的终端列表。"""
+        entries = []
+        for index, dynamic in enumerate(dynamics, 1):
+            entries.append({
+                "index": index,
+                "title": str(dynamic.get("title", "") or "未命名动态"),
+                "type": str(dynamic.get("dynamic_type", "text") or "text").upper(),
+                "published": self._dynamic_time(dynamic.get("pub_date")),
+                "image_count": len(dynamic.get("images") or dynamic.get("cached_images") or []),
+            })
+        data = {
+            "mode": "list",
+            "entries": entries,
+            "static": await self._static_assets(collect_charset(self.bilibili_template, {"entries": entries})),
+        }
+        return await self._html_render(self.bilibili_template, data, options=self._card_render_options())
+
+    async def recruitment_result(
+        self,
+        results: list[dict],
+        selected_tags: list[str],
+    ) -> str | Path | bytes:
+        """将公开招募计算结果渲染为筛选终端长图。"""
+        rows = [
+            {
+                "tags": result.get("tags", []),
+                "operators": result.get("operators", []),
+                "min_rarity": int(result.get("min_rarity", 0) or 0),
+                "recommended": index == 0,
+                "senior": bool(result.get("has_senior")),
+                "top_senior": bool(result.get("has_top_senior")),
+            }
+            for index, result in enumerate(results)
+        ]
+        data = {
+            "mode": "result",
+            "selected_tags": selected_tags,
+            "rows": rows,
+            "static": await self._static_assets(collect_charset(self.recruitment_template, {"selected_tags": selected_tags, "rows": rows})),
+        }
+        return await self._html_render(self.recruitment_template, data, options=self._card_render_options())
+
+    async def recruitment_help(self, tag_groups: dict[str, list[str]]) -> str | Path | bytes:
+        """将公开招募可用标签与用法渲染为终端说明图。"""
+        data = {
+            "mode": "help",
+            "tag_groups": tag_groups,
+            "static": await self._static_assets(collect_charset(self.recruitment_template, {"tag_groups": tag_groups})),
+        }
+        return await self._html_render(self.recruitment_template, data, options=self._card_render_options())
+
+    @staticmethod
+    def _dynamic_time(value) -> str:
+        if isinstance(value, datetime):
+            return value.astimezone(CN_TZ).strftime("%Y.%m.%d  %H:%M")
+        return "发布时间未知"
+
     @staticmethod
     def _ticks(start: datetime, now: datetime, timeline_days: int) -> list[dict]:
         step = 7 if timeline_days <= 35 else 14 if timeline_days <= 63 else 21
@@ -126,6 +214,12 @@ class CalendarRenderer:
             "device_scale_factor_level": scale_level,
             "timeout": self._render_timeout_ms(),
         }
+
+    def _card_render_options(self) -> dict:
+        """交互卡片始终用 PNG，避免小字和细线受 JPEG 压缩影响。"""
+        options = self._render_options()
+        options["type"] = "png"
+        return options
     def _render_timeout_ms(self) -> int:
         try:
             seconds = int(self.service.value("cache_and_render", "render_timeout_seconds", 300))

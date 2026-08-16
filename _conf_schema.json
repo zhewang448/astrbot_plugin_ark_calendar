@@ -262,7 +262,7 @@
         "description": "自定义消息模板",
         "type": "dict",
         "default": {},
-        "hint": "选择“自定义文案”后可编辑。每一项都可以独立选择来源：留空或填 @catgirl 用“罗德岛轻度猫娘”的这句，填 @plain 用“极简正式”的这句，填其他任何文字则作为你自己的文案。可用变量：{name}、{birthday}、{details}、{candidates}、{names}、{count}、{user}、{time}、{error}。",
+        "hint": "选择“自定义文案”后可编辑。每一项都可以独立选择来源：留空或填 @catgirl 用“罗德岛轻度猫娘”的这句，填 @plain 用“极简正式”的这句，填其他任何文字则作为你自己的文案。可用变量：{name}、{birthday}、{details}、{candidates}、{names}、{count}、{user}、{time}、{error}、{index}、{sent}、{failed}、{tags}。",
         "condition": {
           "profile": "custom"
         },
@@ -416,6 +416,138 @@
             "type": "string",
             "default": "",
             "hint": "订阅时填写的提醒时间不是合法 HH:MM 时发送。"
+          },
+          "subscription_missing_name": {
+            "name": "订阅缺少名称",
+            "type": "string",
+            "default": "",
+            "hint": "手动执行订阅但未填写活动或卡池名称时发送。"
+          },
+          "subscription_candidates": {
+            "name": "订阅候选项",
+            "type": "string",
+            "default": "",
+            "hint": "订阅名称匹配到多项时发送。可用 {candidates}。"
+          },
+          "subscription_failed": {
+            "name": "订阅失败",
+            "type": "string",
+            "default": "",
+            "hint": "手动订阅发生异常时发送。"
+          },
+          "unsubscribe_missing_name": {
+            "name": "取消订阅缺少名称",
+            "type": "string",
+            "default": "",
+            "hint": "手动取消订阅但未填写名称时发送。"
+          },
+          "unsubscribe_candidates": {
+            "name": "取消订阅候选项",
+            "type": "string",
+            "default": "",
+            "hint": "取消订阅名称匹配到多项时发送。可用 {candidates}。"
+          },
+          "unsubscribe_failed": {
+            "name": "取消订阅失败",
+            "type": "string",
+            "default": "",
+            "hint": "手动取消订阅发生异常时发送。"
+          },
+          "subscription_list_failed": {
+            "name": "订阅列表失败",
+            "type": "string",
+            "default": "",
+            "hint": "手动查询订阅列表发生异常时发送。"
+          },
+          "bilibili_uninitialized": {
+            "name": "B站动态未初始化",
+            "type": "string",
+            "default": "",
+            "hint": "B站动态服务尚未准备好时发送。"
+          },
+          "bilibili_list_empty": {
+            "name": "B站动态列表为空",
+            "type": "string",
+            "default": "",
+            "hint": "无法取得最新动态列表时发送。"
+          },
+          "bilibili_index_invalid": {
+            "name": "B站动态编号错误",
+            "type": "string",
+            "default": "",
+            "hint": "动态编号不是有效正整数时发送。"
+          },
+          "bilibili_not_found": {
+            "name": "B站动态不存在",
+            "type": "string",
+            "default": "",
+            "hint": "指定编号不在当前列表中时发送。可用 {index}。"
+          },
+          "bilibili_query_failed": {
+            "name": "B站动态查询失败",
+            "type": "string",
+            "default": "",
+            "hint": "手动查询 B站动态发生异常时发送。"
+          },
+          "push_test_started": {
+            "name": "动态推送测试开始",
+            "type": "string",
+            "default": "",
+            "hint": "管理员手动执行动态推送测试时发送。"
+          },
+          "push_test_no_target": {
+            "name": "动态推送测试缺少目标",
+            "type": "string",
+            "default": "",
+            "hint": "动态推送测试未配置目标 SID 时发送。"
+          },
+          "push_test_done": {
+            "name": "动态推送测试完成",
+            "type": "string",
+            "default": "",
+            "hint": "动态推送测试结束时发送。可用 {sent}、{failed}。"
+          },
+          "push_test_failed": {
+            "name": "动态推送测试失败",
+            "type": "string",
+            "default": "",
+            "hint": "动态推送测试发生异常时发送。"
+          },
+          "recruit_uninitialized": {
+            "name": "公招计算器未初始化",
+            "type": "string",
+            "default": "",
+            "hint": "公招数据源尚未准备好时发送。"
+          },
+          "recruit_too_many_tags": {
+            "name": "公招标签过多",
+            "type": "string",
+            "default": "",
+            "hint": "输入标签数量超过五个时发送。可用 {count}。"
+          },
+          "recruit_data_failed": {
+            "name": "公招数据获取失败",
+            "type": "string",
+            "default": "",
+            "hint": "无法获取公招池数据时发送。"
+          },
+          "recruit_unknown_tags": {
+            "name": "公招标签无法识别",
+            "type": "string",
+            "default": "",
+            "hint": "输入中包含无效标签时发送。可用 {tags}。"
+          },
+          "recruit_empty_tags": {
+            "name": "公招没有有效标签",
+            "type": "string",
+            "default": "",
+            "hint": "规范化后没有有效标签时发送。"
+          },
+          "recruit_failed": {
+            "name": "公招计算失败",
+            "type": "string",
+            "default": "",
+            "hint": "公招计算发生异常时发送。"
           }
         }
       }
@@ -521,19 +653,13 @@
         "description": "渲染阈值（图片数量）",
         "type": "int",
         "default": 1,
-        "hint": "图片数≤此值时尝试渲染为长图，>此值时分离发送。当前渲染功能未实现，实际效果为≤阈值时发送文字+原图。"
-      },
-      "max_images_per_message": {
-        "description": "单条消息最多图片数",
-        "type": "int",
-        "default": 3,
-        "hint": "图片数超过渲染阈值时，单条消息最多显示几张图片，避免刷屏。"
+        "hint": "动态图片数≤此值时，将文字与全部图片一起渲染为一张终端长图；图片数>此值时，只渲染文字，原图仅在支持合并转发的 QQ 平台中以完整转发节点发送。填 0 可让所有带图动态走文字模板与转发分支。"
       },
       "use_forward_on_qq": {
         "description": "QQ平台使用合并转发",
         "type": "bool",
         "default": true,
-        "hint": "仅对QQ平台（aiocqhttp）有效。启用后多图动态将使用合并转发消息，更美观；禁用则所有平台统一为单条消息。"
+        "hint": "仅对支持合并转发的 QQ 平台（aiocqhttp）有效。仅当动态图片数超过渲染阈值时才将原图作为合并转发追加；链接与渲染图始终在同一普通消息链中。"
       },
       "rsshub_base_url": {
         "description": "自定义 RSSHub 地址",

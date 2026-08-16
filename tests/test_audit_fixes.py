@@ -122,6 +122,40 @@ def test_help_page_forces_png_even_when_calendar_uses_jpeg():
     assert captured["type"] == "png"
 
 
+def test_dynamic_and_recruitment_cards_use_png_and_keep_template_data():
+    class Assets:
+        async def data_uri(self, path, **_kwargs):
+            return f"data:image/png;base64,{path}"
+
+    renderer = CalendarRenderer.__new__(CalendarRenderer)
+    renderer.bilibili_template = "dynamic"
+    renderer.recruitment_template = "recruitment"
+    renderer.service = SimpleNamespace(assets=Assets())
+    renderer._static_assets = lambda _charset: _empty_async({"font": "font"})
+    renderer._card_render_options = lambda: {"type": "png"}
+    captured = []
+
+    async def fake_render(template, data, options):
+        captured.append((template, data, options))
+        return b"rendered"
+
+    renderer._html_render = fake_render
+    dynamic = {
+        "title": "双图动态", "description_text": "内容", "dynamic_type": "image",
+        "images": ["one", "two"], "cached_images": ["one", "two"],
+    }
+
+    assert asyncio.run(renderer.bilibili_dynamic(dynamic, include_images=True)) == b"rendered"
+    assert captured[0][1]["images"] == ["data:image/png;base64,one", "data:image/png;base64,two"]
+    assert captured[0][2]["type"] == "png"
+
+    assert asyncio.run(renderer.recruitment_result([
+        {"tags": ["输出"], "operators": [{"name": "干员", "rarity": 4}], "min_rarity": 4},
+    ], ["输出"])) == b"rendered"
+    assert captured[1][1]["rows"][0]["recommended"] is True
+    assert captured[1][2]["type"] == "png"
+
+
 async def _empty_async(value):
     return value
 

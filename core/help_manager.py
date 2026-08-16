@@ -28,7 +28,14 @@ class HelpManager:
         self.logger = logger
         self._help_render_locks = {mode: asyncio.Lock() for mode in HelpImageCache.MODES}
 
-    async def get_help_image(self, mode: str) -> Path | str | None:
+    async def get_help_image(
+        self,
+        mode: str,
+        *,
+        user_commands=None,
+        admin_commands=None,
+        subscription_commands=None,
+    ) -> Path | str | None:
         """取当日缓存的帮助长图；未命中则渲染并写入缓存。
 
         帮助页内容按自然日变化（倒计时、可订阅日程），因此缓存以
@@ -41,13 +48,23 @@ class HelpManager:
             return cached
         lock = self._help_render_locks.get(mode)
         if lock is None:
-            return await self._render_help_image(mode)
+            return await self._render_help_image(
+                mode,
+                user_commands=user_commands,
+                admin_commands=admin_commands,
+                subscription_commands=subscription_commands,
+            )
         async with lock:
             cached = self.help_cache.lookup(mode)
             if cached:
                 self.logger.info(f"帮助长图缓存由并发请求生成：{mode}。")
                 return cached
-            return await self._render_help_image(mode)
+            return await self._render_help_image(
+                mode,
+                user_commands=user_commands,
+                admin_commands=admin_commands,
+                subscription_commands=subscription_commands,
+            )
 
     async def _render_help_image(
         self,

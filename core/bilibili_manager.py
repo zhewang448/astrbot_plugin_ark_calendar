@@ -31,6 +31,7 @@ class BilibiliDynamicManager:
         source: BilibiliDynamicSource,
         context: Any,
         config: dict[str, Any],
+        renderer: Any | None = None,
     ) -> None:
         """初始化管理器。
 
@@ -42,6 +43,7 @@ class BilibiliDynamicManager:
         self.source = source
         self.context = context
         self.config = config
+        self.renderer = renderer
         self._push_lock = asyncio.Lock()
 
     async def initialize_state(self) -> None:
@@ -117,10 +119,13 @@ class BilibiliDynamicManager:
             return [str(s).strip() for s in raw if str(s).strip()]
         return []
 
-    def _max_images_per_message(self) -> int:
-        """获取单条消息最多图片数。"""
-        value = self.config.get("bilibili_dynamic", {}).get("max_images_per_message", 3)
-        return max(1, min(9, int(value)))
+    def _render_image_count_threshold(self) -> int:
+        """图片数不超过此值时，将文字与全部图片绘制进一张终端图。"""
+        value = self.config.get("bilibili_dynamic", {}).get("render_image_count_threshold", 1)
+        try:
+            return max(0, min(9, int(value)))
+        except (TypeError, ValueError, OverflowError):
+            return 1
 
     def _push_types(self) -> list[str]:
         """获取允许自动推送的动态类型。空列表表示不做类型过滤。"""
@@ -316,119 +321,96 @@ class BilibiliDynamicManager:
         Returns:
             消息组件列表，QQ平台含多图时返回 [Nodes]，其他平台返回 [Plain, Image, ...]
         """
-        components: list = []
-
-        # 构建头部文字
-        icon_map = {"video": "🎬", "image": "🎨", "text": "📢", "repost": "🔄"}
-        icon = icon_map.get(dynamic.get("dynamic_type", ""), "📝")
-
-        header_lines = [
-            "━━━━━━━━━━━━━━━━━━━━",
-            f"{icon} 明日方舟官方动态",
-            "━━━━━━━━━━━━━━━━━━━━",
-            "",
-        ]
-
-        title = dynamic.get("title", "")
-        if title:
-            header_lines.append(f"【{title}】")
-
-        pub_date = dynamic.get("pub_date")
-        if pub_date:
-            time_str = self.source.format_relative_time(pub_date)
-            header_lines.append(f"发布时间：{time_str}")
-
-        header_lines.append("")
-
-        # 描述文字
-        description = dynamic.get("description_text", "")
-        if description:
-            max_len = 200
-            if len(description) > max_len:
-                description = description[:max_len] + "..."
-            header_lines.append(description)
-            header_lines.append("")
-
-        header_text = "\n".join(header_lines)
-
-        # 图片处理：使用已下载的本地缓存路径
-        cached_images = dynamic.get("cached_images", [])
-        max_images = self._max_images_per_message()
-
-        if cached_images:
-            display_images = cached_images[:max_images]
-
-            # 底部提示
-            footer_lines = []
-            if len(cached_images) > max_images:
-                footer_lines.append(f"📷 动态含 {len(cached_images)} 张图片，已展示前 {max_images} 张")
-
-            link = dynamic.get("link", "")
+        cached_images = [str(path) for path in dynamic.get("cached_images", []) if Path(path).is_file()]
+        declared_count = len(dynamic.get("images") or cached_images)
+        threshold = self._render_image_count_threshold()
+        # 兼容未注入渲染器的第三方调用方；插件主流程始终注入 CalendarRenderer。
+        if self.renderer is None:
+            link = str(dynamic.get("link", "") or "")
+            components = [Comp.Plain(text=self._fallback_text(dynamic, ""))]
+            components.extend(Comp.Image.fromFileSystem(image) for image in cached_images)
             if link:
-                footer_lines.append(f"🔗 查看完整动态：{link}")
+                components.append(Comp.Plain(text=f"🔗 查看完整动态：{link}"))
+            return components
+        renderable = declared_count <= threshold and self.renderer is not None
 
-            footer_lines.append("━━━━━━━━━━━━━━━━━━━━")
-            footer_text = "\n".join(footer_lines)
+        rendered = None
+        if renderable:
+            try:
+                rendered = await self.renderer.bilibili_dynamic(dynamic, include_images=True)
+            except Exception:
+                logger.warning("B站动态图片渲染失败，回退到文字链。", exc_info=True)
+        if rendered is None and self.renderer is not None and declared_count > threshold:
+            try:
+                rendered = await self.renderer.bilibili_dynamic(dynamic, include_images=False)
+            except Exception:
+                logger.warning("B站动态文字图片渲染失败，回退到文字链。", exc_info=True)
 
-            # 检测平台：aiocqhttp 使用合并转发，避免刷屏
+        link = str(dynamic.get("link", "") or "")
+        link_text = f"🔗 查看完整动态：{link}" if link else ""
+        components: list = []
+        if rendered is not None and isinstance(rendered, (str, Path)) and Path(str(rendered)).is_file():
+            # 链接与渲染图片处在同一条消息链中，阅读顺序固定为链接、图片。
+            if link_text:
+                components.append(Comp.Plain(text=link_text))
+            components.append(Comp.Image.fromFileSystem(str(rendered)))
+        else:
+            components.append(Comp.Plain(text=self._fallback_text(dynamic, link_text)))
+            if declared_count <= threshold:
+                # 渲染服务短暂不可用时仍保留动态原图，避免小图动态丢失内容。
+                components.extend(Comp.Image.fromFileSystem(image) for image in cached_images)
+
+        # 超过阈值时不把原图拼进普通消息；支持合并转发的目标再追加原图节点。
+        if declared_count > threshold and cached_images and self._supports_forward(target_sid):
+            try:
+                from astrbot.core.message.components import Node, Nodes
+                nodes = [
+                    Node(
+                        content=[Comp.Image.fromFileSystem(image)],
+                        name="明日方舟官方",
+                        uin="161775300",
+                    )
+                    for image in cached_images
+                ]
+                components.append(Nodes(nodes=nodes))
+            except Exception:
+                logger.debug("当前平台未能构造动态图片合并转发。", exc_info=True)
+        return components
+
+    async def build_list_components(self, dynamics: list[dict[str, Any]]) -> list:
+        """将动态列表渲染为图片，失败时回退为简洁文本。"""
+        if self.renderer is not None:
+            try:
+                rendered = await self.renderer.bilibili_dynamic_list(dynamics)
+                if isinstance(rendered, (str, Path)) and Path(str(rendered)).is_file():
+                    return [Comp.Image.fromFileSystem(str(rendered))]
+            except Exception:
+                logger.warning("B站动态列表图片渲染失败，回退到文字版。", exc_info=True)
+        lines = ["明日方舟官方B站动态", ""]
+        for index, dynamic in enumerate(dynamics, 1):
+            lines.append(f"{index}. {dynamic.get('title', '')}")
+        return [Comp.Plain(text="\n".join(lines))]
+
+    def _supports_forward(self, target_sid: str) -> bool:
+        if not bool(self.config.get("bilibili_dynamic", {}).get("use_forward_on_qq", True)):
+            return False
+        try:
             from .platform_utils import split_sid
             parsed = split_sid(target_sid)
-            platform_id = parsed[0] if parsed else ""
+            platform_inst = self.context.get_platform_inst(parsed[0] if parsed else "")
+            return bool(platform_inst and platform_inst.meta().name == "aiocqhttp")
+        except Exception:
+            return False
 
-            # 尝试从 context 获取平台类型
-            use_forward = False
-            try:
-                use_forward_config = bool(
-                    self.config.get("bilibili_dynamic", {}).get("use_forward_on_qq", True)
-                )
-                platform_inst = self.context.get_platform_inst(platform_id)
-                if platform_inst:
-                    platform_name = platform_inst.meta().name
-                    # aiocqhttp 且图片数量 > 1 时使用合并转发
-                    use_forward = use_forward_config and platform_name == "aiocqhttp" and len(display_images) > 1
-            except Exception:
-                pass
-
-            if use_forward:
-                # QQ合并转发：每张图一个节点
-                try:
-                    from astrbot.core.message.components import Node, Nodes
-                    nodes = []
-                    # 第一个节点：标题 + 第一张图
-                    first_content = [Comp.Plain(text=header_text)]
-                    if display_images and Path(display_images[0]).exists():
-                        first_content.append(Comp.Image.fromFileSystem(display_images[0]))
-                    nodes.append(Node(content=first_content, name="明日方舟官方", uin="161775300"))
-
-                    # 后续图片各一个节点
-                    for img_path in display_images[1:]:
-                        if Path(img_path).exists():
-                            nodes.append(Node(
-                                content=[Comp.Image.fromFileSystem(img_path)],
-                                name="明日方舟官方",
-                                uin="161775300"
-                            ))
-
-                    # 最后一个节点：底部提示
-                    nodes.append(Node(content=[Comp.Plain(text=footer_text)], name="明日方舟官方", uin="161775300"))
-
-                    return [Nodes(nodes=nodes)]
-                except Exception:
-                    # 合并转发构建失败，回退到普通消息
-                    pass
-
-            # 普通消息：逐个发送
-            components.append(Comp.Plain(text=header_text))
-            for img_path in display_images:
-                if Path(img_path).exists():
-                    components.append(Comp.Image.fromFileSystem(img_path))
-            components.append(Comp.Plain(text=footer_text))
-        else:
-            # 无图片，只加链接
-            link = dynamic.get("link", "")
-            if link:
-                components.append(Comp.Plain(text=f"{header_text}🔗 {link}\n━━━━━━━━━━━━━━━━━━━━"))
-            else:
-                components.append(Comp.Plain(text=header_text + "━━━━━━━━━━━━━━━━━━━━"))
-
-        return components
+    @staticmethod
+    def _fallback_text(dynamic: dict[str, Any], link_text: str) -> str:
+        title = str(dynamic.get("title", "") or "官方动态")
+        description = str(dynamic.get("description_text", "") or "").strip()
+        if len(description) > 800:
+            description = description[:800] + "..."
+        parts = [f"【明日方舟官方动态】\n{title}"]
+        if description:
+            parts.append(description)
+        if link_text:
+            parts.append(link_text)
+        return "\n\n".join(parts)

@@ -138,3 +138,72 @@ def test_disabling_qq_forward_uses_a_regular_message(tmp_path: Path):
 
     assert len(components) == 4
     assert not hasattr(components[0], "nodes")
+
+
+class FakeRenderer:
+    def __init__(self, rendered: Path):
+        self.rendered = rendered
+        self.calls: list[bool] = []
+
+    async def bilibili_dynamic(self, _dynamic, *, include_images: bool):
+        self.calls.append(include_images)
+        return str(self.rendered)
+
+
+def test_small_dynamic_renders_text_and_all_images_into_one_card(tmp_path: Path):
+    source_images = []
+    for name in ("one.png", "two.png"):
+        image = tmp_path / name
+        image.write_bytes(b"image")
+        source_images.append(str(image))
+    rendered = tmp_path / "rendered.png"
+    rendered.write_bytes(b"image")
+    renderer = FakeRenderer(rendered)
+    context = SimpleNamespace(get_platform_inst=lambda _platform_id: None)
+    manager = bilibili_manager.BilibiliDynamicManager(
+        FakeSource([]), context,
+        {"bilibili_dynamic": {"render_image_count_threshold": 2}},
+        renderer=renderer,
+    )
+
+    components = asyncio.run(manager.build_message_components({
+        "dynamic_type": "image", "title": "双图动态", "description_text": "内容",
+        "images": ["https://example.invalid/1", "https://example.invalid/2"],
+        "cached_images": source_images, "link": "https://example.invalid/dynamic",
+    }, "p:Group:1"))
+
+    assert renderer.calls == [True]
+    assert len(components) == 2
+    assert components[0].text.endswith("https://example.invalid/dynamic")
+    assert components[1].path == str(rendered)
+
+
+def test_large_dynamic_uses_text_card_then_forwarded_original_images(tmp_path: Path):
+    source_images = []
+    for name in ("one.png", "two.png"):
+        image = tmp_path / name
+        image.write_bytes(b"image")
+        source_images.append(str(image))
+    rendered = tmp_path / "rendered.png"
+    rendered.write_bytes(b"image")
+    renderer = FakeRenderer(rendered)
+    context = SimpleNamespace(
+        get_platform_inst=lambda _platform_id: SimpleNamespace(meta=lambda: SimpleNamespace(name="aiocqhttp"))
+    )
+    manager = bilibili_manager.BilibiliDynamicManager(
+        FakeSource([]), context,
+        {"bilibili_dynamic": {"render_image_count_threshold": 1, "use_forward_on_qq": True}},
+        renderer=renderer,
+    )
+
+    components = asyncio.run(manager.build_message_components({
+        "dynamic_type": "image", "title": "双图动态", "description_text": "内容",
+        "images": ["https://example.invalid/1", "https://example.invalid/2"],
+        "cached_images": source_images, "link": "https://example.invalid/dynamic",
+    }, "p:Group:1"))
+
+    assert renderer.calls == [False]
+    assert len(components) == 3
+    assert components[0].text.endswith("https://example.invalid/dynamic")
+    assert components[1].path == str(rendered)
+    assert len(components[2].nodes) == 2

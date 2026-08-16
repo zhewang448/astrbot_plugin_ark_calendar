@@ -115,7 +115,7 @@ SUBSCRIPTION_LIST_COMMAND = CommandSpec(
 BILIBILI_DYNAMIC_COMMAND = CommandSpec(
     "方舟动态",
     ("B站动态", "官方动态", "方舟B站"),
-    "查看明日方舟官方B站最新动态，可指定编号查看详情。",
+    "查看明日方舟官方B站最新动态；列表和详情均以终端图片返回，可指定编号查看详情。",
     argument_hint="[编号]",
     example="/方舟动态 3",
 )
@@ -128,7 +128,7 @@ BILIBILI_DYNAMIC_TEST_COMMAND = CommandSpec(
 RECRUIT_COMMAND = CommandSpec(
     "方舟公招",
     ("公招计算", "明日方舟公招", "舟公招"),
-    "输入标签计算可能招募的干员及保底星级，例如：/方舟公招 近卫干员 输出 生存。",
+    "输入标签计算可能招募的干员及保底星级，并以招募终端图片返回结果。",
     argument_hint="<标签1> [标签2] [标签3]",
     example="/方舟公招 近卫干员 输出 生存",
 )
@@ -210,6 +210,7 @@ class ArkCalendarPlugin(Star):
             source=bilibili_source,
             context=self.context,
             config=self.config,
+            renderer=self.renderer,
         )
         await self.bilibili_manager.initialize_state()
         # 创建公招数据源
@@ -360,11 +361,14 @@ class ArkCalendarPlugin(Star):
         name, parsed_time = split_name_and_time(arg_text)
 
         if not name:
-            image = await self.help_manager.get_help_image("subscribe")
+            image = await self.help_manager.get_help_image(
+                "subscribe",
+                subscription_commands=SUBSCRIPTION_COMMANDS,
+            )
             if image:
                 yield event.image_result(str(image))
             else:
-                yield event.plain_result("请输入要订阅的活动或卡池名称，例如：/方舟订阅 感谢庆典\n使用 /方舟日历 查看当前活动和卡池")
+                yield event.plain_result(self.messages.text("subscription_missing_name"))
             return
 
         time_to_use = parsed_time or "12:00"
@@ -379,7 +383,7 @@ class ArkCalendarPlugin(Star):
                 return
             if len(matches) > 1:
                 candidates = "\n".join(f"- {item.name}" for item in matches)
-                yield event.plain_result(f"找到多个活动或卡池，请使用更完整的名称订阅：\n{candidates}")
+                yield event.plain_result(self.messages.text("subscription_candidates", candidates=candidates))
                 return
             item = matches[0]
 
@@ -394,7 +398,7 @@ class ArkCalendarPlugin(Star):
             )
         except Exception:
             logger.error("添加订阅失败。", exc_info=True)
-            yield event.plain_result("订阅失败，请稍后重试。")
+            yield event.plain_result(self.messages.text("subscription_failed"))
 
     @filter.command(UNSUBSCRIBE_COMMAND.name, alias=UNSUBSCRIBE_COMMAND.alias_set)
     async def unsubscribe_command(self, event: AstrMessageEvent, item_name: str = ""):
@@ -402,7 +406,7 @@ class ArkCalendarPlugin(Star):
         name = self._argument_text(event, UNSUBSCRIBE_COMMAND, item_name).strip()
 
         if not name:
-            yield event.plain_result("请输入要取消订阅的活动或卡池名称，例如：/方舟取消订阅 感谢庆典")
+            yield event.plain_result(self.messages.text("unsubscribe_missing_name"))
             return
 
         try:
@@ -420,7 +424,7 @@ class ArkCalendarPlugin(Star):
                 return
             if len(matches) > 1:
                 candidates = "\n".join(f"- {sub.item_name}" for sub in matches)
-                yield event.plain_result(f"找到多个订阅，请使用更完整的名称取消：\n{candidates}")
+                yield event.plain_result(self.messages.text("unsubscribe_candidates", candidates=candidates))
                 return
             sub = matches[0]
 
@@ -430,7 +434,7 @@ class ArkCalendarPlugin(Star):
                 yield event.plain_result(self.messages.text("subscription_not_found", name=sub.item_name))
         except Exception:
             logger.error("取消订阅失败。", exc_info=True)
-            yield event.plain_result("取消订阅失败，请稍后重试。")
+            yield event.plain_result(self.messages.text("unsubscribe_failed"))
 
     @filter.command(SUBSCRIPTION_LIST_COMMAND.name, alias=SUBSCRIPTION_LIST_COMMAND.alias_set)
     async def subscription_list_command(self, event: AstrMessageEvent):
@@ -458,7 +462,7 @@ class ArkCalendarPlugin(Star):
             yield event.plain_result("\n\n".join(lines))
         except Exception:
             logger.error("查询订阅列表失败。", exc_info=True)
-            yield event.plain_result("查询订阅列表失败，请稍后重试。")
+            yield event.plain_result(self.messages.text("subscription_list_failed"))
 
     @filter.command(BILIBILI_DYNAMIC_COMMAND.name, alias=BILIBILI_DYNAMIC_COMMAND.alias_set)
     async def bilibili_dynamic_command(self, event: AstrMessageEvent, index: str = ""):
@@ -467,7 +471,7 @@ class ArkCalendarPlugin(Star):
         不带参数时显示列表，带编号时显示该动态详情。
         """
         if not self.bilibili_manager:
-            yield event.plain_result("B站动态功能未初始化。")
+            yield event.plain_result(self.messages.text("bilibili_uninitialized"))
             return
 
         try:
@@ -478,52 +482,24 @@ class ArkCalendarPlugin(Star):
                 dynamics = await self.bilibili_manager.query_list(default_count)
 
                 if not dynamics:
-                    yield event.plain_result("暂时无法获取B站动态，请稍后重试。")
+                    yield event.plain_result(self.messages.text("bilibili_list_empty"))
                     return
-
-                # 格式化列表
-                lines = [
-                    "━━━━━━━━━━━━━━━━━━━━",
-                    "📺 明日方舟官方B站动态",
-                    f"最近 {len(dynamics)} 条",
-                    "━━━━━━━━━━━━━━━━━━━━",
-                    "",
-                ]
-
-                for i, dyn in enumerate(dynamics, 1):
-                    icon = {"video": "🎬", "image": "🎨", "text": "📢", "repost": "🔄"}.get(
-                        dyn.get("dynamic_type", "text"), "📝"
-                    )
-                    time_str = BilibiliDynamicSource.format_relative_time(dyn.get("pub_date"))
-                    title = dyn.get("title", "")
-                    if len(title) > 40:
-                        title = title[:40] + "..."
-
-                    lines.append(f"{i}. {icon} {title}")
-                    lines.append(f"   发布时间：{time_str}")
-                    if dyn.get("images"):
-                        lines.append(f"   📷 含 {len(dyn['images'])} 张图片")
-                    lines.append("")
-
-                lines.append("━━━━━━━━━━━━━━━━━━━━")
-                lines.append(f"💡 使用 /{BILIBILI_DYNAMIC_COMMAND.name} <编号> 查看详情")
-
-                yield event.plain_result("\n".join(lines))
+                yield event.chain_result(await self.bilibili_manager.build_list_components(dynamics))
 
             else:
                 # 显示指定动态的详情
                 try:
                     idx = int(index)
                     if idx < 1:
-                        yield event.plain_result("编号必须大于0。")
+                        yield event.plain_result(self.messages.text("bilibili_index_invalid"))
                         return
                 except ValueError:
-                    yield event.plain_result("请输入有效的编号。")
+                    yield event.plain_result(self.messages.text("bilibili_index_invalid"))
                     return
 
                 dynamic = await self.bilibili_manager.query_detail(idx, default_count)
                 if not dynamic:
-                    yield event.plain_result(f"编号 {idx} 超出范围或获取失败。")
+                    yield event.plain_result(self.messages.text("bilibili_not_found", index=idx))
                     return
 
                 # 格式化并发送
@@ -534,37 +510,36 @@ class ArkCalendarPlugin(Star):
 
         except Exception:
             logger.error("查询B站动态失败。", exc_info=True)
-            yield event.plain_result("查询B站动态失败，请稍后重试。")
+            yield event.plain_result(self.messages.text("bilibili_query_failed"))
 
     @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command(BILIBILI_DYNAMIC_TEST_COMMAND.name, alias=BILIBILI_DYNAMIC_TEST_COMMAND.alias_set)
     async def bilibili_dynamic_test_command(self, event: AstrMessageEvent):
         """管理员测试：模拟检测到新动态并推送。"""
         if not self.bilibili_manager:
-            yield event.plain_result("B站动态功能未初始化。")
+            yield event.plain_result(self.messages.text("bilibili_uninitialized"))
             return
 
         try:
-            yield event.plain_result("正在执行测试推送...")
+            yield event.plain_result(self.messages.text("push_test_started"))
 
             targets = self.bilibili_manager._push_targets()
             if not targets:
-                yield event.plain_result("未配置推送目标 SID，无法测试。")
+                yield event.plain_result(self.messages.text("push_test_no_target"))
                 return
 
             sent, failed = await self.bilibili_manager.force_push_recent(targets)
-            result = f"测试完成：成功推送 {sent} 条，失败 {failed} 条。"
-            yield event.plain_result(result)
+            yield event.plain_result(self.messages.text("push_test_done", sent=sent, failed=failed))
 
         except Exception:
             logger.error("B站动态推送测试失败。", exc_info=True)
-            yield event.plain_result("推送测试失败，请查看日志。")
+            yield event.plain_result(self.messages.text("push_test_failed"))
 
     @filter.command(RECRUIT_COMMAND.name, alias=RECRUIT_COMMAND.alias_set)
     async def recruit_command(self, event: AstrMessageEvent):
         """根据标签计算明日方舟公开招募可能出现的干员及保底星级。"""
         if not self.recruitment_source:
-            yield event.plain_result("公招计算器未初始化，请稍后重试。")
+            yield event.plain_result(self.messages.text("recruit_uninitialized"))
             return
 
         # 从原文剥离命令名后取全部参数，支持空格/顿号/斜线分隔
@@ -589,6 +564,18 @@ class ArkCalendarPlugin(Star):
                 "          支援机械（小车）、元素、新手\n"
                 "━━━━━━━━━━━━━━━━━━━━"
             )
+            try:
+                rendered_help = await self.renderer.recruitment_help({
+                    "职业": ["近卫干员", "狙击干员", "术师干员", "医疗干员", "重装干员", "辅助干员", "特种干员", "先锋干员"],
+                    "位置": ["近战位", "远程位"],
+                    "稀有度": ["资深干员（保底5★）", "高级资深干员（保底6★）"],
+                    "词缀": ["输出", "治疗", "生存", "防护", "控场", "爆发", "支援", "减速", "削弱", "群攻", "位移", "召唤", "快速复活", "费用回复", "高空", "支援机械", "元素", "新手"],
+                })
+                if isinstance(rendered_help, (str, Path)) and Path(str(rendered_help)).is_file():
+                    yield event.image_result(str(rendered_help))
+                    return
+            except Exception:
+                logger.warning("公招帮助图片渲染失败，回退文字版。", exc_info=True)
             yield event.plain_result(help_text)
             return
 
@@ -596,13 +583,13 @@ class ArkCalendarPlugin(Star):
         raw_tags = [t.strip() for t in re.split(r"[,，、/／\s]+", raw_text) if t.strip()]
 
         if len(raw_tags) > 5:
-            yield event.plain_result(f"最多输入 5 个标签（游戏内公招一次显示 5 个标签），已收到 {len(raw_tags)} 个。")
+            yield event.plain_result(self.messages.text("recruit_too_many_tags", count=len(raw_tags)))
             return
 
         try:
             pool_data = await self.recruitment_source.get_recruitment_pool()
             if not pool_data["characters"]:
-                yield event.plain_result("无法获取公招数据，请稍后重试。")
+                yield event.plain_result(self.messages.text("recruit_data_failed"))
                 return
 
             calculator = RecruitmentCalculator(pool_data["characters"])
@@ -610,28 +597,35 @@ class ArkCalendarPlugin(Star):
 
             if invalid_tags:
                 unknown = "、".join(invalid_tags)
-                yield event.plain_result(
-                    f"以下标签无法识别：{unknown}\n"
-                    "发送 /方舟公招 查看帮助和可用标签列表。"
-                )
+                yield event.plain_result(self.messages.text("recruit_unknown_tags", tags=unknown))
                 return
 
             if not valid_tags:
-                yield event.plain_result("请输入至少一个有效标签。发送 /方舟公招 查看帮助。")
+                yield event.plain_result(self.messages.text("recruit_empty_tags"))
                 return
 
             results = calculator.calculate(valid_tags)
-            text = format_result(results, selected_tags=valid_tags)
-            yield event.plain_result(text)
+            try:
+                rendered = await self.renderer.recruitment_result(results, valid_tags)
+                if isinstance(rendered, (str, Path)) and Path(str(rendered)).is_file():
+                    yield event.image_result(str(rendered))
+                    return
+            except Exception:
+                logger.warning("公招结果图片渲染失败，回退文字版。", exc_info=True)
+            yield event.plain_result(format_result(results, selected_tags=valid_tags))
 
         except Exception:
             logger.error("公招计算失败。", exc_info=True)
-            yield event.plain_result("计算失败，请稍后重试。")
+            yield event.plain_result(self.messages.text("recruit_failed"))
 
     @filter.command(HELP_COMMAND.name, alias=HELP_COMMAND.alias_set)
     async def help_command(self, event: AstrMessageEvent):
         """查看方舟日历的指令、别称与配置说明。"""
-        image = await self.help_manager.get_help_image("full")
+        image = await self.help_manager.get_help_image(
+            "full",
+            user_commands=USER_COMMANDS,
+            admin_commands=ADMIN_COMMANDS,
+        )
         if image:
             yield event.image_result(str(image))
         else:

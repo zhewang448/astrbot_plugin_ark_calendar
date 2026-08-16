@@ -312,6 +312,8 @@ class HelpImageCache:
     """
 
     MODES = ("full", "subscribe")
+    # v2 重新纳入完整命令行（含 B站动态与公招），不能复用旧版当日空命令缓存。
+    CACHE_VERSION = 2
 
     def __init__(self, root: Path):
         self.root = root
@@ -321,7 +323,7 @@ class HelpImageCache:
         """返回该 mode 当日缓存图片路径；不存在或无效时返回 None。"""
         if mode not in self.MODES or not DATE_PATTERN.match(calendar_date):
             return None
-        image = self.root / f"help-{mode}-{calendar_date}.png"
+        image = self.root / f"help-v{self.CACHE_VERSION}-{mode}-{calendar_date}.png"
         try:
             if not image.is_file() or image.stat().st_size <= 8:
                 return None
@@ -344,7 +346,7 @@ class HelpImageCache:
         if mode not in self.MODES:
             return None
         current = now or datetime.now(CN_TZ)
-        target = self.root / f"help-{mode}-{current.date().isoformat()}.png"
+        target = self.root / f"help-v{self.CACHE_VERSION}-{mode}-{current.date().isoformat()}.png"
         temporary = target.with_name(f".{target.name}.{uuid4().hex}.tmp")
         try:
             write_image(rendered, temporary)
@@ -365,7 +367,7 @@ class HelpImageCache:
         """删除当日全部帮助缓存，用于管理员强制刷新后重渲染。"""
         current = now or datetime.now(CN_TZ)
         for mode in self.MODES:
-            image = self.root / f"help-{mode}-{current.date().isoformat()}.png"
+            image = self.root / f"help-v{self.CACHE_VERSION}-{mode}-{current.date().isoformat()}.png"
             try:
                 image.unlink(missing_ok=True)
             except OSError:
@@ -382,7 +384,7 @@ class HelpImageCache:
         """每个 mode 只保留最近 keep_days 天的缓存图。"""
         for mode in self.MODES:
             images = sorted(
-                self.root.glob(f"help-{mode}-*.png"),
+                self.root.glob(f"help-v{self.CACHE_VERSION}-{mode}-*.png"),
                 key=lambda item: item.name,
                 reverse=True,
             )
