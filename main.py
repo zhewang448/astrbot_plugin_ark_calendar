@@ -507,6 +507,11 @@ class ArkCalendarPlugin(Star):
                     dynamic, event.unified_msg_origin
                 )
                 yield event.chain_result(components)
+                forward_components = await self.bilibili_manager.build_forward_components(
+                    dynamic, event.unified_msg_origin
+                )
+                if forward_components:
+                    yield event.chain_result(forward_components)
 
         except Exception:
             logger.error("查询B站动态失败。", exc_info=True)

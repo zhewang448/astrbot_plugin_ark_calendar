@@ -203,7 +203,46 @@ def test_large_dynamic_uses_text_card_then_forwarded_original_images(tmp_path: P
     }, "p:Group:1"))
 
     assert renderer.calls == [False]
-    assert len(components) == 3
+    assert len(components) == 2
     assert components[0].text.endswith("https://example.invalid/dynamic")
     assert components[1].path == str(rendered)
-    assert len(components[2].nodes) == 2
+    forward_components = asyncio.run(manager.build_forward_components({
+        "images": ["https://example.invalid/1", "https://example.invalid/2"],
+        "cached_images": source_images,
+    }, "p:Group:1"))
+    assert len(forward_components) == 1
+    assert len(forward_components[0].nodes) == 2
+
+
+def test_auto_push_sends_primary_chain_before_forwarded_images(tmp_path: Path, monkeypatch):
+    image = tmp_path / "one.png"
+    image.write_bytes(b"image")
+    rendered = tmp_path / "rendered.png"
+    rendered.write_bytes(b"image")
+    sent = []
+
+    class Context:
+        def get_platform_inst(self, _platform_id):
+            return SimpleNamespace(meta=lambda: SimpleNamespace(name="aiocqhttp"))
+
+        async def send_message(self, sid, chain):
+            sent.append((sid, chain))
+            return True
+
+    manager = bilibili_manager.BilibiliDynamicManager(
+        FakeSource([{
+            "id": "new", "dynamic_type": "image", "title": "图片动态", "description_text": "内容",
+            "images": ["https://example.invalid/1", "https://example.invalid/2"],
+            "cached_images": [str(image)], "link": "https://example.invalid/dynamic",
+        }]),
+        Context(),
+        {"bilibili_dynamic": {"render_image_count_threshold": 1, "use_forward_on_qq": True}},
+        renderer=FakeRenderer(rendered),
+    )
+    monkeypatch.setattr(bilibili_manager, "platform_supports_proactive_send", lambda *_: True)
+
+    assert asyncio.run(manager.force_push_recent(["p:Group:1"])) == (1, 0)
+    assert len(sent) == 2
+    assert sent[0][1][0].text.endswith("https://example.invalid/dynamic")
+    assert sent[0][1][1].path == str(rendered)
+    assert len(sent[1][1][0].nodes) == 1

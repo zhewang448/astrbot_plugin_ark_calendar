@@ -246,6 +246,7 @@ class BilibiliDynamicManager:
                                 failed_count += 1
                                 logger.warning(f"B站动态未投递：动态={dyn_id}，目标={sid}")
                                 continue
+                            await self._send_forward_images(dynamic, sid)
                             delivered_to[sid] = datetime.now().isoformat()
                             sent_count += 1
                             await asyncio.sleep(0.5)  # 限流
@@ -295,6 +296,7 @@ class BilibiliDynamicManager:
                         failed_count += 1
                         logger.warning(f"B站动态测试推送未投递：目标={sid}")
                         continue
+                    await self._send_forward_images(dynamic, sid)
                     sent_count += 1
                     await asyncio.sleep(0.5)
                 except Exception:
@@ -319,7 +321,7 @@ class BilibiliDynamicManager:
             target_sid: 目标会话ID
 
         Returns:
-            消息组件列表，QQ平台含多图时返回 [Nodes]，其他平台返回 [Plain, Image, ...]
+            普通消息链组件列表；超阈值原图转发由 build_forward_components() 单独构造。
         """
         cached_images = [str(path) for path in dynamic.get("cached_images", []) if Path(path).is_file()]
         declared_count = len(dynamic.get("images") or cached_images)
@@ -360,22 +362,44 @@ class BilibiliDynamicManager:
                 # 渲染服务短暂不可用时仍保留动态原图，避免小图动态丢失内容。
                 components.extend(Comp.Image.fromFileSystem(image) for image in cached_images)
 
-        # 超过阈值时不把原图拼进普通消息；支持合并转发的目标再追加原图节点。
-        if declared_count > threshold and cached_images and self._supports_forward(target_sid):
-            try:
-                from astrbot.core.message.components import Node, Nodes
-                nodes = [
-                    Node(
-                        content=[Comp.Image.fromFileSystem(image)],
-                        name="明日方舟官方",
-                        uin="161775300",
-                    )
-                    for image in cached_images
-                ]
-                components.append(Nodes(nodes=nodes))
-            except Exception:
-                logger.debug("当前平台未能构造动态图片合并转发。", exc_info=True)
         return components
+
+    async def build_forward_components(self, dynamic: dict[str, Any], target_sid: str) -> list:
+        """构建超阈值动态的原图合并转发，绝不混入普通消息链。"""
+        cached_images = [str(path) for path in dynamic.get("cached_images", []) if Path(path).is_file()]
+        declared_count = len(dynamic.get("images") or cached_images)
+        if (
+            declared_count <= self._render_image_count_threshold()
+            or not cached_images
+            or not self._supports_forward(target_sid)
+        ):
+            return []
+        try:
+            from astrbot.core.message.components import Node, Nodes
+            nodes = [
+                Node(
+                    content=[Comp.Image.fromFileSystem(image)],
+                    name="明日方舟官方",
+                    uin="161775300",
+                )
+                for image in cached_images
+            ]
+            return [Nodes(nodes=nodes)]
+        except Exception:
+            logger.debug("当前平台未能构造动态图片合并转发。", exc_info=True)
+            return []
+
+    async def _send_forward_images(self, dynamic: dict[str, Any], target_sid: str) -> None:
+        """在普通消息链投递成功后，单独投递原图转发；失败不回滚正文。"""
+        try:
+            components = await self.build_forward_components(dynamic, target_sid)
+            if not components:
+                return
+            delivered = await self.context.send_message(target_sid, MessageChain(components))
+            if delivered is False:
+                logger.warning("B站动态原图合并转发未投递：目标=%s", target_sid)
+        except Exception:
+            logger.warning("B站动态原图合并转发失败：目标=%s", target_sid, exc_info=True)
 
     async def build_list_components(self, dynamics: list[dict[str, Any]]) -> list:
         """将动态列表渲染为图片，失败时回退为简洁文本。"""
