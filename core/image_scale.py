@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 # 缩放逻辑版本；改动尺寸计算、编码参数时 +1，让磁盘上的旧缓存自然失效。
-SCALE_VERSION = 2
+SCALE_VERSION = 3
 
 # webp 编码参数。method 越大压得越狠也越慢，4 是体积与耗时的平衡点。
 WEBP_QUALITY = 82
@@ -18,8 +18,9 @@ WEBP_METHOD = 4
 # 边缘透明度对观感影响大，多花的字节可以忽略。
 WEBP_QUALITY_ALPHA = 88
 
-# PIL 解压炸弹上限，沿用 PIL 默认值，显式设置以防被别处改过。
-MAX_IMAGE_PIXELS = 178_956_970
+# 对需要 Pillow 解码的远端/缓存图片设置更保守的硬上限。
+# 日历实际展示尺寸远低于该值；50MP 足以覆盖正常素材，同时避免异常图片占用巨量内存。
+MAX_IMAGE_PIXELS = 50_000_000
 
 # 内存里最多保留几张缩放结果的 data URI。缩放后单张通常几 KB 到几十 KB。
 MEMORY_ENTRIES = 64
@@ -132,10 +133,16 @@ class ImageScaler:
             return b""
 
         with Image.open(path) as image:
-            image.load()
             source_width, source_height = image.size
             if source_width <= 0 or source_height <= 0:
                 return b""
+            if source_width * source_height > MAX_IMAGE_PIXELS:
+                raise ValueError(
+                    f"图片像素数过大：{source_width}x{source_height}，"
+                    f"上限 {MAX_IMAGE_PIXELS:,} 像素"
+                )
+            # 在尺寸检查通过后才真正解码像素，避免超大压缩图片先占满内存。
+            image.load()
 
             # 按 cover 语义取缩放比：让缩放后的图刚好覆盖显示框。
             # 不做裁剪——时间轴条的宽度是 CSS 变量、运行时才定，裁了会错。

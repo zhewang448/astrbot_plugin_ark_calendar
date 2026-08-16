@@ -13,6 +13,26 @@ from typing import Any
 from .http import HttpClient
 
 
+PROFESSION_TAG: dict[str, str] = {
+    "WARRIOR": "近卫干员",
+    "SNIPER": "狙击干员",
+    "CASTER": "术师干员",
+    "MEDIC": "医疗干员",
+    "DEFENDER": "重装干员",
+    "SUPPORTER": "辅助干员",
+    "SPECIALIST": "特种干员",
+    "PIONEER": "先锋干员",
+}
+POSITION_TAG: dict[str, str] = {
+    "MELEE": "近战位",
+    "RANGED": "远程位",
+}
+RECRUIT_SECTION_RE = re.compile(
+    r"^★+\\n(?P<operators>.+?)(?=\r?\n-+|\Z)",
+    flags=re.MULTILINE | re.DOTALL,
+)
+
+
 class RecruitmentSource:
     """公开招募数据源。
 
@@ -81,20 +101,12 @@ class RecruitmentSource:
             tags: list[str] = list(char_data.get("tagList") or [])
 
             # 附加职业标签（游戏数据里 tagList 只有词缀，职业/位置需从 profession/position 推算）
-            _PROFESSION_TAG: dict[str, str] = {
-                "WARRIOR": "近卫干员", "SNIPER": "狙击干员", "CASTER": "术师干员",
-                "MEDIC": "医疗干员", "DEFENDER": "重装干员", "SUPPORTER": "辅助干员",
-                "SPECIALIST": "特种干员", "PIONEER": "先锋干员",
-            }
-            _POSITION_TAG: dict[str, str] = {
-                "MELEE": "近战位", "RANGED": "远程位",
-            }
             profession = char_data.get("profession", "")
             position = char_data.get("position", "")
-            if profession in _PROFESSION_TAG:
-                tags.append(_PROFESSION_TAG[profession])
-            if position in _POSITION_TAG:
-                tags.append(_POSITION_TAG[position])
+            if profession in PROFESSION_TAG:
+                tags.append(PROFESSION_TAG[profession])
+            if position in POSITION_TAG:
+                tags.append(POSITION_TAG[position])
 
             all_tags.update(tags)
 
@@ -149,8 +161,7 @@ class RecruitmentSource:
         names: set[str] = set()
         # 分隔符是真实换行；每个星级标题与名单之间则是字面量 ``\\n``。
         # 第一段名单前有说明文字，不能假定星级标题就是分段首行。
-        pattern = r"^★+\\n(?P<operators>.+?)(?=\r?\n-+|\Z)"
-        for match in re.finditer(re.compile(pattern, flags=re.MULTILINE | re.DOTALL), recruit_detail):
+        for match in RECRUIT_SECTION_RE.finditer(recruit_detail):
             operators = re.sub(r"<[^>]*>", "", match.group("operators"))
             for raw_name in operators.split("/"):
                 name = raw_name.strip()
