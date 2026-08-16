@@ -1,15 +1,20 @@
 import asyncio
 from datetime import datetime, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 from types import SimpleNamespace
 
-from core.models import CalendarSnapshot, TimelineItem
+from core.models import CalendarSnapshot, TimelineItem, parse_iso
 from core.command_args import split_name_and_time
 from core.recruitment_calculator import RecruitmentCalculator, format_result
 from core.render_cache import CalendarImageCache, validate_rendered_image
 from core.renderer import CalendarRenderer
 from core.subscription import SubscriptionManager
 from sources.recruitment import RecruitmentSource
+
+
+def subscription_timezone():
+    return ZoneInfo("Asia/Shanghai")
 
 
 def _snapshot() -> CalendarSnapshot:
@@ -58,42 +63,46 @@ def test_recruitment_removes_obsolete_high_air_tag():
     assert calculator.normalize_tag("对空") is None
 
 
-def test_subscription_reminder_uses_saved_record_when_item_left_snapshot(tmp_path: Path):
+def test_subscription_persists_fixed_reminder_time(tmp_path: Path):
     manager = SubscriptionManager(tmp_path, logger=SimpleNamespace(warning=lambda *a, **k: None, info=lambda *a, **k: None))
-    now = datetime.now().astimezone()
     item = TimelineItem(
-        id="long-1", name="长期活动", category="event", item_type="event",
-        start=(now - timedelta(days=2)).isoformat(), end=(now + timedelta(hours=23)).isoformat(),
+        id="fixed-1", name="固定活动", category="event", item_type="event",
+        start="2026-08-18T04:00:00+08:00", end="2026-08-20T04:00:00+08:00",
     )
-    manager.add_subscription(item, "u", "platform:Group:1", "00:00")
-    pending = manager.get_pending_reminders(_snapshot())
-    assert len(pending) == 1
-    assert pending[0][0].item_name == "长期活动"
+    subscription = manager.add_subscription(item, "u", "platform:Group:1", "09:30")
+    assert subscription.remind_at == "2026-08-19T09:30:00+08:00"
+    assert manager.get_next_reminder_at(datetime(2026, 8, 18, 0, tzinfo=subscription_timezone())) == parse_iso(subscription.remind_at)
 
 
-def test_subscription_syncs_changed_end_time_and_resets_notification(tmp_path: Path):
+def test_subscription_due_check_does_not_read_snapshot(tmp_path: Path):
     logger = SimpleNamespace(warning=lambda *a, **k: None, info=lambda *a, **k: None)
     manager = SubscriptionManager(tmp_path, logger=logger)
-    now = datetime.now().astimezone()
-    original = TimelineItem(
-        id="event-1", name="延期活动", category="event", item_type="event",
-        start=(now - timedelta(days=3)).isoformat(), end=(now + timedelta(hours=6)).isoformat(),
+    item = TimelineItem(
+        id="fixed-2", name="不变活动", category="event", item_type="event",
+        start="2026-08-18T04:00:00+08:00", end="2026-08-20T04:00:00+08:00",
     )
-    manager.add_subscription(original, "u", "platform:Group:1", "00:00")
-    manager.mark_notified(manager.get_user_subscriptions("u")[0])
-    updated = TimelineItem(
-        id="event-1", name="延期活动", category="event", item_type="event",
-        start=original.start, end=(now + timedelta(hours=23)).isoformat(),
-    )
-    snapshot = _snapshot()
-    snapshot.events = [updated]
+    manager.add_subscription(item, "u", "platform:Group:1", "09:30")
+    due = manager.get_due_reminders(datetime(2026, 8, 19, 10, tzinfo=subscription_timezone()))
+    assert [subscription.item_name for subscription in due] == ["不变活动"]
 
-    pending = manager.get_pending_reminders(snapshot)
 
-    stored = manager.get_user_subscriptions("u")[0]
-    assert stored.end_time == updated.end
-    assert stored.notified is False
-    assert len(pending) == 1
+def test_legacy_subscription_record_gets_fixed_reminder_time(tmp_path: Path):
+    logger = SimpleNamespace(warning=lambda *a, **k: None, info=lambda *a, **k: None)
+    manager = SubscriptionManager(tmp_path, logger=logger)
+    manager.cache.save("subscriptions.json", {
+        "fixed-legacy:u:platform:Group:1": {
+            "item_id": "fixed-legacy",
+            "item_name": "旧记录活动",
+            "item_type": "event",
+            "end_time": "2026-08-20T04:00:00+08:00",
+            "user_id": "u",
+            "session_id": "platform:Group:1",
+            "remind_time": "09:30",
+        }
+    })
+    subscriptions = manager.get_user_subscriptions("u")
+    assert subscriptions[0].remind_at == "2026-08-19T09:30:00+08:00"
+    assert manager.cache.load("subscriptions.json")["fixed-legacy:u:platform:Group:1"]["remind_at"] == "2026-08-19T09:30:00+08:00"
 
 
 def test_subscription_rejects_invalid_time_without_treating_it_as_name():
@@ -116,25 +125,16 @@ def test_render_cache_expiry_starts_at_render_time(tmp_path: Path):
     assert cache.lookup(snapshot, {"render_image_type": "png"}) == image
 
 
-def test_cleanup_syncs_extended_end_before_expiring_subscription(tmp_path: Path):
+def test_cleanup_uses_saved_end_time_without_snapshot(tmp_path: Path):
     logger = SimpleNamespace(warning=lambda *a, **k: None, info=lambda *a, **k: None)
     manager = SubscriptionManager(tmp_path, logger=logger)
-    now = datetime.now().astimezone()
     original = TimelineItem(
-        id="延期", name="延期活动", category="event", item_type="event",
-        start=(now - timedelta(days=3)).isoformat(), end=(now - timedelta(hours=1)).isoformat(),
+        id="expired", name="已结束活动", category="event", item_type="event",
+        start="2026-08-15T04:00:00+08:00", end="2026-08-16T04:00:00+08:00",
     )
     manager.add_subscription(original, "u", "platform:Group:1", "00:00")
-    updated = TimelineItem(
-        id=original.id, name=original.name, category=original.category, item_type=original.item_type,
-        start=original.start, end=(now + timedelta(days=2)).isoformat(),
-    )
-    snapshot = _snapshot()
-    snapshot.events = [updated]
-
-    assert manager.cleanup_expired(snapshot) == 0
-    stored = manager.get_user_subscriptions("u")[0]
-    assert stored.end_time == updated.end
+    assert manager.cleanup_expired(datetime(2026, 8, 17, tzinfo=subscription_timezone())) == 1
+    assert manager.get_user_subscriptions("u") == []
 
 
 def test_help_subscription_items_include_long_term_events():

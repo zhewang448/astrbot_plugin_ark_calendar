@@ -4,7 +4,7 @@ import asyncio
 import re
 from collections import defaultdict
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -245,6 +245,15 @@ class ArkCalendarPlugin(Star):
             logger.info("方舟日历定时任务调度器已关闭。")
         await self.service.close()
 
+    def _ensure_subscription_scheduler(self) -> None:
+        """订阅首次建立时启动仅包含一次性提醒任务的调度器。"""
+        if self.scheduler is None:
+            self.scheduler = AsyncIOScheduler(timezone=CN_TZ)
+            self.scheduler.start()
+        elif not self.scheduler.running:
+            self.scheduler.start()
+        self._schedule_next_subscription_reminder()
+
     async def _precache_help_images_after_reload(self) -> None:
         """重载后后台补齐当天缺失或已失效的两张帮助图。"""
         try:
@@ -406,6 +415,7 @@ class ArkCalendarPlugin(Star):
             session_id = event.unified_msg_origin
 
             self.subscription_manager.add_subscription(item, user_id, session_id, time_to_use)
+            self._ensure_subscription_scheduler()
             yield event.plain_result(
                 self.messages.text("subscription_added", name=item.name, time=time_to_use)
             )
@@ -442,6 +452,7 @@ class ArkCalendarPlugin(Star):
             sub = matches[0]
 
             if self.subscription_manager.remove_subscription(sub.item_id, user_id, session_id):
+                self._schedule_next_subscription_reminder()
                 yield event.plain_result(self.messages.text("subscription_removed", name=sub.item_name))
             else:
                 yield event.plain_result(self.messages.text("subscription_not_found", name=sub.item_name))
@@ -843,20 +854,35 @@ class ArkCalendarPlugin(Star):
         return 1
 
     def _add_scheduled_subscription_reminder_job(self) -> int:
-        """添加订阅提醒定时任务，每分钟检查一次。"""
-        assert self.scheduler
+        """恢复最近一条订阅提醒；活动时间按订阅时记录，之后不再轮询快照。"""
+        if self._schedule_next_subscription_reminder():
+            return 1
+        logger.info("订阅提醒任务：没有待调度的订阅。")
+        return 0
+
+    def _schedule_next_subscription_reminder(self) -> bool:
+        """只注册最近一次提醒，发送完成或取消订阅后再滚动到下一次。"""
+        if not self.scheduler:
+            return False
+        job_id = "ark_calendar_subscription_reminder"
+        if self.scheduler.get_job(job_id):
+            self.scheduler.remove_job(job_id)
+        run_at = self.subscription_manager.get_next_reminder_at()
+        if run_at is None:
+            return False
         self.scheduler.add_job(
             self._scheduled_subscription_reminder,
-            "cron",
-            minute="*",
-            id="ark_calendar_subscription_reminder",
+            "date",
+            run_date=run_at,
+            id=job_id,
             name="Ark Calendar Subscription Reminder",
+            replace_existing=True,
             coalesce=True,
             max_instances=1,
-            misfire_grace_time=300,
+            misfire_grace_time=86400,
         )
-        logger.info("已启用订阅提醒任务：每分钟检查一次。")
-        return 1
+        logger.info(f"订阅提醒任务：下一次执行时间为 {run_at.astimezone(CN_TZ):%Y-%m-%d %H:%M}。")
+        return True
 
     def _scheduled_report_times(self) -> list[str]:
         """返回已生效的日报时间，用于与预缓存任务做撞车检查。"""
@@ -1126,19 +1152,13 @@ class ArkCalendarPlugin(Star):
                 )
 
     async def _scheduled_subscription_reminder(self) -> None:
-        """定时检查并发送订阅提醒"""
+        """发送已到期订阅；结束时间和提醒时间均来自订阅记录。"""
         if self._scheduled_subscription_reminder_lock.locked():
             logger.warning("订阅提醒任务：已有任务正在执行，本次跳过。")
             return
         async with self._scheduled_subscription_reminder_lock:
             try:
-                if not self.subscription_manager.has_subscriptions():
-                    logger.debug("订阅提醒任务：没有订阅记录，本次跳过数据刷新。")
-                    return
-                snapshot = await self.service.snapshot()
-                # cleanup_expired 会先按当前快照同步延期后的结束时间，再清理真正过期记录。
-                self.subscription_manager.cleanup_expired(snapshot)
-                pending = self.subscription_manager.get_pending_reminders(snapshot)
+                pending = self.subscription_manager.get_due_reminders()
                 if not pending:
                     logger.debug("订阅提醒任务：没有需要发送的提醒。")
                     return
@@ -1149,9 +1169,9 @@ class ArkCalendarPlugin(Star):
                 # 但不同订阅者各发一条，避免一条消息里出现多个 At 组件。
                 grouped: dict[tuple[str, str], list[Subscription]] = defaultdict(list)
                 end_texts: dict[str, str] = {}
-                for sub, item in pending:
+                for sub in pending:
                     try:
-                        end_texts[sub.item_id] = parse_iso(item.end).astimezone(CN_TZ).strftime("%H:%M")
+                        end_texts[sub.item_id] = parse_iso(sub.end_time).astimezone(CN_TZ).strftime("%H:%M")
                     except (TypeError, ValueError):
                         end_texts[sub.item_id] = "未知时间"
                     grouped[(sub.session_id, sub.user_id)].append(sub)
@@ -1161,6 +1181,9 @@ class ArkCalendarPlugin(Star):
                     try:
                         if not platform_supports_proactive_send(session_id, self.context):
                             logger.warning(f"订阅提醒不支持主动投递至 {session_id}。")
+                            self.subscription_manager.defer_reminders(
+                                subs, datetime.now(CN_TZ) + timedelta(minutes=5)
+                            )
                             continue
                         use_at = platform_supports_at(session_id, self.context)
                         # 白名单平台由 At 组件负责提醒，正文不再拼 @；其他群聊退化为纯文本 @。
@@ -1192,6 +1215,9 @@ class ArkCalendarPlugin(Star):
                                 f"订阅提醒未投递至 {session_id}（订阅者 {user_id}）："
                                 "请确认该 SID 对应的平台适配器仍在运行。"
                             )
+                            self.subscription_manager.defer_reminders(
+                                subs, datetime.now(CN_TZ) + timedelta(minutes=5)
+                            )
                             continue
 
                         # 只标记本次确实发出去的订阅，失败的留到下一轮重试。
@@ -1204,6 +1230,9 @@ class ArkCalendarPlugin(Star):
                             f"{len(subs)} 个提醒，At={'是' if use_at else '否'}）。"
                         )
                     except Exception:
+                        self.subscription_manager.defer_reminders(
+                            subs, datetime.now(CN_TZ) + timedelta(minutes=5)
+                        )
                         logger.error(
                             f"向 {session_id} 发送订阅提醒失败（订阅者 {user_id}）。", exc_info=True
                         )
@@ -1211,6 +1240,8 @@ class ArkCalendarPlugin(Star):
                 logger.info(f"订阅提醒任务完成：成功发送 {success_count} 个提醒。")
             except Exception:
                 logger.error("订阅提醒任务执行失败。", exc_info=True)
+            finally:
+                self._schedule_next_subscription_reminder()
 
     def _birthday_greeting_pending_targets(self, targets: list[str], date_key: str) -> list[str]:
         stored = self.service.cache.load("birthday_greeting_state.json")

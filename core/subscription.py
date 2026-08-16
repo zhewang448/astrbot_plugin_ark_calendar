@@ -7,7 +7,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from .cache import JsonCache
-from .models import CalendarSnapshot, TimelineItem, parse_iso
+from .models import TimelineItem, parse_iso
 
 CN_TZ = ZoneInfo("Asia/Shanghai")
 
@@ -18,10 +18,13 @@ class Subscription:
     item_id: str  # 活动/卡池的 ID
     item_name: str  # 活动/卡池名称
     item_type: str  # "event" 或 "gacha"
-    end_time: str  # 结束时间 ISO 格式
+    # 产品约定：活动和卡池的结束时间在用户订阅后视为固定，不再从后续快照同步。
+    end_time: str  # 订阅时固化的结束时间，ISO 格式
     user_id: str  # 订阅用户的 ID（QQ号、用户ID等）
     session_id: str  # 会话 ID（SID）
     remind_time: str = "12:00"  # 提醒时间，默认中午12点
+    remind_at: str = ""  # 订阅时计算并固化的实际提醒时间，ISO 格式
+    retry_at: str = ""  # 上一次投递失败后的下一次尝试时间，ISO 格式
     subscribed_at: str = ""  # 订阅时间
     notified: bool = False  # 是否已通知
 
@@ -30,21 +33,26 @@ class Subscription:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> Subscription:
+        end_time = str(data["end_time"])
+        remind_time = str(data.get("remind_time", "12:00"))
         return cls(
             item_id=str(data["item_id"]),
             item_name=str(data["item_name"]),
             item_type=str(data["item_type"]),
-            end_time=str(data["end_time"]),
+            end_time=end_time,
             user_id=str(data["user_id"]),
             session_id=str(data["session_id"]),
-            remind_time=str(data.get("remind_time", "12:00")),
+            remind_time=remind_time,
+            # 兼容旧记录：首次加载时按其已保存的结束时间补齐固定提醒时间。
+            remind_at=str(data.get("remind_at") or _calculate_remind_at(end_time, remind_time)),
+            retry_at=str(data.get("retry_at", "")),
             subscribed_at=str(data.get("subscribed_at", "")),
             notified=bool(data.get("notified", False)),
         )
 
 
 class SubscriptionManager:
-    """订阅管理器"""
+    """订阅管理器。活动结束时间在订阅时固化，后续不再读取快照校正。"""
 
     def __init__(self, data_dir: Path, logger):
         self.cache = JsonCache(data_dir / "subscriptions")
@@ -57,8 +65,9 @@ class SubscriptionManager:
         session_id: str,
         remind_time: str = "12:00",
     ) -> Subscription:
-        """添加订阅"""
+        """添加订阅，并把本次活动结束时间与实际提醒时间一并固化。"""
         now = datetime.now(CN_TZ)
+        remind_at = _calculate_remind_at(item.end, remind_time)
         sub = Subscription(
             item_id=item.id,
             item_name=item.name,
@@ -67,6 +76,7 @@ class SubscriptionManager:
             user_id=user_id,
             session_id=session_id,
             remind_time=remind_time,
+            remind_at=remind_at,
             subscribed_at=now.isoformat(),
             notified=False,
         )
@@ -78,8 +88,11 @@ class SubscriptionManager:
         key = self._subscription_key(item.id, user_id, session_id)
         if key in subs:
             self.logger.info(f"用户 {user_id} 已订阅 {item.name}，更新提醒时间为 {remind_time}")
+            # 产品约定：重新订阅是一次新的显式确认，因此用本次快照重新固化时间。
             subs[key].end_time = item.end
             subs[key].remind_time = remind_time
+            subs[key].remind_at = remind_at
+            subs[key].retry_at = ""
             subs[key].notified = False  # 重置通知状态
         else:
             subs[key] = sub
@@ -111,7 +124,8 @@ class SubscriptionManager:
         user_id: str,
         session_id: str | None = None,
     ) -> list[Subscription]:
-        """获取用户的所有订阅"""
+        """获取用户的所有未过期订阅。"""
+        self.cleanup_expired()
         subs = self._load_all_subscriptions()
         result = []
         for sub in subs.values():
@@ -120,64 +134,40 @@ class SubscriptionManager:
                     result.append(sub)
         return sorted(result, key=lambda s: s.end_time)
 
-    def has_subscriptions(self) -> bool:
-        """返回是否存在任意未清理的订阅，供调度任务快速短路。"""
-        return bool(self._load_all_subscriptions())
-
-    def get_pending_reminders(self, snapshot: CalendarSnapshot) -> list[tuple[Subscription, TimelineItem]]:
-        """获取需要提醒的订阅列表（结束前一天且未通知）"""
-        now = datetime.now(CN_TZ)
-        subs = self._load_all_subscriptions()
-        pending: list[tuple[Subscription, TimelineItem]] = []
-
-        # 当前快照中的结束时间是最新真值；条目离开快照后才回退到订阅记录。
-        items_map: dict[str, TimelineItem] = {}
-        for item in snapshot.events + snapshot.gacha_pools + snapshot.long_term_events:
-            items_map[item.id] = item
-
-        changed = False
-        for sub in subs.values():
-            item = items_map.get(sub.item_id)
-            if item:
-                if sub.end_time != item.end:
-                    sub.end_time = item.end
-                    sub.notified = False
-                    changed = True
-            else:
-                item = TimelineItem(
-                    id=sub.item_id,
-                    name=sub.item_name,
-                    category=sub.item_type,
-                    item_type=sub.item_type,
-                    start="",
-                    end=sub.end_time,
-                )
-
+    def get_due_reminders(self, now: datetime | None = None) -> list[Subscription]:
+        """返回已到投递时间且未通知的订阅，不读取活动快照。"""
+        current = (now or datetime.now(CN_TZ)).astimezone(CN_TZ)
+        due: list[Subscription] = []
+        for sub in self._load_all_subscriptions().values():
             if sub.notified:
                 continue
-
             try:
                 end_time = parse_iso(sub.end_time).astimezone(CN_TZ)
+                attempt_at = _effective_attempt_at(sub)
             except (TypeError, ValueError):
-                self.logger.warning(f"订阅 {sub.item_id} 的结束时间格式错误：{sub.end_time}")
+                self.logger.warning(f"订阅 {sub.item_id} 的时间格式错误，已跳过。")
                 continue
+            if attempt_at <= current < end_time:
+                due.append(sub)
+        return due
 
-            # 计算提醒时间：结束前一天的指定时间
-            remind_hour, remind_minute = self._parse_time(sub.remind_time)
-            remind_datetime = (end_time - timedelta(days=1)).replace(
-                hour=remind_hour,
-                minute=remind_minute,
-                second=0,
-                microsecond=0,
-            )
-
-            # 检查是否到了提醒时间
-            if now >= remind_datetime and now < end_time:
-                pending.append((sub, item))
-
-        if changed:
-            self._save_all_subscriptions(subs)
-        return pending
+    def get_next_reminder_at(self, now: datetime | None = None) -> datetime | None:
+        """返回下一次需要投递的时间；已到期记录会在这里被清理。"""
+        current = (now or datetime.now(CN_TZ)).astimezone(CN_TZ)
+        self.cleanup_expired(current)
+        candidates: list[datetime] = []
+        for sub in self._load_all_subscriptions().values():
+            if sub.notified:
+                continue
+            try:
+                end_time = parse_iso(sub.end_time).astimezone(CN_TZ)
+                attempt_at = _effective_attempt_at(sub)
+            except (TypeError, ValueError):
+                self.logger.warning(f"订阅 {sub.item_id} 的时间格式错误，已跳过。")
+                continue
+            if attempt_at < end_time:
+                candidates.append(max(attempt_at, current))
+        return min(candidates, default=None)
 
     def mark_notified(self, subscription: Subscription) -> None:
         """标记订阅已通知"""
@@ -189,28 +179,29 @@ class SubscriptionManager:
         )
         if key in subs:
             subs[key].notified = True
+            subs[key].retry_at = ""
             self._save_all_subscriptions(subs)
 
-    def cleanup_expired(self, snapshot: CalendarSnapshot) -> int:
-        """按当前快照同步结束时间后清理已过期的订阅。"""
-        now = datetime.now(CN_TZ)
+    def defer_reminders(self, subscriptions: list[Subscription], retry_at: datetime) -> None:
+        """把投递失败的订阅推迟到指定时间重试。"""
         subs = self._load_all_subscriptions()
+        for subscription in subscriptions:
+            key = self._subscription_key(
+                subscription.item_id, subscription.user_id, subscription.session_id
+            )
+            if key in subs and not subs[key].notified:
+                subs[key].retry_at = retry_at.astimezone(CN_TZ).isoformat()
+        self._save_all_subscriptions(subs)
 
-        items_map: dict[str, TimelineItem] = {}
-        for item in snapshot.events + snapshot.gacha_pools + snapshot.long_term_events:
-            items_map[item.id] = item
-
-        expired_keys = []
-        changed = False
+    def cleanup_expired(self, now: datetime | None = None) -> int:
+        """清理已过结束时间的订阅，不读取活动快照。"""
+        current = (now or datetime.now(CN_TZ)).astimezone(CN_TZ)
+        subs = self._load_all_subscriptions()
+        expired_keys: list[str] = []
         for key, sub in subs.items():
-            item = items_map.get(sub.item_id)
-            if item and item.end != sub.end_time:
-                sub.end_time = item.end
-                sub.notified = False
-                changed = True
             try:
                 end_time = parse_iso(sub.end_time).astimezone(CN_TZ)
-                if now > end_time:
+                if current >= end_time:
                     expired_keys.append(key)
             except (TypeError, ValueError):
                 expired_keys.append(key)
@@ -221,8 +212,6 @@ class SubscriptionManager:
         if expired_keys:
             self._save_all_subscriptions(subs)
             self.logger.info(f"已清理 {len(expired_keys)} 个过期订阅")
-        elif changed:
-            self._save_all_subscriptions(subs)
 
         return len(expired_keys)
 
@@ -234,6 +223,7 @@ class SubscriptionManager:
 
         subs: dict[str, Subscription] = {}
         dropped = 0
+        migrated = False
         for key, item in data.items():
             if isinstance(item, dict):
                 try:
@@ -246,12 +236,14 @@ class SubscriptionManager:
                     # 这类记录永远发不出提醒，且无法反推平台，只能丢弃。
                     dropped += 1
                     continue
+                migrated = migrated or not item.get("remind_at")
                 subs[key] = sub
         if dropped:
             self.logger.warning(
                 f"已丢弃 {dropped} 条旧版订阅记录：其会话标识不是完整 SID，无法投递提醒。"
                 "请重新发送 /方舟订阅 建立订阅。"
             )
+        if dropped or migrated:
             self._save_all_subscriptions(subs)
         return subs
 
@@ -271,17 +263,22 @@ class SubscriptionManager:
         """生成订阅的唯一键"""
         return f"{item_id}:{user_id}:{session_id}"
 
-    @staticmethod
-    def _parse_time(time_str: str) -> tuple[int, int]:
-        """解析时间字符串，返回 (小时, 分钟)"""
-        try:
-            parts = time_str.strip().split(":")
-            if len(parts) == 2:
-                hour = int(parts[0])
-                minute = int(parts[1])
-                if 0 <= hour <= 23 and 0 <= minute <= 59:
-                    return hour, minute
-        except (ValueError, AttributeError):
-            pass
-        # 默认返回12:00
-        return 12, 0
+
+def _calculate_remind_at(end_time: str, remind_time: str) -> str:
+    """按订阅时记录的结束时间计算唯一的提醒时刻。"""
+    end = parse_iso(end_time).astimezone(CN_TZ)
+    try:
+        hour_text, minute_text = remind_time.strip().split(":", 1)
+        hour, minute = int(hour_text), int(minute_text)
+        if not 0 <= hour <= 23 or not 0 <= minute <= 59:
+            raise ValueError
+    except (AttributeError, ValueError):
+        hour, minute = 12, 0
+    return (end - timedelta(days=1)).replace(
+        hour=hour, minute=minute, second=0, microsecond=0
+    ).isoformat()
+
+
+def _effective_attempt_at(subscription: Subscription) -> datetime:
+    """失败重试优先；没有重试计划时使用固化的提醒时间。"""
+    return parse_iso(subscription.retry_at or subscription.remind_at).astimezone(CN_TZ)
