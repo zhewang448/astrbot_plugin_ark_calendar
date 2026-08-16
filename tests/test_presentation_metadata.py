@@ -19,7 +19,8 @@ def test_recruitment_content_is_larger_than_its_title_supporting_style():
     assert ".hero p{margin:0;color:#c5d0d2;font:20px Arial" in template
     assert ".combo span{padding:6px 10px" in template
     assert "font:800 24px Arial" in template
-    assert ".op{padding:7px 11px" in template
+    assert ".op{display:flex;align-items:center" in template
+    assert ".op-avatar{width:54px;height:54px" in template
     assert "font-size:21px" in template
 
 

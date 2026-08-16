@@ -272,8 +272,8 @@ def test_recruitment_aliases_sorting_and_full_output():
 
     results = calculator.calculate(["输出", "生存"])
     assert results[0]["tags"] == ["输出", "生存"]
-    assert results[1]["tags"] == ["生存"]
-    assert results[2]["tags"] == ["输出"]
+    assert results[0]["tag_combinations"] == [["输出", "生存"], ["生存"]]
+    assert results[1]["tags"] == ["输出"]
 
     all_names = [{"name": f"干员{i}", "rarity": 4} for i in range(10)]
     text = format_result(
@@ -282,3 +282,56 @@ def test_recruitment_aliases_sorting_and_full_output():
     )
     assert "干员9" in text
     assert "…共" not in text
+
+
+def test_recruitment_merges_combinations_with_identical_results():
+    calculator = RecruitmentCalculator([
+        {"name": "甲", "rarity": 4, "tags": ["输出"]},
+        {"name": "乙", "rarity": 5, "tags": ["输出", "生存"]},
+    ])
+
+    results = calculator.calculate(["输出", "生存"])
+    merged = next(result for result in results if [op["name"] for op in result["operators"]] == ["乙"])
+
+    assert {tuple(tags) for tags in merged["tag_combinations"]} == {("生存",), ("输出", "生存")}
+    assert len(results) == 2
+    assert "输出 + 生存 / 生存" in format_result(results, selected_tags=["输出", "生存"])
+
+
+def test_recruitment_result_resolves_and_downsizes_avatars():
+    class Prts:
+        async def resolve_avatar_urls(self, names):
+            assert names == ["干员"]
+            return {"干员": "https://example.test/avatar.png"}
+
+    class Assets:
+        async def data_uri(self, source, **kwargs):
+            assert source == "https://example.test/avatar.png"
+            assert kwargs == {"box": (64, 64), "quality": 82, "force_webp": True}
+            return "data:image/webp;base64,avatar"
+
+    renderer = CalendarRenderer.__new__(CalendarRenderer)
+    renderer.recruitment_template = "recruitment"
+    renderer.service = SimpleNamespace(assets=Assets(), prts=Prts())
+    renderer._static_assets = lambda _charset: _empty_async({"font": "font"})
+    renderer._card_render_options = lambda: {"type": "png"}
+    captured = {}
+
+    async def fake_render(_template, data, options):
+        assert options == {"type": "png"}
+        captured.update(data)
+        return b"rendered"
+
+    renderer._html_render = fake_render
+    result = asyncio.run(renderer.recruitment_result([
+        {
+            "tags": ["输出"],
+            "tag_combinations": [["输出"], ["输出", "生存"]],
+            "operators": [{"name": "干员", "rarity": 4}],
+            "min_rarity": 4,
+        },
+    ], ["输出", "生存"]))
+
+    assert result == b"rendered"
+    assert captured["rows"][0]["tag_combinations"] == ["输出", "输出 + 生存"]
+    assert captured["rows"][0]["operators"][0]["avatar"].startswith("data:image/webp")

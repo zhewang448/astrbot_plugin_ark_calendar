@@ -151,6 +151,7 @@ class RecruitmentCalculator:
         Returns:
             排序后的结果列表，每条包含：
             - tags: 本组合使用的标签列表
+            - tag_combinations: 候选结果相同的全部标签组合
             - operators: 该组合下可能出现的干员列表（含 name/rarity）
             - min_rarity: 保底星级
             - has_senior: 是否含"资深干员"标签（保底 5★）
@@ -189,15 +190,44 @@ class RecruitmentCalculator:
 
                 results.append({
                     "tags": list(combo),
+                    "tag_combinations": [list(combo)],
                     "operators": sorted(operators, key=lambda x: -x["rarity"]),
                     "min_rarity": min_rarity,
                     "has_senior": has_senior,
                     "has_top_senior": has_top_senior,
                 })
 
+        results = self._merge_results(results)
         # 排序：高保底优先；同保底时词条越多越优先；词条数相同时，命中干员越少越优先。
         results.sort(key=lambda r: (-r["min_rarity"], -len(r["tags"]), len(r["operators"]), tuple(r["tags"])))
         return results
+
+    @staticmethod
+    def _merge_results(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """合并候选干员和保底语义完全相同的词条组合。"""
+        merged: dict[tuple[Any, ...], dict[str, Any]] = {}
+        for result in results:
+            operator_key = tuple(sorted(
+                (str(operator.get("name", "")), int(operator.get("rarity", 0) or 0))
+                for operator in result.get("operators", [])
+            ))
+            key = (
+                operator_key,
+                int(result.get("min_rarity", 0) or 0),
+                bool(result.get("has_senior")),
+                bool(result.get("has_top_senior")),
+            )
+            current = merged.get(key)
+            combinations_for_result = result.get("tag_combinations") or [result.get("tags", [])]
+            if current is None:
+                current = {**result, "tag_combinations": [list(item) for item in combinations_for_result]}
+                merged[key] = current
+            else:
+                current["tag_combinations"].extend(list(item) for item in combinations_for_result)
+        for result in merged.values():
+            result["tag_combinations"].sort(key=lambda tags: (-len(tags), tuple(tags)))
+            result["tags"] = result["tag_combinations"][0]
+        return list(merged.values())
 
     def _match_operators(self, tags: list[str]) -> list[dict[str, Any]]:
         """找出同时含有所有指定标签的干员。
@@ -275,7 +305,8 @@ def format_result(
     ]
 
     for i, result in enumerate(results):
-        combo_tags = " + ".join(result["tags"])
+        tag_combinations = result.get("tag_combinations") or [result["tags"]]
+        combo_tags = " / ".join(" + ".join(tags) for tags in tag_combinations)
         min_rarity = result["min_rarity"]
         operators = result["operators"]
 

@@ -138,6 +138,51 @@ def test_initial_enable_establishes_a_new_history_baseline():
     assert all(record["pushed"] for record in source.state["dynamics"].values())
 
 
+def test_initial_baseline_does_not_replay_history_but_pushes_later_dynamic(monkeypatch):
+    sent = []
+
+    class Context:
+        async def send_message(self, sid, chain):
+            sent.append(sid)
+            return True
+
+    history = {
+        "id": "history",
+        "title": "安装前动态",
+        "dynamic_type": "text",
+        "description_text": "历史内容",
+        "link": "https://example.invalid/history",
+    }
+    source = FakeSource([history])
+    manager = bilibili_manager.BilibiliDynamicManager(
+        source,
+        Context(),
+        {
+            "bilibili_dynamic": {
+                "push_enabled": True,
+                "target_sid_list": ["p:Group:1"],
+            }
+        },
+        require_baseline=True,
+    )
+    monkeypatch.setattr(bilibili_manager, "platform_supports_proactive_send", lambda *_: True)
+
+    assert asyncio.run(manager.initialize_state()) is True
+    assert asyncio.run(manager.check_and_push()) == (0, 0)
+    assert sent == []
+
+    source.dynamics = [{
+        "id": "new",
+        "title": "安装后动态",
+        "dynamic_type": "text",
+        "description_text": "新内容",
+        "link": "https://example.invalid/new",
+    }, history]
+
+    assert asyncio.run(manager.check_and_push()) == (1, 0)
+    assert sent == ["p:Group:1"]
+
+
 def test_disabling_qq_forward_uses_a_regular_message(tmp_path: Path):
     images = []
     for name in ("one.png", "two.png"):

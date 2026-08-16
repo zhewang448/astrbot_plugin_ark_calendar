@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 from dataclasses import asdict
 from datetime import datetime, timedelta
@@ -141,9 +142,47 @@ class CalendarRenderer:
         selected_tags: list[str],
     ) -> str | Path | bytes:
         """将公开招募计算结果渲染为筛选终端长图。"""
+        avatar_urls: dict[str, str] = {}
+        prts = getattr(self.service, "prts", None)
+        assets = getattr(self.service, "assets", None)
+        names = list(dict.fromkeys(
+            str(operator.get("name", ""))
+            for result in results
+            for operator in result.get("operators", [])
+            if operator.get("name")
+        ))
+        if names and prts is not None and hasattr(prts, "resolve_avatar_urls"):
+            try:
+                avatar_urls = await prts.resolve_avatar_urls(names)
+            except Exception:
+                logger = getattr(self.service, "logger", None)
+                if logger:
+                    logger.warning("公招干员头像地址获取失败，继续渲染文字结果。", exc_info=True)
+
+        async def hydrate_operator(operator: dict) -> dict:
+            current = dict(operator)
+            source = avatar_urls.get(str(operator.get("name", "")), "")
+            if source and assets is not None and hasattr(assets, "data_uri"):
+                try:
+                    current["avatar"] = await assets.data_uri(
+                        source,
+                        box=(64, 64),
+                        quality=82,
+                        force_webp=True,
+                    )
+                except Exception:
+                    current["avatar"] = ""
+            else:
+                current["avatar"] = ""
+            return current
+
         rows = [
             {
                 "tags": result.get("tags", []),
+                "tag_combinations": [
+                    " + ".join(tags)
+                    for tags in (result.get("tag_combinations") or [result.get("tags", [])])
+                ],
                 "operators": result.get("operators", []),
                 "min_rarity": int(result.get("min_rarity", 0) or 0),
                 "recommended": index == 0,
@@ -152,6 +191,10 @@ class CalendarRenderer:
             }
             for index, result in enumerate(results)
         ]
+        for row in rows:
+            row["operators"] = await asyncio.gather(
+                *(hydrate_operator(operator) for operator in row["operators"])
+            )
         data = {
             "mode": "result",
             "selected_tags": selected_tags,

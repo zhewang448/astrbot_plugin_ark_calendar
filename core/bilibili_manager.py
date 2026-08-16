@@ -219,6 +219,11 @@ class BilibiliDynamicManager:
                     if not isinstance(delivered_to, dict):
                         delivered_to = {}
                         record["delivered_to"] = delivered_to
+                    # 首次建立基线时，历史动态只标记为 pushed，不会写入 delivered_to。
+                    # 这类记录不能在第一次定时检查时被重新当作新动态投递；
+                    # 若已有部分目标成功收到，则继续按 delivered_to 做增量补发。
+                    if record.get("pushed") and not delivered_to:
+                        continue
                     eligible_targets = list(targets)
                     record["eligible_targets"] = eligible_targets
                     if all(sid in delivered_to for sid in eligible_targets):
