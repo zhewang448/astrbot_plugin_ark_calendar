@@ -205,12 +205,9 @@ class BilibiliDynamicManager:
                         record.pop("suppressed_type", None)
                         record.pop("suppressed_at", None)
                         record["pushed"] = False
-                    # 旧版只有全局 pushed 标志。无投递台账的旧记录保持原语义，避免
-                    # 升级后把已推过的历史动态再次广播。
-                    if record.get("pushed") and "delivered_to" not in record:
-                        continue
-                    delivered_to = record.get("delivered_to", {})
-                    if isinstance(delivered_to, dict) and all(sid in delivered_to for sid in targets):
+                    # New dynamic judgment uses the shared global pushed flag.
+                    # A successfully delivered dynamic is not replayed when targets change.
+                    if record.get("pushed"):
                         continue
                     new_dynamics.append(dynamic)
 
@@ -254,7 +251,10 @@ class BilibiliDynamicManager:
                             logger.error(f"B站动态推送失败：动态={dyn_id}，目标={sid}", exc_info=True)
                             failed_count += 1
 
-                    record["pushed"] = all(sid in delivered_to for sid in targets)
+                    # One successful delivery completes global deduplication.
+                    record["pushed"] = bool(record.get("pushed")) or any(
+                        sid in delivered_to for sid in targets
+                    )
                     if record["pushed"]:
                         record["pushed_at"] = datetime.now().isoformat()
                     self.source.save_state(state)

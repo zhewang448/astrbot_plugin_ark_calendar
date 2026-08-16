@@ -37,9 +37,23 @@ def test_message_previews_cover_the_current_builtin_message_profiles():
 
 def test_bilibili_config_order_and_video_delivery_description():
     schema = json.loads((ROOT / "_conf_schema.json").read_text(encoding="utf-8"))
+    assert list(schema) == [
+        "basic", "scheduled_report", "scheduled_birthday_greeting", "bilibili_dynamic",
+        "cache_and_render", "messages", "admin_notification", "data_sources",
+    ]
     items = schema["bilibili_dynamic"]["items"]
     assert list(items) == [
         "push_enabled", "target_sid_list", "check_interval_minutes", "push_types",
         "render_image_count_threshold", "use_forward_on_qq", "list_default_count", "rsshub_base_url",
     ]
     assert "不下载或发送视频文件" in items["push_types"]["hint"]
+    render_items = schema["cache_and_render"]["items"]
+    assert "公招图和B站动态图" in render_items["render_device_scale_factor_level"]["hint"]
+    assert "公招图和B站动态图始终使用 PNG" in render_items["render_image_type"]["hint"]
+
+
+def test_readme_links_to_split_documentation():
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    for path in ("docs/commands.md", "docs/configuration.md", "docs/operation.md"):
+        assert path in readme
+        assert (ROOT / path).is_file()

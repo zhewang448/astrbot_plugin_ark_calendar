@@ -246,3 +246,30 @@ def test_auto_push_sends_primary_chain_before_forwarded_images(tmp_path: Path, m
     assert sent[0][1][0].path == str(rendered)
     assert sent[0][1][1].text == "查看完整动态：https://example.invalid/dynamic"
     assert len(sent[1][1][0].nodes) == 1
+
+
+def test_auto_push_uses_shared_global_dedup_across_targets(monkeypatch):
+    sent = []
+
+    class Context:
+        async def send_message(self, sid, chain):
+            sent.append((sid, chain))
+            return True
+
+    source = FakeSource([{
+        "id": "shared", "dynamic_type": "text", "title": "New dynamic",
+        "description_text": "content", "link": "https://example.invalid/dynamic",
+    }])
+    manager = bilibili_manager.BilibiliDynamicManager(
+        source,
+        Context(),
+        {"bilibili_dynamic": {"target_sid_list": ["p:Group:1", "p:Group:2"]}},
+    )
+    monkeypatch.setattr(bilibili_manager, "platform_supports_proactive_send", lambda *_: True)
+
+    assert asyncio.run(manager.check_and_push()) == (2, 0)
+    assert asyncio.run(manager.check_and_push()) == (0, 0)
+    assert source.state["dynamics"]["shared"]["pushed"] is True
+    assert set(source.state["dynamics"]["shared"]["delivered_to"]) == {
+        "p:Group:1", "p:Group:2"
+    }
