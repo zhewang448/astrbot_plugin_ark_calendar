@@ -33,6 +33,7 @@ body{margin:0;width:1320px;color:#172025;background:#edf0ef;font-family:ArkSerif
 .notice{margin-top:11px;color:#a1630a;font:700 15px Consolas}
 .operators{display:flex;gap:8px;flex-wrap:wrap;margin-top:17px}
 .op{display:flex;align-items:center;gap:8px;min-height:64px;padding:5px 9px;background:#f0f3f2;border-bottom:3px solid var(--op);font-size:21px}
+.op.rarity-six{border-bottom-color:transparent;background:linear-gradient(90deg,#da3036 0%,#f85922 22%,#ffca38 45%,#69cdb4 66%,#bb5ecf 82%,#e43443 100%) left bottom/100% 3px no-repeat,#f0f3f2}
 .op-avatar{width:54px;height:54px;object-fit:cover;background:#d9e0df}
 .op-name{display:block}
 .op small{margin-left:5px;color:#68777c;font:14px Consolas}
@@ -66,7 +67,7 @@ body{margin:0;width:1320px;color:#172025;background:#edf0ef;font-family:ArkSerif
       <div class="section-head"><h2>推荐组合</h2><span>{{ rows|length }} VALID COMBINATIONS</span></div>
       <section class="rows">
         {% for row in rows %}
-          <article class="row{% if row.recommended %} recommended{% endif %}" style="--rarity:{% if row.min_rarity >= 6 %}#d9a21b{% elif row.min_rarity >= 5 %}#dc8331{% elif row.min_rarity >= 4 %}#7655a0{% else %}#4f8798{% endif %}">
+          <article class="row{% if row.recommended %} recommended{% endif %}" style="--rarity:{% if row.min_rarity >= 6 %}#d9a21b{% elif row.min_rarity >= 5 %}#d9a21b{% elif row.min_rarity >= 4 %}#7655a0{% else %}#4f8798{% endif %}">
             <div class="row-top">
               <div class="combo">{% for combination in row.tag_combinations %}<span>{{ combination }}</span>{% endfor %}</div>
               <div class="guarantee">保底 {{ row.min_rarity }}★</div>
@@ -74,7 +75,7 @@ body{margin:0;width:1320px;color:#172025;background:#edf0ef;font-family:ArkSerif
             {% if row.top_senior %}<div class="notice">高级资深干员：建议 9 小时</div>{% elif row.senior %}<div class="notice">资深干员：建议 9 小时</div>{% endif %}
             <div class="operators">
               {% for op in row.operators %}
-                <span class="op" style="--op:{% if op.rarity >= 6 %}#d9a21b{% elif op.rarity >= 5 %}#dc8331{% elif op.rarity >= 4 %}#7655a0{% else %}#4f8798{% endif %}">
+                <span class="op{% if op.rarity >= 6 %} rarity-six{% endif %}" style="--op:{% if op.rarity >= 6 %}#d9a21b{% elif op.rarity >= 5 %}#d9a21b{% elif op.rarity >= 4 %}#7655a0{% else %}#4f8798{% endif %}">
                   {% if op.avatar %}<img class="op-avatar" src="{{ op.avatar }}">{% endif %}
                   <span class="op-name">{{ op.name }}<small>{{ op.rarity }}★</small></span>
                 </span>
