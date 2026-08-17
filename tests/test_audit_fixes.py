@@ -205,6 +205,12 @@ def test_dynamic_and_recruitment_cards_use_png_and_keep_template_data():
     assert captured[1][2]["type"] == "png"
 
 
+def test_bilibili_long_images_keep_natural_height():
+    template = (Path(__file__).parent.parent / "templates" / "bilibili_dynamic.html").read_text("utf-8")
+
+    assert ".gallery img{display:block;width:100%;height:auto;min-height:0;max-height:none;" in template
+
+
 async def _empty_async(value):
     return value
 
