@@ -28,7 +28,6 @@ class CalendarRenderer:
         self.service = service
         templates = Path(__file__).parent.parent / "templates"
         self.template = (templates / "calendar.html").read_text("utf-8")
-        self.history_template = (templates / "history_schedule.html").read_text("utf-8")
         self.help_template = (templates / "help.html").read_text("utf-8")
         self.bilibili_template = (templates / "bilibili_dynamic.html").read_text("utf-8")
         self.recruitment_template = (templates / "recruitment.html").read_text("utf-8")

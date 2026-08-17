@@ -251,7 +251,7 @@ class BilibiliDynamicSource:
             try:
                 # B站 RSS 返回的是 http:// 链接，需要转为 https:// 才能通过 AssetCache 的安全校验
                 safe_url = url.replace("http://", "https://", 1) if url.startswith("http://") else url
-                local_path = await self.asset_cache._download(safe_url)
+                local_path = await self.asset_cache.download(safe_url)
                 if local_path and local_path.exists():
                     cached_paths.append(str(local_path))
             except Exception:

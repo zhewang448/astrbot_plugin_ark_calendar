@@ -182,6 +182,10 @@ class AssetCache:
             _, evicted = self._data_uri_cache.popitem(last=False)
             self._data_uri_cache_bytes -= len(evicted)
 
+    async def download(self, url: str) -> Path:
+        """下载远程资源并返回缓存路径。"""
+        return await self._download(url)
+
     async def _download(self, url: str) -> Path:
         lock = await self._retain_download_lock(url)
         try:
