@@ -111,14 +111,13 @@ def test_push_types_suppresses_filtered_dynamic(monkeypatch):
     context = SimpleNamespace()
     manager = bilibili_manager.BilibiliDynamicManager(
         source, context,
-        {"bilibili_dynamic": {"target_sid_list": ["p:Group:1"], "push_types": ["video"]}},
+        {"bilibili_dynamic": {"push_enabled": True, "target_sid_list": ["p:Group:1"], "push_types": ["video"]}},
     )
     monkeypatch.setattr(bilibili_manager, "platform_supports_proactive_send", lambda *_: True)
 
     assert asyncio.run(manager.check_and_push()) == (0, 0)
     record = source.state["dynamics"]["r1"]
-    assert record["suppressed"] is True
-    assert record["pushed"] is True
+    assert record == {"state": "suppressed"}
 
 
 def test_initial_enable_establishes_a_new_history_baseline():
@@ -134,8 +133,8 @@ def test_initial_enable_establishes_a_new_history_baseline():
     config["bilibili_dynamic"]["push_enabled"] = True
     asyncio.run(manager.initialize_state())
 
-    assert source.state["push_ever_enabled"] is True
-    assert all(record["pushed"] for record in source.state["dynamics"].values())
+    assert source.state["push_enabled"] is True
+    assert all(record == {"state": "ignored"} for record in source.state["dynamics"].values())
 
 
 def test_initial_baseline_does_not_replay_history_but_pushes_later_dynamic(monkeypatch):
@@ -326,15 +325,14 @@ def test_auto_push_uses_shared_global_dedup_across_targets(monkeypatch):
     manager = bilibili_manager.BilibiliDynamicManager(
         source,
         Context(),
-        {"bilibili_dynamic": {"target_sid_list": ["p:Group:1", "p:Group:2"]}},
+        {"bilibili_dynamic": {"push_enabled": True, "target_sid_list": ["p:Group:1", "p:Group:2"]}},
     )
     monkeypatch.setattr(bilibili_manager, "platform_supports_proactive_send", lambda *_: True)
 
     assert asyncio.run(manager.check_and_push()) == (2, 0)
     assert asyncio.run(manager.check_and_push()) == (0, 0)
-    assert source.state["dynamics"]["shared"]["pushed"] is True
-    assert set(source.state["dynamics"]["shared"]["delivered_to"]) == {
-        "p:Group:1", "p:Group:2"
+    assert source.state["dynamics"]["shared"] == {
+        "targets": {"p:Group:1": True, "p:Group:2": True}
     }
 
 
@@ -354,15 +352,19 @@ def test_auto_push_retries_only_failed_target(monkeypatch):
         "id": "partial", "dynamic_type": "text", "title": "Partial",
         "description_text": "content", "link": "https://example.invalid/dynamic",
     }])
-    config = {"bilibili_dynamic": {"target_sid_list": ["p:Group:1", "p:Group:2"]}}
+    config = {"bilibili_dynamic": {"push_enabled": True, "target_sid_list": ["p:Group:1", "p:Group:2"]}}
     manager = bilibili_manager.BilibiliDynamicManager(source, Context(), config)
     monkeypatch.setattr(bilibili_manager, "platform_supports_proactive_send", lambda *_: True)
 
     assert asyncio.run(manager.check_and_push()) == (1, 1)
-    assert source.state["dynamics"]["partial"]["pushed"] is False
+    assert source.state["dynamics"]["partial"] == {
+        "targets": {"p:Group:1": True, "p:Group:2": False}
+    }
     assert asyncio.run(manager.check_and_push()) == (1, 0)
     assert sent == ["p:Group:1", "p:Group:2", "p:Group:2"]
-    assert source.state["dynamics"]["partial"]["pushed"] is True
+    assert source.state["dynamics"]["partial"] == {
+        "targets": {"p:Group:1": True, "p:Group:2": True}
+    }
 
 
 def test_push_does_not_run_until_baseline_is_ready(monkeypatch):
@@ -391,7 +393,7 @@ def test_push_does_not_run_until_baseline_is_ready(monkeypatch):
     assert sent == []
 
 
-def test_target_changes_reconcile_delivery_state(monkeypatch):
+def test_new_target_does_not_receive_previously_detected_dynamic(monkeypatch):
     sent = []
 
     class Context:
@@ -403,12 +405,12 @@ def test_target_changes_reconcile_delivery_state(monkeypatch):
         "id": "target-change", "dynamic_type": "text", "title": "动态",
         "description_text": "内容", "link": "https://example.invalid/dynamic",
     }])
-    config = {"bilibili_dynamic": {"target_sid_list": ["p:Group:1"]}}
+    config = {"bilibili_dynamic": {"push_enabled": True, "target_sid_list": ["p:Group:1"]}}
     manager = bilibili_manager.BilibiliDynamicManager(source, Context(), config)
     monkeypatch.setattr(bilibili_manager, "platform_supports_proactive_send", lambda *_: True)
 
     assert asyncio.run(manager.check_and_push()) == (1, 0)
     config["bilibili_dynamic"]["target_sid_list"] = ["p:Group:2"]
-    assert asyncio.run(manager.check_and_push()) == (1, 0)
-    assert sent == ["p:Group:1", "p:Group:2"]
-    assert source.state["dynamics"]["target-change"]["pushed"] is True
+    assert asyncio.run(manager.check_and_push()) == (0, 0)
+    assert sent == ["p:Group:1"]
+    assert source.state["dynamics"]["target-change"] == {"state": "ignored"}
