@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -51,22 +50,19 @@ class BilibiliDynamicManager:
     async def initialize_state(self) -> bool:
         """插件加载/重载时建立动态基线。
 
-        首次运行（状态缓存里没有 baseline_established 标记）时，把当前拉到的动态
-        全部记为已推送：它们是安装前就存在的历史动态，不应该在第一次定时检查时发出去。
-        基线建立之后，只有此刻还没出现过的动态才会被判为新动态并推送。
-
-        不受 push_enabled 影响：用户先装插件、之后才开推送时，基线必须已经存在，
-        否则开启那一刻会把整页历史动态一次性发出。
+        首次加载会把最近 20 条动态设为历史，不发送。后续首次检测到的动态会
+        固定当时的目标 SID；之后新增或重新加入的 SID 不会补收这条旧动态。
         """
         self._baseline_ready = False
         try:
             state = self.source.load_state()
-            if not isinstance(state.get("dynamics"), dict):
-                state["dynamics"] = {}
             baseline_established = bool(state.get("baseline_established"))
             push_enabled = bool(self.config.get("bilibili_dynamic", {}).get("push_enabled", False))
-            # 旧状态没有该字段时，按当前配置迁移，避免已启用实例重载后误丢新动态。
-            push_ever_enabled = bool(state.get("push_ever_enabled", push_enabled))
+            previous_push_enabled = bool(
+                state.get("push_enabled", state.get("push_ever_enabled", push_enabled))
+            )
+            records = self._normalized_records(state)
+            targets = self._push_targets()
 
             # 拉取最近的动态（不下载图片，只获取元数据）
             dynamics = await self.source.recent_dynamics(limit=20, download_images=False)
@@ -75,32 +71,43 @@ class BilibiliDynamicManager:
                 logger.warning("B站动态基线未建立：本次未取到任何动态，将在下次重载时重试。")
                 return False
 
-            now_text = datetime.now().isoformat()
+            queue_new_dynamics = baseline_established and previous_push_enabled and push_enabled
+            push_types = self._push_types()
+            # 早期 v0.9.1 曾把重载期间的新动态记为 pushed=False、但未冻结目标；
+            # 升级时仅迁移这类未完成记录，之后写回最小状态格式。
+            for dyn_id, record in records.items():
+                if record.get("state") == "pending":
+                    records[dyn_id] = (
+                        {"targets": {sid: False for sid in targets}}
+                        if queue_new_dynamics and targets
+                        else {"state": "ignored"}
+                    )
             for dyn in dynamics:
-                dyn_id = dyn["id"]
-                if dyn_id in state["dynamics"]:
+                dyn_id = str(dyn["id"])
+                if dyn_id in records:
                     continue
-                state["dynamics"][dyn_id] = {
-                    "title": dyn.get("title", ""),
-                    "seen_at": now_text,
-                    # 首次建立基线：历史动态直接视为已推送，之后的新动态才推。
-                    # 基线已存在时说明这是重载，此处新出现的动态是真·新动态，留给定时任务推。
-                    # 未启用期间发现的动态属于历史；启用后重载期间发现的动态才进入推送队列。
-                    "pushed": not baseline_established or not push_enabled or not push_ever_enabled,
-                }
-            if push_enabled and not push_ever_enabled and baseline_established:
-                # disabled -> enabled 的首次切换建立新的发送基线，避免补发停用期间的历史动态。
-                for dyn in dynamics:
-                    state["dynamics"].setdefault(dyn["id"], {})["pushed"] = True
-                logger.info("B站动态首次启用：已将当前动态设为历史基线，不补发停用期间内容。")
-            state["push_ever_enabled"] = push_ever_enabled or push_enabled
-            state["last_update"] = now_text
+                records[dyn_id] = self._new_record(
+                    dyn,
+                    targets,
+                    queue_new_dynamics,
+                    push_types,
+                )
+
+            if not push_enabled:
+                # 停用期间的待投递项也属于历史，重新启用时不补发。
+                records = {dyn_id: {"state": "ignored"} for dyn_id in records}
+
+            self._remove_unsubscribed_targets(records, targets)
+            state["dynamics"] = records
             state["baseline_established"] = True
+            state["push_enabled"] = push_enabled
+            state.pop("last_update", None)
+            state.pop("push_ever_enabled", None)
             self.source.save_state(state)
             self._baseline_ready = True
 
             if baseline_established:
-                logger.info(f"B站动态状态已刷新：已知 {len(state['dynamics'])} 条，新增动态将在下次检查时推送。")
+                logger.info(f"B站动态状态已刷新：已知 {len(records)} 条。")
             else:
                 logger.info(
                     f"B站动态基线已建立：{len(dynamics)} 条现有动态记为历史、不会推送，"
@@ -141,6 +148,82 @@ class BilibiliDynamicManager:
         if not isinstance(raw, list):
             return []
         return [str(item).strip().lower() for item in raw if str(item).strip()]
+
+    @staticmethod
+    def _normalized_records(state: dict[str, Any]) -> dict[str, dict[str, Any]]:
+        """将旧版状态迁移为最小记录：历史/过滤状态或固定目标投递表。"""
+        raw_records = state.get("dynamics")
+        if not isinstance(raw_records, dict):
+            return {}
+
+        records: dict[str, dict[str, Any]] = {}
+        for dyn_id, raw_record in raw_records.items():
+            if not isinstance(raw_record, dict):
+                records[str(dyn_id)] = {"state": "ignored"}
+                continue
+            state_name = raw_record.get("state")
+            if state_name in {"ignored", "suppressed", "pending"}:
+                records[str(dyn_id)] = {"state": state_name}
+                continue
+
+            raw_targets = raw_record.get("targets")
+            if isinstance(raw_targets, dict):
+                targets = {
+                    str(sid).strip(): bool(delivered)
+                    for sid, delivered in raw_targets.items()
+                    if str(sid).strip()
+                }
+                records[str(dyn_id)] = {"targets": targets} if targets else {"state": "ignored"}
+                continue
+
+            # 兼容 v0.9.1 早期的 delivered_to / eligible_targets 状态，并在本次保存时删除冗余字段。
+            delivered_to = raw_record.get("delivered_to")
+            delivered = delivered_to if isinstance(delivered_to, dict) else {}
+            eligible_targets = raw_record.get("eligible_targets")
+            if isinstance(eligible_targets, list):
+                targets = {
+                    str(sid).strip(): str(sid).strip() in delivered
+                    for sid in eligible_targets
+                    if str(sid).strip()
+                }
+            else:
+                targets = {str(sid).strip(): True for sid in delivered if str(sid).strip()}
+            if targets:
+                records[str(dyn_id)] = {"targets": targets}
+            elif raw_record.get("pushed") is False:
+                records[str(dyn_id)] = {"state": "pending"}
+            else:
+                records[str(dyn_id)] = {"state": "ignored"}
+        return records
+
+    def _new_record(
+        self,
+        dynamic: dict[str, Any],
+        targets: list[str],
+        queue_new_dynamics: bool,
+        push_types: list[str],
+    ) -> dict[str, Any]:
+        """为首次检测到的动态冻结状态和可投递目标。"""
+        if not queue_new_dynamics or not targets:
+            return {"state": "ignored"}
+        if not self.source.should_push(dynamic, push_types):
+            return {"state": "suppressed"}
+        return {"targets": {sid: False for sid in targets}}
+
+    @staticmethod
+    def _remove_unsubscribed_targets(records: dict[str, dict[str, Any]], targets: list[str]) -> None:
+        """移除已退订目标，使其重新加入后不会补收旧动态。"""
+        active_targets = set(targets)
+        for record in records.values():
+            pending_targets = record.get("targets")
+            if not isinstance(pending_targets, dict):
+                continue
+            for sid in list(pending_targets):
+                if sid not in active_targets:
+                    pending_targets.pop(sid)
+            if not pending_targets:
+                record.clear()
+                record["state"] = "ignored"
 
     async def query_list(self, limit: int = 5) -> list[dict[str, Any]]:
         """查询最近的动态列表（不下载图片）。"""
@@ -185,51 +268,34 @@ class BilibiliDynamicManager:
                 logger.info("B站动态基线尚未建立，本次仅建立基线，不投递历史动态。")
                 await self.initialize_state()
                 return 0, 0
-            targets = self._push_targets()
-            if not targets:
-                logger.warning("B站动态推送：未配置 target_sid_list，跳过推送。")
-                return 0, 0
-
             try:
                 # 先获取元数据，过滤后再下载真正需要投递的图片。
-                dynamics = await self.source.recent_dynamics(limit=10, download_images=False)
+                dynamics = await self.source.recent_dynamics(limit=20, download_images=False)
                 state = self.source.load_state()
-                records = state.get("dynamics", {})
-                new_dynamics = []
+                records = self._normalized_records(state)
+                targets = self._push_targets()
+                push_enabled = bool(self.config.get("bilibili_dynamic", {}).get("push_enabled", False))
+                new_dynamics: list[dict[str, Any]] = []
                 push_types = self._push_types()
                 for dynamic in dynamics:
-                    record = records.get(dynamic["id"], {})
-                    if not self.source.should_push(dynamic, push_types):
-                        record.update({
-                            "title": dynamic.get("title", ""),
-                            "pushed": True,
-                            "suppressed": True,
-                            "suppressed_type": dynamic.get("dynamic_type", ""),
-                            "suppressed_at": datetime.now().isoformat(),
-                        })
-                        records[dynamic["id"]] = record
-                        continue
-                    if record.get("suppressed"):
-                        # 配置后来放开该类型时，允许重新进入投递队列。
-                        record.pop("suppressed", None)
-                        record.pop("suppressed_type", None)
-                        record.pop("suppressed_at", None)
-                        record["pushed"] = False
-                    delivered_to = record.get("delivered_to")
-                    if not isinstance(delivered_to, dict):
-                        delivered_to = {}
-                        record["delivered_to"] = delivered_to
-                    # 首次建立基线时，历史动态只标记为 pushed，不会写入 delivered_to。
-                    # 这类记录不能在第一次定时检查时被重新当作新动态投递；
-                    # 若已有部分目标成功收到，则继续按 delivered_to 做增量补发。
-                    if record.get("pushed") and not delivered_to:
-                        continue
-                    eligible_targets = list(targets)
-                    record["eligible_targets"] = eligible_targets
-                    if all(sid in delivered_to for sid in eligible_targets):
-                        continue
-                    new_dynamics.append(dynamic)
+                    dyn_id = str(dynamic["id"])
+                    record = records.get(dyn_id)
+                    if record is None:
+                        record = self._new_record(dynamic, targets, push_enabled, push_types)
+                        records[dyn_id] = record
+                    pending_targets = record.get("targets")
+                    if isinstance(pending_targets, dict) and any(not sent for sent in pending_targets.values()):
+                        new_dynamics.append(dynamic)
 
+                if not push_enabled:
+                    records = {dyn_id: {"state": "ignored"} for dyn_id in records}
+                    new_dynamics = []
+                self._remove_unsubscribed_targets(records, targets)
+                state["dynamics"] = records
+                state["baseline_established"] = True
+                state["push_enabled"] = push_enabled
+                state.pop("last_update", None)
+                state.pop("push_ever_enabled", None)
                 self.source.save_state(state)
                 if not new_dynamics:
                     logger.debug("B站动态推送：没有新动态。")
@@ -241,18 +307,14 @@ class BilibiliDynamicManager:
                 failed_count = 0
 
                 for dynamic in new_dynamics:
-                    dyn_id = dynamic["id"]
-                    record = state.setdefault("dynamics", {}).setdefault(dyn_id, {})
+                    dyn_id = str(dynamic["id"])
+                    record = records[dyn_id]
                     hydrate_images = getattr(self.source, "hydrate_images", None)
                     if hydrate_images:
                         dynamic = await hydrate_images(dynamic)
-                    delivered_to = record.get("delivered_to")
-                    if not isinstance(delivered_to, dict):
-                        delivered_to = {}
-                        record["delivered_to"] = delivered_to
-
-                    for sid in targets:
-                        if sid in delivered_to:
+                    pending_targets = record.get("targets", {})
+                    for sid, delivered in pending_targets.items():
+                        if delivered:
                             continue
                         if not platform_supports_proactive_send(sid, self.context):
                             failed_count += 1
@@ -266,18 +328,13 @@ class BilibiliDynamicManager:
                                 logger.warning(f"B站动态未投递：动态={dyn_id}，目标={sid}")
                                 continue
                             await self._send_forward_images(dynamic, sid)
-                            delivered_to[sid] = datetime.now().isoformat()
+                            pending_targets[sid] = True
                             sent_count += 1
                             await asyncio.sleep(0.5)  # 限流
                         except Exception:
                             logger.error(f"B站动态推送失败：动态={dyn_id}，目标={sid}", exc_info=True)
                             failed_count += 1
 
-                    eligible_targets = list(targets)
-                    record["eligible_targets"] = eligible_targets
-                    record["pushed"] = all(sid in delivered_to for sid in eligible_targets)
-                    if record["pushed"]:
-                        record["pushed_at"] = datetime.now().isoformat()
                     self.source.save_state(state)
 
                 logger.info(f"B站动态推送完成：成功 {sent_count} 次投递，失败 {failed_count} 次。")
