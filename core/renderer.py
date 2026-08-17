@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 from dataclasses import asdict
 from datetime import datetime, timedelta
@@ -8,7 +9,7 @@ from zoneinfo import ZoneInfo
 
 from .font_subset import FontSubsetError, FontSubsetter, collect_charset
 from .models import CalendarSnapshot, parse_iso
-from .render_cache import validate_rendered_png
+from .render_cache import validate_rendered_image
 
 CN_TZ = ZoneInfo("Asia/Shanghai")
 
@@ -27,8 +28,9 @@ class CalendarRenderer:
         self.service = service
         templates = Path(__file__).parent.parent / "templates"
         self.template = (templates / "calendar.html").read_text("utf-8")
-        self.history_template = (templates / "history_schedule.html").read_text("utf-8")
         self.help_template = (templates / "help.html").read_text("utf-8")
+        self.bilibili_template = (templates / "bilibili_dynamic.html").read_text("utf-8")
+        self.recruitment_template = (templates / "recruitment.html").read_text("utf-8")
         self.template_hash = hashlib.sha256(self.template.encode("utf-8")).hexdigest()[:16]
         self.source_font = Path(__file__).parent.parent / "assets" / SOURCE_FONT_ASSET
         self.font_subsetter = FontSubsetter(
@@ -82,6 +84,139 @@ class CalendarRenderer:
         """保留旧调用入口，但历史测试改用正常日报模板和布局。"""
         return await self.calendar(snapshot, historical=True)
 
+    async def bilibili_dynamic(
+        self,
+        dynamic: dict,
+        *,
+        include_images: bool,
+    ) -> str | Path | bytes:
+        """将单条 B 站动态渲染为终端风格图片。"""
+        images: list[str] = []
+        if include_images:
+            assert self.service.assets
+            for image in dynamic.get("cached_images", []):
+                encoder = getattr(self.service.assets, "data_uri_local", None)
+                if encoder is None:
+                    encoder = self.service.assets.data_uri
+                    uri = await encoder(str(image), box=(1180, 760), quality=86)
+                else:
+                    uri = await encoder(str(image), box=(1180, 760), quality=86)
+                if uri:
+                    images.append(uri)
+        data = {
+            "mode": "detail",
+            "dynamic": {
+                "title": str(dynamic.get("title", "") or "未命名动态"),
+                "description": str(dynamic.get("description_text", "") or "该动态未提供文字内容。"),
+                "type": str(dynamic.get("dynamic_type", "text") or "text").upper(),
+                "published": self._dynamic_time(dynamic.get("pub_date")),
+                "image_count": len(dynamic.get("images") or dynamic.get("cached_images") or []),
+            },
+            "images": images,
+            "static": await self._static_assets(collect_charset(self.bilibili_template, dynamic)),
+        }
+        return await self._html_render(self.bilibili_template, data, options=self._card_render_options())
+
+    async def bilibili_dynamic_list(self, dynamics: list[dict]) -> str | Path | bytes:
+        """将动态索引渲染为可供编号查询的终端列表。"""
+        entries = []
+        for index, dynamic in enumerate(dynamics, 1):
+            entries.append({
+                "index": index,
+                "title": str(dynamic.get("title", "") or "未命名动态"),
+                "type": str(dynamic.get("dynamic_type", "text") or "text").upper(),
+                "published": self._dynamic_time(dynamic.get("pub_date")),
+                "image_count": len(dynamic.get("images") or dynamic.get("cached_images") or []),
+            })
+        data = {
+            "mode": "list",
+            "entries": entries,
+            "static": await self._static_assets(collect_charset(self.bilibili_template, {"entries": entries})),
+        }
+        return await self._html_render(self.bilibili_template, data, options=self._card_render_options())
+
+    async def recruitment_result(
+        self,
+        results: list[dict],
+        selected_tags: list[str],
+    ) -> str | Path | bytes:
+        """将公开招募计算结果渲染为筛选终端长图。"""
+        avatar_urls: dict[str, str] = {}
+        prts = getattr(self.service, "prts", None)
+        assets = getattr(self.service, "assets", None)
+        names = list(dict.fromkeys(
+            str(operator.get("name", ""))
+            for result in results
+            for operator in result.get("operators", [])
+            if operator.get("name")
+        ))
+        if names and prts is not None and hasattr(prts, "resolve_avatar_urls"):
+            try:
+                avatar_urls = await prts.resolve_avatar_urls(names)
+            except Exception:
+                logger = getattr(self.service, "logger", None)
+                if logger:
+                    logger.warning("公招干员头像地址获取失败，继续渲染文字结果。", exc_info=True)
+
+        async def hydrate_operator(operator: dict) -> dict:
+            current = dict(operator)
+            source = avatar_urls.get(str(operator.get("name", "")), "")
+            if source and assets is not None and hasattr(assets, "data_uri"):
+                try:
+                    current["avatar"] = await assets.data_uri(
+                        source,
+                        box=(64, 64),
+                        quality=82,
+                        force_webp=True,
+                    )
+                except Exception:
+                    current["avatar"] = ""
+            else:
+                current["avatar"] = ""
+            return current
+
+        rows = [
+            {
+                "tags": result.get("tags", []),
+                "tag_combinations": [
+                    " + ".join(tags)
+                    for tags in (result.get("tag_combinations") or [result.get("tags", [])])
+                ],
+                "operators": result.get("operators", []),
+                "min_rarity": int(result.get("min_rarity", 0) or 0),
+                "recommended": index == 0,
+                "senior": bool(result.get("has_senior")),
+                "top_senior": bool(result.get("has_top_senior")),
+            }
+            for index, result in enumerate(results)
+        ]
+        for row in rows:
+            row["operators"] = await asyncio.gather(
+                *(hydrate_operator(operator) for operator in row["operators"])
+            )
+        data = {
+            "mode": "result",
+            "selected_tags": selected_tags,
+            "rows": rows,
+            "static": await self._static_assets(collect_charset(self.recruitment_template, {"selected_tags": selected_tags, "rows": rows})),
+        }
+        return await self._html_render(self.recruitment_template, data, options=self._card_render_options())
+
+    async def recruitment_help(self, tag_groups: dict[str, list[str]]) -> str | Path | bytes:
+        """将公开招募可用标签与用法渲染为终端说明图。"""
+        data = {
+            "mode": "help",
+            "tag_groups": tag_groups,
+            "static": await self._static_assets(collect_charset(self.recruitment_template, {"tag_groups": tag_groups})),
+        }
+        return await self._html_render(self.recruitment_template, data, options=self._card_render_options())
+
+    @staticmethod
+    def _dynamic_time(value) -> str:
+        if isinstance(value, datetime):
+            return value.astimezone(CN_TZ).strftime("%Y.%m.%d  %H:%M")
+        return "发布时间未知"
+
     @staticmethod
     def _ticks(start: datetime, now: datetime, timeline_days: int) -> list[dict]:
         step = 7 if timeline_days <= 35 else 14 if timeline_days <= 63 else 21
@@ -126,6 +261,12 @@ class CalendarRenderer:
             "device_scale_factor_level": scale_level,
             "timeout": self._render_timeout_ms(),
         }
+
+    def _card_render_options(self) -> dict:
+        """交互卡片始终用 PNG，避免小字和细线受 JPEG 压缩影响。"""
+        options = self._render_options()
+        options["type"] = "png"
+        return options
     def _render_timeout_ms(self) -> int:
         try:
             seconds = int(self.service.value("cache_and_render", "render_timeout_seconds", 300))
@@ -135,12 +276,13 @@ class CalendarRenderer:
 
     async def _html_render(self, template: str, data: dict, options: dict) -> str | Path | bytes:
         rendered = await self.plugin.html_render(template, data, return_url=False, options=options)
+        image_type = str(options.get("type", "png") or "png").lower()
         try:
-            validate_rendered_png(rendered)
+            validate_rendered_image(rendered, image_type)
         except (FileNotFoundError, TypeError, ValueError) as exc:
             timeout_seconds = max(1, int(options.get("timeout", 0)) // 1000)
             raise RuntimeError(
-                f"T2I 渲染未返回有效 PNG 图片（超时设置：{timeout_seconds} 秒）：{exc}"
+                f"T2I 渲染未返回有效 {image_type.upper()} 图片（超时设置：{timeout_seconds} 秒）：{exc}"
             ) from exc
         return rendered
 
@@ -177,7 +319,10 @@ class CalendarRenderer:
         except FontSubsetError as exc:
             self.font_subsetter.log_unavailable_once(exc)
         assert self.service.assets
-        return await self.service.assets.data_uri(str(self.source_font))
+        encoder = getattr(self.service.assets, "data_uri_local", None)
+        if encoder is None:  # 兼容旧版宿主注入的 Assets 替身。
+            return await self.service.assets.data_uri(str(self.source_font))
+        return await encoder(self.source_font, trusted_roots=(self.source_font.parent,))
 
     async def _help_hero(self) -> str:
         """帮助页固定头图；打包里没有这张图时返回空串，模板会退到纯 CSS 背景。"""
@@ -185,7 +330,10 @@ class CalendarRenderer:
         hero = Path(__file__).parent.parent / "assets" / HELP_HERO_ASSET
         if not hero.is_file():
             return ""
-        return await self.service.assets.data_uri(str(hero))
+        encoder = getattr(self.service.assets, "data_uri_local", None)
+        if encoder is None:
+            return await self.service.assets.data_uri(str(hero))
+        return await encoder(hero, trusted_roots=(hero.parent,))
 
     async def help_page(
         self,
@@ -206,7 +354,7 @@ class CalendarRenderer:
                 "下面是当前可以订阅的活动与寻访，复制卡片里的命令就能订阅；"
                 "在结束前一天的设定时间提醒你，不填时间默认中午 12:00。"
                 if mode == "subscribe"
-                else "罗德岛行动日历的全部指令与当前可订阅日程都在这里，"
+                else "罗德岛行动终端的全部指令与当前可订阅日程都在这里，"
                 "指令支持别名，订阅提醒在结束前一天送达。"
             ),
             "version": self.service.plugin_version,
@@ -219,17 +367,20 @@ class CalendarRenderer:
             "hero": hero,
         }
         data["static"] = await self._static_assets(collect_charset(self.help_template, data))
+        # 帮助缓存固定为 PNG，避免跟随日历 JPEG 配置而无法写入 HelpImageCache。
+        render_options = self._render_options()
+        render_options["type"] = "png"
         return await self._html_render(
             self.help_template,
             data,
-            options=self._render_options(),
+            options=render_options,
         )
 
     def subscribable_items(self, snapshot: CalendarSnapshot) -> list[dict]:
-        """未结束的活动与卡池，按结束时间排序，供帮助页与订阅提示复用。"""
+        """未结束的活动、卡池与长期活动，按结束时间排序，供帮助页与订阅提示复用。"""
         now = parse_iso(snapshot.generated_at)
         items: list[dict] = []
-        for item in [*snapshot.events, *snapshot.gacha_pools]:
+        for item in [*snapshot.events, *snapshot.gacha_pools, *snapshot.long_term_events]:
             try:
                 start_time, end_time = parse_iso(item.start), parse_iso(item.end)
             except (TypeError, ValueError):

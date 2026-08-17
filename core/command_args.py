@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import re
 from typing import Iterable
 
 # 全角冒号/空格来自中文输入法，统一成半角再解析。
 _FULL_WIDTH = {"：": ":", "　": " "}
 # 触发前缀：不同平台的唤醒符号不一样，取并集剥掉。
 _PREFIXES = "/!！#."
+_TIME_SHAPE = re.compile(r"^\d{1,2}:\d{1,3}$")
 
 
 def normalize_text(text: str) -> str:
@@ -31,6 +33,10 @@ def parse_hhmm(text: str) -> str | None:
     return f"{hour:02d}:{minute:02d}"
 
 
+def _looks_like_time(text: str) -> bool:
+    return bool(_TIME_SHAPE.fullmatch(normalize_text(text)))
+
+
 def strip_command_prefix(message: str, invocations: Iterable[str]) -> str:
     """剥掉唤醒符号与命令名/别名，返回后面剩下的参数原文。
 
@@ -42,28 +48,34 @@ def strip_command_prefix(message: str, invocations: Iterable[str]) -> str:
             continue
         if text == invocation:
             return ""
-        if text.startswith(invocation):
+        if text.startswith(invocation) and (
+            len(text) == len(invocation) or text[len(invocation)].isspace()
+        ):
             return text[len(invocation):].strip()
     return text
 
 
-def split_name_and_time(argument_text: str) -> tuple[str, str | None]:
-    """把参数原文拆成（名称, 提醒时间）。
+def split_name_and_time(argument_text: str) -> tuple[str, str | None, bool]:
+    """把参数原文拆成（名称, 提醒时间, 时间格式是否非法）。
 
     名称本身可以带空格（例如「危机合约 · 熔火行动」），所以只有当最后一个
     token 是合法 HH:MM 时才把它当提醒时间摘出来，其余全部算名称。
     """
     text = normalize_text(argument_text)
     if not text:
-        return "", None
+        return "", None, False
     parts = text.split()
     if len(parts) >= 2:
         remind_time = parse_hhmm(parts[-1])
         if remind_time:
-            return " ".join(parts[:-1]), remind_time
+            return " ".join(parts[:-1]), remind_time, False
+        if _looks_like_time(parts[-1]):
+            return " ".join(parts[:-1]), None, True
     # 只给了一个 token 且它是时间：视为没写名称，交给调用方走帮助分支。
     if len(parts) == 1:
         remind_time = parse_hhmm(parts[0])
         if remind_time:
-            return "", remind_time
-    return " ".join(parts), None
+            return "", remind_time, False
+        if _looks_like_time(parts[0]):
+            return "", None, True
+    return " ".join(parts), None, False

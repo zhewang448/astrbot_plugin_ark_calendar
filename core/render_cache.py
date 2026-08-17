@@ -15,6 +15,7 @@ from .models import CalendarSnapshot, parse_iso
 CN_TZ = ZoneInfo("Asia/Shanghai")
 
 PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
+JPEG_MAGIC = b"\xff\xd8\xff"
 
 DATE_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
@@ -28,13 +29,23 @@ def has_png_magic(path: Path) -> bool:
         return False
 
 
-def validate_rendered_png(rendered: str | Path | bytes) -> None:
-    """验证渲染器输出是非空 PNG，避免把空字节一路传到缓存和消息发送阶段。"""
+def _magic_for(image_type: str) -> bytes:
+    normalized = str(image_type or "png").lower()
+    if normalized == "jpeg":
+        return JPEG_MAGIC
+    if normalized == "png":
+        return PNG_MAGIC
+    raise ValueError(f"不支持的图片格式：{image_type}")
+
+
+def validate_rendered_image(rendered: str | Path | bytes, expected_type: str = "png") -> None:
+    """验证渲染器输出符合期望格式，避免错误文件进入缓存和消息发送阶段。"""
+    magic = _magic_for(expected_type)
     if isinstance(rendered, bytes):
-        if len(rendered) <= len(PNG_MAGIC):
+        if len(rendered) <= len(magic):
             raise ValueError("渲染器返回空图片")
-        if not rendered.startswith(PNG_MAGIC):
-            raise ValueError("渲染器未返回 PNG 图片")
+        if not rendered.startswith(magic):
+            raise ValueError(f"渲染器未返回 {expected_type.upper()} 图片")
         return
     if not isinstance(rendered, (str, Path)):
         raise TypeError(f"渲染器返回了不支持的图片类型：{type(rendered).__name__}")
@@ -46,12 +57,22 @@ def validate_rendered_png(rendered: str | Path | bytes) -> None:
             raise ValueError("渲染器返回空图片")
     except OSError as exc:
         raise FileNotFoundError(f"渲染器未返回可用图片文件：{rendered}") from exc
-    if not has_png_magic(source):
-        raise ValueError("渲染器未返回 PNG 图片")
+    try:
+        with source.open("rb") as handle:
+            actual = handle.read(len(magic))
+    except OSError as exc:
+        raise FileNotFoundError(f"渲染器未返回可用图片文件：{rendered}") from exc
+    if actual != magic:
+        raise ValueError(f"渲染器未返回 {expected_type.upper()} 图片")
 
 
-def write_image(rendered: str | Path | bytes, target: Path) -> None:
-    validate_rendered_png(rendered)
+def validate_rendered_png(rendered: str | Path | bytes) -> None:
+    """兼容旧调用方的 PNG 校验入口。"""
+    validate_rendered_image(rendered, "png")
+
+
+def write_image(rendered: str | Path | bytes, target: Path, expected_type: str = "png") -> None:
+    validate_rendered_image(rendered, expected_type)
     if isinstance(rendered, bytes):
         target.write_bytes(rendered)
         return
@@ -144,32 +165,34 @@ class CalendarImageCache:
         keep_count: int,
     ) -> Path:
         signature = self.signature(snapshot, display_config)
-        image_name = f"calendar-{signature}.png"
+        image_type = str(display_config.get("render_image_type", "png") or "png").lower()
+        _magic_for(image_type)
+        extension = "jpg" if image_type == "jpeg" else "png"
+        image_name = f"calendar-{signature}.{extension}"
         target = self.root / image_name
         temporary = target.with_name(f".{target.name}.{uuid4().hex}.tmp")
         try:
-            self._write_image(rendered, temporary)
+            self._write_image(rendered, temporary, image_type)
             if not temporary.exists() or temporary.stat().st_size <= 0:
                 raise ValueError("渲染缓存图片为空")
-            if not self._has_png_magic(temporary):
-                raise ValueError("渲染器未返回 PNG 图片")
+            validate_rendered_image(temporary, image_type)
             temporary.replace(target)
         finally:
             try:
                 temporary.unlink(missing_ok=True)
             except OSError:
                 pass
-        generated = parse_iso(snapshot.generated_at).astimezone(CN_TZ)
+        rendered_at = datetime.now(CN_TZ)
         expires = min(
-            generated + timedelta(minutes=max(1, max_age_minutes)),
-            (generated + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0),
+            rendered_at + timedelta(minutes=max(1, max_age_minutes)),
+            (rendered_at + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0),
         )
         manifest = {
             "signature": signature,
             "image": image_name,
             "snapshot_generated_at": snapshot.generated_at,
             "calendar_date": snapshot.calendar_date,
-            "rendered_at": datetime.now(CN_TZ).isoformat(),
+            "rendered_at": rendered_at.isoformat(),
             "expires_at": expires.isoformat(),
         }
         temporary_manifest = self.manifest_path.with_name(f".{self.manifest_path.name}.{uuid4().hex}.tmp")
@@ -243,7 +266,12 @@ class CalendarImageCache:
                 return None
         except OSError:
             return None
-        return image if self._has_png_magic(image) else None
+        image_type = "jpeg" if image.suffix.lower() in {".jpg", ".jpeg"} else "png"
+        try:
+            validate_rendered_image(image, image_type)
+        except (FileNotFoundError, TypeError, ValueError):
+            return None
+        return image
 
     @staticmethod
     def _has_png_magic(path: Path) -> bool:
@@ -259,11 +287,15 @@ class CalendarImageCache:
         return now < expiry and str(manifest.get("calendar_date", "")) == now.date().isoformat()
 
     @staticmethod
-    def _write_image(rendered: str | Path | bytes, target: Path) -> None:
-        write_image(rendered, target)
+    def _write_image(rendered: str | Path | bytes, target: Path, expected_type: str = "png") -> None:
+        write_image(rendered, target, expected_type)
 
     def _prune(self, keep_count: int) -> None:
-        images = sorted(self.root.glob("calendar-*.png"), key=lambda item: item.stat().st_mtime, reverse=True)
+        images = sorted(
+            [*self.root.glob("calendar-*.png"), *self.root.glob("calendar-*.jpg"), *self.root.glob("calendar-*.jpeg")],
+            key=lambda item: item.stat().st_mtime,
+            reverse=True,
+        )
         for image in images[keep_count:]:
             try:
                 image.unlink()
@@ -280,6 +312,8 @@ class HelpImageCache:
     """
 
     MODES = ("full", "subscribe")
+    # v2 重新纳入完整命令行（含 B站动态与公招），不能复用旧版当日空命令缓存。
+    CACHE_VERSION = 2
 
     def __init__(self, root: Path):
         self.root = root
@@ -289,7 +323,7 @@ class HelpImageCache:
         """返回该 mode 当日缓存图片路径；不存在或无效时返回 None。"""
         if mode not in self.MODES or not DATE_PATTERN.match(calendar_date):
             return None
-        image = self.root / f"help-{mode}-{calendar_date}.png"
+        image = self.root / f"help-v{self.CACHE_VERSION}-{mode}-{calendar_date}.png"
         try:
             if not image.is_file() or image.stat().st_size <= 8:
                 return None
@@ -312,7 +346,7 @@ class HelpImageCache:
         if mode not in self.MODES:
             return None
         current = now or datetime.now(CN_TZ)
-        target = self.root / f"help-{mode}-{current.date().isoformat()}.png"
+        target = self.root / f"help-v{self.CACHE_VERSION}-{mode}-{current.date().isoformat()}.png"
         temporary = target.with_name(f".{target.name}.{uuid4().hex}.tmp")
         try:
             write_image(rendered, temporary)
@@ -333,7 +367,7 @@ class HelpImageCache:
         """删除当日全部帮助缓存，用于管理员强制刷新后重渲染。"""
         current = now or datetime.now(CN_TZ)
         for mode in self.MODES:
-            image = self.root / f"help-{mode}-{current.date().isoformat()}.png"
+            image = self.root / f"help-v{self.CACHE_VERSION}-{mode}-{current.date().isoformat()}.png"
             try:
                 image.unlink(missing_ok=True)
             except OSError:
@@ -350,7 +384,7 @@ class HelpImageCache:
         """每个 mode 只保留最近 keep_days 天的缓存图。"""
         for mode in self.MODES:
             images = sorted(
-                self.root.glob(f"help-{mode}-*.png"),
+                self.root.glob(f"help-v{self.CACHE_VERSION}-{mode}-*.png"),
                 key=lambda item: item.name,
                 reverse=True,
             )
