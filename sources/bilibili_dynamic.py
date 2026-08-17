@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from email.utils import parsedate_to_datetime
+from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
 
 from bs4 import BeautifulSoup
@@ -22,11 +23,14 @@ class BilibiliDynamicSource:
         "https://rsshub.pseudoyu.com/bilibili/user/dynamic/161775300",
     ]
     MAX_STATE_ITEMS = 500
+    # B站会把多张图拼成长图，单张原图可能超过通用资源上限。
+    MAX_IMAGE_DOWNLOAD_BYTES = 16 * 1024 * 1024
 
     def __init__(self, http: HttpClient, cache, asset_cache):
         self.http = http
         self.cache = cache
         self.asset_cache = asset_cache
+        self.logger = getattr(asset_cache, "logger", None)
         self.last_fetch_ok = True
         self.last_error = ""
         self.last_failed_instance = ""
@@ -251,11 +255,19 @@ class BilibiliDynamicSource:
             try:
                 # B站 RSS 返回的是 http:// 链接，需要转为 https:// 才能通过 AssetCache 的安全校验
                 safe_url = url.replace("http://", "https://", 1) if url.startswith("http://") else url
-                local_path = await self.asset_cache.download(safe_url)
+                local_path = await self.asset_cache.download(
+                    safe_url, max_bytes=self.MAX_IMAGE_DOWNLOAD_BYTES
+                )
                 if local_path and local_path.exists():
                     cached_paths.append(str(local_path))
-            except Exception:
-                # 单张图片下载失败不影响其他图片
+            except Exception as exc:
+                # 单张图片下载失败不影响其他图片，但必须留下可定位的告警。
+                if self.logger is not None:
+                    parsed = urlparse(safe_url)
+                    safe_url_for_log = f"{parsed.scheme}://{parsed.hostname or ''}{parsed.path}"
+                    self.logger.warning(
+                        f"B站动态图片下载失败：{safe_url_for_log}（{type(exc).__name__}）"
+                    )
                 continue
 
         return cached_paths

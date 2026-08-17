@@ -182,16 +182,17 @@ class AssetCache:
             _, evicted = self._data_uri_cache.popitem(last=False)
             self._data_uri_cache_bytes -= len(evicted)
 
-    async def download(self, url: str) -> Path:
+    async def download(self, url: str, *, max_bytes: int | None = None) -> Path:
         """下载远程资源并返回缓存路径。"""
-        return await self._download(url)
+        return await self._download(url, max_bytes=max_bytes)
 
-    async def _download(self, url: str) -> Path:
+    async def _download(self, url: str, *, max_bytes: int | None = None) -> Path:
+        download_limit = self._download_limit(max_bytes)
         lock = await self._retain_download_lock(url)
         try:
             async with lock:
                 target = self._target_path(url)
-                if self._valid_cached_file(target):
+                if self._valid_cached_file(target, max_bytes=download_limit):
                     return target
                 current = url
                 request_kwargs = {"proxy": self.proxy} if self.proxy else {}
@@ -212,16 +213,16 @@ class AssetCache:
                         if content_type not in self.ALLOWED_MIME_TYPES:
                             raise ValueError(f"不支持的图片类型：{content_type or 'unknown'}")
                         content_length = response.content_length
-                        if content_length is not None and content_length > self.MAX_DOWNLOAD_BYTES:
-                            raise AssetTooLarge(f"图片超过 {self.MAX_DOWNLOAD_BYTES} 字节限制")
+                        if content_length is not None and content_length > download_limit:
+                            raise AssetTooLarge(f"图片超过 {download_limit} 字节限制")
                         temporary = target.with_name(f".{target.name}.{uuid4().hex}.tmp")
                         try:
                             written = 0
                             with temporary.open("wb") as output:
                                 async for chunk in response.content.iter_chunked(64 * 1024):
                                     written += len(chunk)
-                                    if written > self.MAX_DOWNLOAD_BYTES:
-                                        raise AssetTooLarge(f"图片超过 {self.MAX_DOWNLOAD_BYTES} 字节限制")
+                                    if written > download_limit:
+                                        raise AssetTooLarge(f"图片超过 {download_limit} 字节限制")
                                     output.write(chunk)
                             with temporary.open("rb") as input_file:
                                 header = input_file.read(12)
@@ -238,6 +239,17 @@ class AssetCache:
                 raise UnsafeAssetUrl("图片重定向无效或次数过多")
         finally:
             await self._release_download_lock(url, lock)
+
+    def _download_limit(self, max_bytes: int | None) -> int:
+        if max_bytes is None:
+            return self.MAX_DOWNLOAD_BYTES
+        if isinstance(max_bytes, bool) or not isinstance(max_bytes, int):
+            raise ValueError("图片下载上限必须是整数")
+        if not self.MAX_DOWNLOAD_BYTES <= max_bytes <= self.MAX_LOCAL_BYTES:
+            raise ValueError(
+                f"图片下载上限必须在 {self.MAX_DOWNLOAD_BYTES} 到 {self.MAX_LOCAL_BYTES} 字节之间"
+            )
+        return max_bytes
 
     async def _retain_download_lock(self, url: str) -> asyncio.Lock:
         async with self._download_locks_guard:
@@ -350,10 +362,11 @@ class AssetCache:
             raise UnsafeAssetUrl("图片连接的对端地址无效") from exc
         if not address.is_global:
             raise UnsafeAssetUrl("图片连接到了私网、回环或保留地址")
-    def _valid_cached_file(self, path: Path) -> bool:
+    def _valid_cached_file(self, path: Path, *, max_bytes: int | None = None) -> bool:
+        limit = self.MAX_DOWNLOAD_BYTES if max_bytes is None else max_bytes
         try:
             stat = path.stat()
-            if not path.is_file() or not 0 < stat.st_size <= self.MAX_DOWNLOAD_BYTES:
+            if not path.is_file() or not 0 < stat.st_size <= limit:
                 return False
             with path.open("rb") as input_file:
                 header = input_file.read(12)
