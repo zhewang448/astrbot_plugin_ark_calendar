@@ -347,7 +347,7 @@
         "description": "自定义消息模板",
         "type": "dict",
         "default": {},
-        "hint": "选择“自定义文案”后可编辑。每一项都可以独立选择来源：留空或填 @catgirl 用“罗德岛轻度猫娘”的这句，填 @plain 用“极简正式”的这句，填其他任何文字则作为你自己的文案。可用变量：{name}、{birthday}、{details}、{candidates}、{names}、{count}、{user}、{time}、{error}、{index}、{sent}、{failed}、{tags}。",
+        "hint": "选择“自定义文案”后可编辑。每一项都可以独立选择来源：留空或填 @catgirl 用“罗德岛轻度猫娘”的这句，填 @plain 用“极简正式”的这句，填其他任何文字则作为你自己的文案。可用变量：{name}、{birthday}、{details}、{candidates}、{names}、{count}、{user}、{time}、{end_time}、{error}、{index}、{sent}、{failed}、{tags}。",
         "condition": {
           "profile": "custom"
         },

@@ -129,7 +129,7 @@ RECRUIT_COMMAND = CommandSpec(
     "方舟公招",
     ("公招计算", "明日方舟公招", "舟公招"),
     "输入标签计算可能招募的干员及保底星级，并以招募终端图片返回结果。",
-    argument_hint="<标签1> [标签2] [标签3]",
+    argument_hint="<标签1> [标签2] [标签3] [标签4] [标签5]",
     example="/方舟公招 近卫干员 输出 生存",
 )
 HELP_COMMAND = CommandSpec(
@@ -579,7 +579,7 @@ class ArkCalendarPlugin(Star):
                 "━━━━━━━━━━━━━━━━━━━━\n"
                 "🏷️  方舟公招计算器\n"
                 "━━━━━━━━━━━━━━━━━━━━\n\n"
-                "用法：/方舟公招 <标签1> [标签2] [标签3]\n\n"
+                "用法：/方舟公招 <标签1> [标签2] [标签3] [标签4] [标签5]\n\n"
                 "示例：\n"
                 "  /方舟公招 近卫干员 输出 生存\n"
                 "  /方舟公招 资深干员 医疗干员\n"
@@ -1275,7 +1275,6 @@ class ArkCalendarPlugin(Star):
                 failed.append(sid)
                 logger.error(f"自动生日祝贺发送到 SID {sid} 失败。", exc_info=True)
         return sent, failed
-
     async def _send_scheduled_image(self, targets: list[str], image: Path | str, caption: str) -> tuple[int, list[str]]:
         sent = 0
         failed: list[str] = []
@@ -1296,4 +1295,3 @@ class ArkCalendarPlugin(Star):
                 failed.append(sid)
                 logger.error(f"定时方舟日报发送到 SID {sid} 失败。", exc_info=True)
         return sent, failed
-

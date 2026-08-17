@@ -276,9 +276,9 @@ class BilibiliDynamicSource:
         """加载动态状态缓存。
 
         Returns:
-            状态字典，包含 last_update 和 dynamics
+            状态字典，包含动态基线、上次推送开关状态和动态投递记录
         """
         state = self.cache.load("bilibili_dynamic_state.json")
         if not isinstance(state, dict):
-            return {"last_update": None, "dynamics": {}}
+            return {"dynamics": {}}
         return state
