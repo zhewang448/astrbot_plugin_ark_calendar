@@ -169,6 +169,33 @@ def test_unpublished_pool_timeline_is_gray_and_has_no_detail_card():
     assert renderer._pool_details([rendered]) == []
 
 
+def test_unpublished_pool_visibility_setting_filters_daily_report():
+    renderer = CalendarRenderer.__new__(CalendarRenderer)
+    start = "2026-08-18T04:00:00+08:00"
+    end = "2026-08-20T04:00:00+08:00"
+    pools = [
+        TimelineItem(id="known", name="标准寻访", category="gacha", item_type="标准寻访", start=start, end=end),
+        TimelineItem(id="unknown", name="未公布", category="gacha", item_type="未公布", start=start, end=end),
+    ]
+
+    class Service:
+        def __init__(self, show):
+            self.show = show
+
+        def show_unpublished_pools(self):
+            return self.show
+
+        def value(self, *_args):
+            return True
+
+    renderer.service = Service(False)
+    visible = renderer._visible_gacha_pools(pools)
+    assert [item.name for item in visible] == ["标准寻访"]
+    renderer.service = Service(True)
+    visible = renderer._visible_gacha_pools(pools)
+    assert [item.name for item in visible] == ["标准寻访", "未公布"]
+
+
 def test_help_page_forces_png_even_when_calendar_uses_jpeg():
     renderer = CalendarRenderer.__new__(CalendarRenderer)
     renderer.help_template = "help"

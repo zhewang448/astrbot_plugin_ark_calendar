@@ -43,7 +43,7 @@ class CalendarRenderer:
         start, end = parse_iso(snapshot.timeline_start), parse_iso(snapshot.timeline_end)
         now = parse_iso(snapshot.generated_at)
         items = [self._timeline(x, start, end, now) for x in snapshot.events]
-        pools = [self._timeline(x, start, end, now) for x in snapshot.gacha_pools]
+        pools = [self._timeline(x, start, end, now) for x in self._visible_gacha_pools(snapshot.gacha_pools)]
         pool_details = self._pool_details(pools)
         longs = [self._timeline(x, start, end, now) for x in snapshot.long_term_events]
         hero = next(
@@ -84,6 +84,11 @@ class CalendarRenderer:
     async def historical_calendar(self, snapshot: CalendarSnapshot) -> str:
         """保留旧调用入口，但历史测试改用正常日报模板和布局。"""
         return await self.calendar(snapshot, historical=True)
+
+    def _visible_gacha_pools(self, pools):
+        if self.service.show_unpublished_pools():
+            return list(pools)
+        return [pool for pool in pools if not pool.item_type.startswith("未公布")]
 
     async def bilibili_dynamic(
         self,

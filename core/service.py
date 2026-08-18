@@ -214,12 +214,16 @@ class CalendarService:
             legacy_key="timeline_days",
         )
 
+    def show_unpublished_pools(self) -> bool:
+        return bool(self.value("basic", "show_unpublished_pools", True, "show_unpublished_pools"))
+
     def _snapshot_data_config(self) -> dict[str, Any]:
         return {
             "timeline_days": self.timeline_days(),
             "include_recent_operators": bool(self.value("basic", "include_recent_operators", True, "include_recent_operators")),
             "include_long_term": bool(self.value("basic", "include_long_term", True, "include_long_term")),
             "pool_detail_cards": bool(self.value("basic", "pool_detail_cards", True, "pool_detail_cards")),
+            "show_unpublished_pools": self.show_unpublished_pools(),
             "anything_ics_base_url": str(self.value("data_sources", "anything_ics_base_url", "", "anything_ics_base_url") or ""),
             "prts_base_url": str(self.value("data_sources", "prts_base_url", "", "prts_base_url") or ""),
             "gacha_data_url": str(self.value("data_sources", "gacha_data_url", "", "gacha_data_url") or ""),

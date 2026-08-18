@@ -25,6 +25,12 @@
         "default": true,
         "hint": "默认在寻访日程下方追加固定尺寸卡池卡片，避免短卡池图片和文字被压缩；可关闭以仅保留时间轴。"
       },
+      "show_unpublished_pools": {
+        "description": "方舟日报显示未公布卡池",
+        "type": "bool",
+        "default": true,
+        "hint": "开启后在寻访日程中显示尚未公布名称或六星 UP 的卡池；关闭后仅隐藏日报显示，不影响数据源刷新。"
+      },
       "show_source_footer": {
         "description": "显示数据来源页脚",
         "type": "bool",

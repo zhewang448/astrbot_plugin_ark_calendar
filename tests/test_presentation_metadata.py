@@ -67,6 +67,14 @@ def test_bilibili_config_order_and_video_delivery_description():
     assert "公招图和B站动态图始终使用 PNG" in render_items["render_image_type"]["hint"]
 
 
+def test_unpublished_pool_display_config_defaults_to_enabled():
+    schema = json.loads((ROOT / "_conf_schema.json").read_text(encoding="utf-8"))
+    item = schema["basic"]["items"]["show_unpublished_pools"]
+    assert item["type"] == "bool"
+    assert item["default"] is True
+    assert "方舟日报" in item["description"]
+
+
 def test_readme_links_to_split_documentation():
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     for path in ("docs/commands.md", "docs/configuration.md", "docs/operation.md"):
