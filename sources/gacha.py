@@ -11,6 +11,7 @@ CN_TZ = ZoneInfo("Asia/Shanghai")
 
 
 class GachaSource:
+    TORAPPU_URL = "https://torappu.prts.wiki/gamedata/latest/excel/gacha_table.json"
     SERVER_DATA_URL = "https://weedy.prts.wiki/gacha_table.json"
     CHARACTER_URL = "https://torappu.prts.wiki/gamedata/latest/excel/character_table.json"
 
@@ -21,17 +22,20 @@ class GachaSource:
 
     async def pools(self, start: datetime, end: datetime, overview: list[dict]) -> list[dict]:
         labels = (
+            "Torappu / gacha_table.json",
             "ArknightsGachaData",
             "PRTS Gacha Server Data",
             "明日方舟角色数据",
         )
         results = await asyncio.gather(
+            self.http.json(self.TORAPPU_URL),
             self.http.json(self.pool_info_url),
             self.http.json(self.SERVER_DATA_URL),
             self.http.json(self.CHARACTER_URL),
             return_exceptions=True,
         )
         validators = (
+            self._valid_torappu_data,
             self._valid_pool_info,
             self._valid_server_data,
             self._valid_character_table,
@@ -61,12 +65,15 @@ class GachaSource:
                     "status": "fresh",
                 })
 
-        pool_info, server_data, character_table = normalized
-        if not self.last_source_states[0]["ok"]:
-            original = results[0]
+        torappu_data, pool_info, server_data, character_table = normalized
+        if not self.last_source_states[0]["ok"] and not self.last_source_states[1]["ok"]:
+            original = results[0] if isinstance(results[0], Exception) else results[1]
             if isinstance(original, Exception):
                 raise original
-            raise ValueError("ArknightsGachaData 返回的数据结构异常")
+            raise ValueError("Torappu 与 ArknightsGachaData 均返回了异常数据")
+        if not self.last_source_states[0]["ok"] and self.last_source_states[1]["ok"]:
+            self.last_source_states[0]["status"] = "fallback"
+            self.last_source_states[0]["message"] = "实时数据不可用，已回退到 ArknightsGachaData 时间轴"
 
         clients = server_data.get("gachaPoolClient", [])
         server_map = {
@@ -74,35 +81,58 @@ class GachaSource:
             for item in clients
             if isinstance(item, dict) and item.get("gachaPoolId")
         }
+        legacy_map = {}
+        if isinstance(pool_info, dict):
+            legacy_map = {
+                item.get("id"): item
+                for item in pool_info.get("pool", {}).values()
+                if isinstance(item, dict) and item.get("id")
+            }
+        if self.last_source_states[0]["ok"] and isinstance(torappu_data, dict):
+            base_pools = torappu_data.get("gachaPoolClient", [])
+        else:
+            base_pools = list(legacy_map.values())
         result: list[dict] = []
-        for pool in pool_info["pool"].values():
-            if not isinstance(pool, dict) or "start" not in pool or "end" not in pool:
+        for raw_pool in base_pools:
+            if not isinstance(raw_pool, dict):
                 continue
+            pool_id = raw_pool.get("gachaPoolId") or raw_pool.get("id")
+            legacy = legacy_map.get(pool_id, {})
+            start_value = raw_pool.get("openTime", raw_pool.get("start"))
+            end_value = raw_pool.get("endTime", raw_pool.get("end"))
             try:
-                pool_start = datetime.fromtimestamp(pool["start"], CN_TZ)
-                pool_end = datetime.fromtimestamp(pool["end"], CN_TZ)
+                pool_start = datetime.fromtimestamp(float(start_value), CN_TZ)
+                pool_end = datetime.fromtimestamp(float(end_value), CN_TZ)
             except (TypeError, ValueError, OverflowError, OSError):
                 continue
-            pool_type = pool.get("type", "")
+            pool_type = raw_pool.get("gachaRuleType") or legacy.get("type", "")
             if pool_end < start or pool_start > end:
                 continue
             # 归航寻访按账号回归时间触发，不属于全服统一日历。
             if pool_type == "BACKFLOW":
                 continue
-            server = server_map.get(pool.get("id"), {})
+            server = server_map.get(pool_id, {})
             six, weighted = self._up_names(server, character_table)
-            match = self._match_overview(pool_start, pool_end, overview, pool.get("name", ""))
+            pool_name = legacy.get("name") or raw_pool.get("gachaPoolName", "")
+            match = self._match_overview(pool_start, pool_end, overview, pool_name)
             if match and match.get("six"):
                 six = match["six"]
+            display_name = legacy.get("name") or raw_pool.get("gachaPoolName", "")
+            if match and match.get("name") and not self._is_placeholder_name(match.get("name")):
+                display_name = match["name"]
+            unpublished = self._is_placeholder_name(display_name)
+            if unpublished:
+                display_name = "未知卡池"
             result.append({
-                "id": pool.get("id", ""),
-                "name": pool.get("name", ""),
+                "id": pool_id or "",
+                "name": display_name,
                 "type": pool_type,
                 "start": pool_start,
                 "end": pool_end,
                 "six": six,
                 "weighted": weighted,
                 "image": match.get("image", "") if match else "",
+                "unpublished": unpublished,
             })
         return sorted(result, key=lambda item: (item["start"], item["end"]))
 
@@ -129,6 +159,19 @@ class GachaSource:
         clients = data.get("gachaPoolClient")
         return isinstance(clients, list) and bool(clients) and any(
             isinstance(item, dict) and item.get("gachaPoolId") for item in clients
+        )
+
+    @staticmethod
+    def _valid_torappu_data(data: object) -> bool:
+        if not isinstance(data, dict):
+            return False
+        clients = data.get("gachaPoolClient")
+        return isinstance(clients, list) and bool(clients) and any(
+            isinstance(item, dict)
+            and item.get("gachaPoolId")
+            and item.get("openTime") is not None
+            and item.get("endTime") is not None
+            for item in clients
         )
 
     @staticmethod
@@ -184,6 +227,15 @@ class GachaSource:
         return re.sub(r"[\s·・\-—_【】『』「」]", "", name or "").lower()
 
     @staticmethod
+    def _is_placeholder_name(name: object) -> bool:
+        return (
+            not isinstance(name, str)
+            or not name.strip()
+            or name == "适合多种场合的强力干员"
+            or name.strip().isdigit()
+        )
+
+    @staticmethod
     def _up_names(server: dict, characters: dict) -> tuple[list[str], list[str]]:
         detail = server.get("gachaPoolDetail", {}).get("detailInfo", {}) if isinstance(server, dict) else {}
         up = detail.get("upCharInfo", {}).get("perCharList", []) or []
@@ -206,10 +258,21 @@ class GachaSource:
         return list(dict.fromkeys(six)), list(dict.fromkeys(weighted))
 
     @staticmethod
-    def label(pool_type: str) -> str:
-        return {
+    def label(pool_type: str, pool_name: str = "", unpublished: bool = False) -> str:
+        if isinstance(pool_name, str) and "联合行动" in pool_name:
+            return "联合行动"
+        label = {
             "LIMITED": "限定寻访", "LINKAGE": "联动寻访", "SINGLE": "单人寻访",
             "DOUBLE": "标准寻访", "CLASSIC_DOUBLE": "中坚寻访",
-            "CLASSIC": "中坚寻访", "BACKFLOW": "归航寻访",
+            "CLASSIC": "中坚寻访", "FESCLASSIC": "中坚甄选", "BACKFLOW": "归航寻访",
             "SPECIAL": "特殊寻访", "ATTAIN": "定向寻访",
-        }.get(pool_type, "限时寻访")
+        }.get(pool_type, f"未知卡池（{pool_type or '未标注类型'}）")
+        if not unpublished:
+            return label
+        if pool_type == "NORMAL" or label.startswith("未知卡池"):
+            return "未公布"
+        if label.endswith("寻访"):
+            label = label[:-2] + "卡池"
+        elif not label.endswith("卡池"):
+            label += "卡池"
+        return f"未公布{label}"

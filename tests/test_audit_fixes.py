@@ -150,6 +150,25 @@ def test_help_subscription_items_include_long_term_events():
     assert [item["name"] for item in renderer.subscribable_items(snapshot)] == ["长期活动"]
 
 
+def test_unpublished_pool_timeline_is_gray_and_has_no_detail_card():
+    renderer = CalendarRenderer.__new__(CalendarRenderer)
+    renderer.COLORS = CalendarRenderer.COLORS
+    now = datetime(2026, 8, 18, 12, tzinfo=subscription_timezone())
+    item = TimelineItem(
+        id="unknown", name="未公布标准卡池", category="gacha", item_type="未公布标准卡池",
+        start="2026-08-18T04:00:00+08:00", end="2026-08-20T04:00:00+08:00",
+    )
+    rendered = renderer._timeline(
+        item,
+        datetime(2026, 8, 18, 0, tzinfo=subscription_timezone()),
+        datetime(2026, 8, 25, 0, tzinfo=subscription_timezone()),
+        now,
+    )
+
+    assert rendered["color"] == "#858b91"
+    assert renderer._pool_details([rendered]) == []
+
+
 def test_help_page_forces_png_even_when_calendar_uses_jpeg():
     renderer = CalendarRenderer.__new__(CalendarRenderer)
     renderer.help_template = "help"

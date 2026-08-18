@@ -66,7 +66,7 @@ class CalendarService:
         "anything-ics / 生日",
         "anything-ics / 活动",
         "PRTS / 首页",
-        "ArknightsGachaData",
+        "Torappu / gacha_table.json",
     })
     SOURCE_CACHE_KIND = "ark_calendar_source_cache"
     MIN_TIMELINE_DAYS = 7
@@ -915,6 +915,9 @@ class CalendarService:
             cached = previous.get(pool.get("id", ""))
             six = list(pool.get("six", [])) or (list(cached.six_star_up) if cached else [])
             weighted = list(pool.get("weighted", [])) or (list(cached.weighted_up) if cached else [])
+            unpublished = bool(pool.get("unpublished")) or pool.get("name") == "未知卡池"
+            item_type = self.gacha.label(pool.get("type", ""), pool.get("name", ""), unpublished)
+            display_name = item_type if unpublished else pool.get("name", "")
             images: list[str] = []
             if not image and six:
                 urls = await self._safe_avatar_urls(six[:2])
@@ -927,9 +930,9 @@ class CalendarService:
                 images = [item for item in images if item]
             result.append(TimelineItem(
                 id=pool.get("id", ""),
-                name=pool.get("name", ""),
+                name=display_name,
                 category="gacha",
-                item_type=self.gacha.label(pool.get("type", "")),
+                item_type=item_type,
                 start=pool["start"].isoformat(),
                 end=pool["end"].isoformat(),
                 image=image,

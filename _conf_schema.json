@@ -714,10 +714,10 @@
         "obvious_hint": true
       },
       "gacha_data_url": {
-        "description": "ArknightsGachaData 卡池数据地址",
+        "description": "ArknightsGachaData 卡池元数据回退地址",
         "type": "string",
         "default": "https://raw.githubusercontent.com/s-yh-china/ArknightsGachaData/master/data/pool_info.json",
-        "hint": "非必要不要修改。该地址负责卡池时间、类型和卡池 ID；修改为不兼容的数据地址可能导致寻访时间轴无法生成。",
+        "hint": "Torappu 解包数据负责最新卡池时间轴；此地址用于补充旧卡池名称、类型和 ID，并在 Torappu 不可用时回退。非必要不要修改。",
         "obvious_hint": true
       }
     },
