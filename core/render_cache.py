@@ -313,7 +313,7 @@ class HelpImageCache:
 
     MODES = ("full", "subscribe")
     # v2 重新纳入完整命令行（含 B站动态与公招），不能复用旧版当日空命令缓存。
-    CACHE_VERSION = 2
+    CACHE_VERSION = 3
 
     def __init__(self, root: Path):
         self.root = root

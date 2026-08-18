@@ -105,6 +105,7 @@ def command_rows(commands: tuple | list) -> list[dict[str, Any]]:
             "name": command.name,
             "aliases": list(command.aliases),
             "summary": command.summary,
+            "help_note": command.help_note,
             "argument_hint": command.argument_hint,
             "example": command.example,
         }

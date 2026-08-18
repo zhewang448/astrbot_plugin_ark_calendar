@@ -9,6 +9,7 @@ from .config import config_section
 PROFILES: dict[str, dict[str, str]] = {
     "rhodes_catgirl": {
         "rendering_started": "收到，正在为博士整理行动日程并绘制日历，稍等一下喵～",
+        "image_rendering_started": "收到喵～正在为博士整理终端图片，请稍等一下喵～",
         "force_refresh_started": "收到，正在重新核对活动、寻访和作战信息，新的行动日历很快送达喵～",
         "scheduled_report_caption": "博士，今日罗德岛行动日历送达，请查收喵～",
         "cached_fallback_notice": "数据源暂时有些忙，本次先为博士送上最近一次保存的行动日历喵。",
@@ -58,6 +59,7 @@ PROFILES: dict[str, dict[str, str]] = {
     },
     "plain": {
         "rendering_started": "正在生成方舟日历，请稍候……",
+        "image_rendering_started": "正在生成终端图片，请稍候……",
         "force_refresh_started": "正在强制刷新方舟日历数据并重新生成图片，请稍候……",
         "scheduled_report_caption": "今日罗德岛行动日历，请查收。",
         "cached_fallback_notice": "数据源刷新失败，本次已发送最近一次保存的日历图片。",

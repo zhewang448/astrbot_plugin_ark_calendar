@@ -9,6 +9,18 @@ from itertools import combinations
 from typing import Any
 
 
+RECRUITMENT_EASTER_EGG_MESSAGE = (
+    "博士，不要再喊“ALL ALL”了啦！阿米娅已经为您整理好公招计算结果，"
+    "请直接查看这份记录吧：\n"
+    "https://www.bilibili.com/video/BV1y14y157MD"
+)
+
+
+def is_recruitment_easter_egg_query(text: str) -> bool:
+    """判断是否使用公招彩蛋触发词（all 或 *）。"""
+    return text.strip().casefold() in {"all", "*"}
+
+
 # 游戏内真实存在的全部公招标签（按类别）
 ALL_TAGS = {
     # 职业
@@ -79,6 +91,9 @@ POSITION_TAG_MAP: dict[str, str] = {
     "远程位": "RANGED",
 }
 
+# `/方舟公招` 固定按游戏内 9 小时招募计算。1★、2★不计入保底星级。
+NINE_HOUR_MIN_RARITY = 3
+
 
 class RecruitmentCalculator:
     """公开招募标签计算器。
@@ -95,8 +110,7 @@ class RecruitmentCalculator:
         Args:
             characters: 公招池干员列表，每条包含 id/name/rarity/tags
         """
-        # 1★ 支援机械属于公开招募池，不能在建池时过滤掉。其招募时长规则由
-        # 上层交互在支持时长参数后处理；这里保留标签组合的候选结果。
+        # 1★ 支援机械仍需保留在完整公招池中；计算保底时才按 9 小时规则忽略 1★、2★。
         self._pool = [c for c in characters if c["rarity"] >= 1]
 
         # 预计算每个干员所有有效的"检索标签"（职业 + 位置 + 词缀）
@@ -171,14 +185,21 @@ class RecruitmentCalculator:
                 if not operators:
                     continue
 
+                guarantee_operators = [
+                    operator
+                    for operator in operators
+                    if operator["rarity"] >= NINE_HOUR_MIN_RARITY
+                ]
+
                 has_top_senior = "高级资深干员" in combo
                 has_senior = "资深干员" in combo
 
                 # 计算保底星级：
                 # - 有"高级资深干员"且时限9小时 -> 必得 6★
                 # - 有"资深干员"且无"高级资深干员"且时限9小时 -> 必得 5★
-                # - 常规：当前组合中所有可能干员的最低稀有度
-                min_rarity = min(op["rarity"] for op in operators)
+                # - 常规：忽略 1★、2★后的候选最低稀有度
+                has_guarantee = bool(guarantee_operators)
+                min_rarity = min((op["rarity"] for op in guarantee_operators), default=0)
                 if has_top_senior:
                     # 高级资深干员仅出现 6★。
                     operators = [op for op in operators if op["rarity"] == 6]
@@ -193,6 +214,7 @@ class RecruitmentCalculator:
                     "tag_combinations": [list(combo)],
                     "operators": sorted(operators, key=lambda x: -x["rarity"]),
                     "min_rarity": min_rarity,
+                    "has_guarantee": has_guarantee,
                     "has_senior": has_senior,
                     "has_top_senior": has_top_senior,
                 })
@@ -214,6 +236,7 @@ class RecruitmentCalculator:
             key = (
                 operator_key,
                 int(result.get("min_rarity", 0) or 0),
+                bool(result.get("has_guarantee", True)),
                 bool(result.get("has_senior")),
                 bool(result.get("has_top_senior")),
             )
@@ -309,10 +332,13 @@ def format_result(
         combo_tags = " / ".join(" + ".join(tags) for tags in tag_combinations)
         min_rarity = result["min_rarity"]
         operators = result["operators"]
+        has_guarantee = bool(result.get("has_guarantee", True))
 
         # 星级标识
         stars = "★" * min_rarity
-        if result["has_top_senior"]:
+        if not has_guarantee:
+            guarantee = "【无3★保底】"
+        elif result["has_top_senior"]:
             guarantee = f"【{stars}】保底"
         elif result["has_senior"]:
             guarantee = f"【{stars}+】保底"

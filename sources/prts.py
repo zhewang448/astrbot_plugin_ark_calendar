@@ -21,6 +21,8 @@ def game_weekday(now: datetime | None = None) -> int:
 
 
 class PrtsSource:
+    RECURRENCE_PAGE = "卡池一览/寻访概率提升"
+
     def __init__(self, http: HttpClient, base_url: str):
         self.http = http
         self.base_url = base_url.rstrip("/")
@@ -361,6 +363,96 @@ class PrtsSource:
                     "image": urljoin(self.base_url, image.get("src", "")) if image else "",
                 })
         return rows
+
+    async def recurrence_overview(self) -> list[dict]:
+        """读取 PRTS 已展开的干员出率提升/商店兑换历史表。"""
+        data = await self.http.json(self.api_url, params={
+            "action": "parse", "page": self.RECURRENCE_PAGE,
+            "prop": "text", "format": "json",
+        })
+        html = data.get("parse", {}).get("text", {}).get("*", "")
+        return self._parse_recurrence_overview(html)
+
+    @classmethod
+    def _parse_recurrence_overview(cls, html: str) -> list[dict]:
+        """将 PRTS 的两层表头规范化为可排序的干员历史记录。
+
+        页面本身由 Semantic MediaWiki 汇总，直接复用其已计算的历史关系，
+        插件只负责校验、缓存和按调用时刻重新计算排序。
+        """
+        soup = BeautifulSoup(html, "html.parser")
+        result: list[dict] = []
+        for table in soup.select("table.wikitable"):
+            headers = table.get_text(" ", strip=True)
+            if not all(token in headers for token in ("实装时间", "出率提升", "商店兑换")):
+                continue
+            rarity = cls._recurrence_rarity(table)
+            pool_type = cls._recurrence_pool_type(table)
+            if rarity is None or not pool_type:
+                continue
+            for row in table.select("tr"):
+                cells = []
+                for cell in row.find_all("td", recursive=False):
+                    try:
+                        colspan = max(1, int(cell.get("colspan", 1)))
+                    except (TypeError, ValueError):
+                        colspan = 1
+                    cells.extend([cell] * colspan)
+                if len(cells) < 9:
+                    continue
+                release_date = cls._date_from_cell(cells[0])
+                name = cls._recurrence_name(cells[1])
+                rate_end = cls._date_from_cell(cells[3])
+                shop_end = cls._date_from_cell(cells[6])
+                if not release_date or not name or not rate_end:
+                    continue
+                result.append({
+                    "name": name,
+                    "rarity": rarity,
+                    "pool_type": pool_type,
+                    "release_date": release_date,
+                    "rate_up_end": rate_end,
+                    "rate_up_ongoing": "进行中" in cells[4].get_text(" ", strip=True),
+                    "rate_up_count": cls._cell_int(cells[5]),
+                    "shop_end": shop_end,
+                    "shop_count": cls._cell_int(cells[8]),
+                })
+        return result
+
+    @staticmethod
+    def _date_from_cell(cell) -> str:
+        match = re.search(r"20\d{2}-\d{2}-\d{2}", cell.get_text(" ", strip=True))
+        return match.group(0) if match else ""
+
+    @staticmethod
+    def _cell_int(cell) -> int:
+        match = re.search(r"\d+", cell.get_text(" ", strip=True))
+        return int(match.group(0)) if match else 0
+
+    @staticmethod
+    def _recurrence_name(cell) -> str:
+        anchor = cell.select_one("a[title]")
+        return (anchor.get("title", "") if anchor else cell.get_text(" ", strip=True)).strip()
+
+    @staticmethod
+    def _recurrence_rarity(table) -> int | None:
+        heading = table.find_previous("h2")
+        text = heading.get_text(" ", strip=True) if heading else ""
+        if "六星" in text:
+            return 6
+        if "五星" in text:
+            return 5
+        return None
+
+    @staticmethod
+    def _recurrence_pool_type(table) -> str:
+        heading = table.find_previous("h3")
+        text = heading.get_text(" ", strip=True) if heading else ""
+        if "中坚" in text:
+            return "中坚寻访"
+        if "标准" in text:
+            return "标准寻访"
+        return ""
 
     @staticmethod
     def _gacha_name(text: str) -> str:

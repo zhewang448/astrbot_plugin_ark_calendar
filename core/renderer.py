@@ -31,6 +31,7 @@ class CalendarRenderer:
         self.help_template = (templates / "help.html").read_text("utf-8")
         self.bilibili_template = (templates / "bilibili_dynamic.html").read_text("utf-8")
         self.recruitment_template = (templates / "recruitment.html").read_text("utf-8")
+        self.recurrence_template = (templates / "recurrence.html").read_text("utf-8")
         self.template_hash = hashlib.sha256(self.template.encode("utf-8")).hexdigest()[:16]
         self.source_font = Path(__file__).parent.parent / "assets" / SOURCE_FONT_ASSET
         self.font_subsetter = FontSubsetter(
@@ -190,6 +191,7 @@ class CalendarRenderer:
                 ],
                 "operators": result.get("operators", []),
                 "min_rarity": int(result.get("min_rarity", 0) or 0),
+                "has_guarantee": bool(result.get("has_guarantee", True)),
                 "recommended": index == 0,
                 "senior": bool(result.get("has_senior")),
                 "top_senior": bool(result.get("has_top_senior")),
@@ -216,6 +218,25 @@ class CalendarRenderer:
             "static": await self._static_assets(collect_charset(self.recruitment_template, {"tag_groups": tag_groups})),
         }
         return await self._html_render(self.recruitment_template, data, options=self._card_render_options())
+
+    async def recurrence_report(self, report: dict) -> str | Path | bytes:
+        """渲染按最近一次出率提升结束时间排序的干员复刻排行榜。"""
+        data = {
+            "title": report["title"],
+            "date": report["date"],
+            "rows": report["rows"],
+            "total": report["total"],
+            "ongoing": report["ongoing"],
+            "max_days": report["max_days"],
+        }
+        data["static"] = await self._static_assets(
+            collect_charset(self.recurrence_template, data)
+        )
+        return await self._html_render(
+            self.recurrence_template,
+            data,
+            options=self._card_render_options(),
+        )
 
     @staticmethod
     def _dynamic_time(value) -> str:
