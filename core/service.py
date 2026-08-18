@@ -16,6 +16,7 @@ import aiohttp
 from .assets import AssetCache
 from .cache import JsonCache
 from .config import config_int, config_value
+from .recurrence import DEFAULT_LIMIT, build_recurrence_report, parse_display_limit, parse_recurrence_query
 from .models import (
     BirthdayGroup,
     CalendarSnapshot,
@@ -73,6 +74,8 @@ class CalendarService:
     MAX_TIMELINE_DAYS = 90
     EVENT_DETAIL_TTL = timedelta(hours=12)
     EVENT_DETAIL_MAX_STALE = timedelta(days=7)
+    RECURRENCE_CACHE_TTL = timedelta(hours=24)
+    RECURRENCE_CACHE_MAX_STALE = timedelta(days=7)
 
     def __init__(self, plugin_dir: Path, data_dir: Path, config: dict, logger):
         self.plugin_dir = plugin_dir
@@ -88,6 +91,7 @@ class CalendarService:
         self.prts: PrtsSource | None = None
         self.gacha: GachaSource | None = None
         self.refresh_lock = asyncio.Lock()
+        self.recurrence_lock = asyncio.Lock()
         self._event_detail_semaphore = asyncio.Semaphore(4)
         self._birthdays: list[dict] = []
         self._birthday_index_source: list[dict] | None = None
@@ -206,6 +210,52 @@ class CalendarService:
             "cache_and_render", "data_cache_ttl_minutes", 120,
             minimum=1, maximum=10080, legacy_key="cache_ttl_minutes",
         ))
+
+    def recurrence_default_limit(self) -> int | None:
+        """读取未复刻排行榜默认数量；非法旧配置回退到内置默认值。"""
+        configured = self.value("basic", "recurrence_default_display_count", str(DEFAULT_LIMIT))
+        try:
+            return parse_display_limit(configured)
+        except ValueError:
+            self.logger.warning(
+                "未复刻排行榜默认显示数量无效（%r），使用默认值 %s。",
+                configured,
+                DEFAULT_LIMIT,
+            )
+            return DEFAULT_LIMIT
+
+    async def recurrence_report(self, argument_text: str = "") -> dict[str, Any]:
+        """读取并缓存 PRTS 复刻历史；不参与日历快照刷新。"""
+        assert self.prts
+        now = self._now()
+        scope, limit = parse_recurrence_query(
+            argument_text,
+            default_limit=self.recurrence_default_limit(),
+        )
+        cache_name = "recurrence_overview.json"
+        cached, fetched_at = self._load_source_cache(cache_name)
+        if self._valid_recurrence_overview(cached) and fetched_at and now - fetched_at <= self.RECURRENCE_CACHE_TTL:
+            return build_recurrence_report(cached, now, scope, limit=limit)
+
+        async with self.recurrence_lock:
+            cached, fetched_at = self._load_source_cache(cache_name)
+            if self._valid_recurrence_overview(cached) and fetched_at and now - fetched_at <= self.RECURRENCE_CACHE_TTL:
+                return build_recurrence_report(cached, now, scope, limit=limit)
+            try:
+                records = await self.prts.recurrence_overview()
+                if not self._valid_recurrence_overview(records):
+                    raise ValueError("PRTS 干员复刻历史数据结构异常")
+                self._save_source_cache(cache_name, records, now)
+                return build_recurrence_report(records, now, scope, limit=limit)
+            except Exception:
+                if (
+                    self._valid_recurrence_overview(cached)
+                    and fetched_at is not None
+                    and now - fetched_at <= self.RECURRENCE_CACHE_MAX_STALE
+                ):
+                    self.logger.warning("PRTS 干员复刻历史更新失败，使用本地缓存。", exc_info=True)
+                    return build_recurrence_report(cached, now, scope, limit=limit)
+                raise
 
     def timeline_days(self) -> int:
         return self.int_value(
@@ -379,6 +429,21 @@ class CalendarService:
             except (KeyError, TypeError, ValueError):
                 continue
         return valid > 0 and valid / len(data) >= 0.8
+
+    @staticmethod
+    def _valid_recurrence_overview(data: Any) -> bool:
+        if not isinstance(data, list) or len(data) < 20:
+            return False
+        valid = sum(
+            1 for item in data
+            if isinstance(item, dict)
+            and item.get("rarity") in {5, 6}
+            and item.get("pool_type") in {"标准寻访", "中坚寻访"}
+            and isinstance(item.get("name"), str) and item["name"].strip()
+            and isinstance(item.get("release_date"), str)
+            and isinstance(item.get("rate_up_end"), str)
+        )
+        return valid / len(data) >= 0.9
 
     @classmethod
     def _snapshot_refresh_quality(cls, states: list[SourceState]) -> str:

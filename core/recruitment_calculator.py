@@ -9,6 +9,18 @@ from itertools import combinations
 from typing import Any
 
 
+RECRUITMENT_EASTER_EGG_MESSAGE = (
+    "博士，不要再喊“ALL ALL”了啦！阿米娅已经为您整理好公招计算结果，"
+    "请直接查看这份记录吧：\n"
+    "https://www.bilibili.com/video/BV1y14y157MD"
+)
+
+
+def is_recruitment_easter_egg_query(text: str) -> bool:
+    """判断是否使用公招彩蛋触发词（all 或 *）。"""
+    return text.strip().casefold() in {"all", "*"}
+
+
 # 游戏内真实存在的全部公招标签（按类别）
 ALL_TAGS = {
     # 职业
@@ -79,6 +91,9 @@ POSITION_TAG_MAP: dict[str, str] = {
     "远程位": "RANGED",
 }
 
+# `/方舟公招` 固定按游戏内 9 小时招募计算。该时长下不会出现 1★、2★干员。
+NINE_HOUR_MIN_RARITY = 3
+
 
 class RecruitmentCalculator:
     """公开招募标签计算器。
@@ -95,8 +110,7 @@ class RecruitmentCalculator:
         Args:
             characters: 公招池干员列表，每条包含 id/name/rarity/tags
         """
-        # 1★ 支援机械属于公开招募池，不能在建池时过滤掉。其招募时长规则由
-        # 上层交互在支持时长参数后处理；这里保留标签组合的候选结果。
+        # 1★ 支援机械仍需保留在完整公招池中；计算时会按 9 小时规则排除 1★、2★。
         self._pool = [c for c in characters if c["rarity"] >= 1]
 
         # 预计算每个干员所有有效的"检索标签"（职业 + 位置 + 词缀）
@@ -167,7 +181,11 @@ class RecruitmentCalculator:
                     continue
                 seen_combos.add(key)
 
-                operators = self._match_operators(list(combo))
+                operators = [
+                    operator
+                    for operator in self._match_operators(list(combo))
+                    if operator["rarity"] >= NINE_HOUR_MIN_RARITY
+                ]
                 if not operators:
                     continue
 

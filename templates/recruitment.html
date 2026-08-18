@@ -23,6 +23,7 @@ body{margin:0;width:1320px;color:#172025;background:#edf0ef;font-family:ArkSerif
 .section-head h2{margin:0 0 12px;font-size:32px}
 .section-head h2:before{content:'';display:inline-block;width:8px;height:34px;background:#00a8c6;transform:skewX(-20deg);margin-right:13px;vertical-align:-6px}
 .section-head span{margin-bottom:13px;font:15px Consolas;color:#657278}
+.recruit-rule{margin:-5px 0 16px;color:#657278;font:14px Arial;line-height:1.55}
 .rows{display:grid;gap:14px}
 .row{background:#fff;border-left:7px solid var(--rarity);box-shadow:0 6px 15px #15212616;padding:20px 24px}
 .row.recommended{border-top:4px solid #f5c335}
@@ -65,6 +66,7 @@ body{margin:0;width:1320px;color:#172025;background:#edf0ef;font-family:ArkSerif
     {% else %}
       <div class="tags">{% for tag in selected_tags %}<span class="tag">{{ tag }}</span>{% endfor %}</div>
       <div class="section-head"><h2>推荐组合</h2><span>{{ rows|length }} VALID COMBINATIONS</span></div>
+      <p class="recruit-rule">规则：默认按 9 小时计算，候选最低 3★；资深/高级资深可锁定 5★/6★，其余标签仍可能被划去。</p>
       <section class="rows">
         {% for row in rows %}
           <article class="row{% if row.recommended %} recommended{% endif %}" style="--rarity:{% if row.min_rarity >= 6 %}#d9a21b{% elif row.min_rarity >= 5 %}#d9a21b{% elif row.min_rarity >= 4 %}#7655a0{% else %}#4f8798{% endif %}">

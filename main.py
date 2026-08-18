@@ -36,7 +36,12 @@ from .core.status_formatter import (
 )
 from .core.subscription import Subscription, SubscriptionManager
 from .core.bilibili_manager import BilibiliDynamicManager
-from .core.recruitment_calculator import RecruitmentCalculator, format_result
+from .core.recruitment_calculator import (
+    RECRUITMENT_EASTER_EGG_MESSAGE,
+    RecruitmentCalculator,
+    format_result,
+    is_recruitment_easter_egg_query,
+)
 from .sources.bilibili_dynamic import BilibiliDynamicSource
 from .sources.recruitment import RecruitmentSource
 
@@ -128,13 +133,20 @@ BILIBILI_DYNAMIC_TEST_COMMAND = CommandSpec(
 RECRUIT_COMMAND = CommandSpec(
     "方舟公招",
     ("公招计算", "明日方舟公招", "舟公招"),
-    "输入标签计算可能招募的干员及保底星级，并以招募终端图片返回结果。",
-    argument_hint="<标签1> [标签2] [标签3] [标签4] [标签5]",
+    "输入标签计算可能招募的干员及保底星级，并以招募终端图片返回结果；悄悄告诉你：如果参数是 all 或 *，会触发阿米娅的小彩蛋。",
+    argument_hint="<标签1> [标签2] [标签3] …",
     example="/方舟公招 近卫干员 输出 生存",
+)
+RECURRENCE_COMMAND = CommandSpec(
+    "方舟未复刻",
+    ("未复刻排行", "方舟未复刻排行", "方舟复刻排行"),
+    "按最近一次出率提升结束时间排行；可指定范围与显示数量。",
+    argument_hint="[六星/五星/标准/中坚/全部] [数量/all]",
+    example="/方舟未复刻 六星 20",
 )
 HELP_COMMAND = CommandSpec(
     "方舟日历帮助",
-    ("方舟日报帮助", "明日方舟日报帮助"),
+    ("方舟日报帮助", "明日方舟日报帮助", "方舟终端帮助", "明日方舟终端帮助"),
     "查看本帮助。",
     example="/方舟日历帮助",
 )
@@ -153,7 +165,7 @@ HISTORICAL_COMMAND = CommandSpec(
 )
 
 SUBSCRIPTION_COMMANDS = (SUBSCRIBE_COMMAND, UNSUBSCRIBE_COMMAND, SUBSCRIPTION_LIST_COMMAND)
-USER_COMMANDS = (CALENDAR_COMMAND, BIRTHDAY_COMMAND, STATUS_COMMAND, *SUBSCRIPTION_COMMANDS, BILIBILI_DYNAMIC_COMMAND, RECRUIT_COMMAND, HELP_COMMAND)
+USER_COMMANDS = (CALENDAR_COMMAND, BIRTHDAY_COMMAND, STATUS_COMMAND, *SUBSCRIPTION_COMMANDS, BILIBILI_DYNAMIC_COMMAND, RECRUIT_COMMAND, RECURRENCE_COMMAND, HELP_COMMAND)
 ADMIN_COMMANDS = (REFRESH_COMMAND, HISTORICAL_COMMAND, BILIBILI_DYNAMIC_TEST_COMMAND)
 
 
@@ -383,6 +395,7 @@ class ArkCalendarPlugin(Star):
             return
 
         if not name:
+            yield event.plain_result(self.messages.text("image_rendering_started"))
             image = await self.help_manager.get_help_image(
                 "subscribe",
                 subscription_commands=SUBSCRIPTION_COMMANDS,
@@ -508,6 +521,7 @@ class ArkCalendarPlugin(Star):
                 if not dynamics:
                     yield event.plain_result(self.messages.text("bilibili_list_empty"))
                     return
+                yield event.plain_result(self.messages.text("image_rendering_started"))
                 yield event.chain_result(await self.bilibili_manager.build_list_components(dynamics))
 
             else:
@@ -527,6 +541,7 @@ class ArkCalendarPlugin(Star):
                     return
 
                 # 格式化并发送
+                yield event.plain_result(self.messages.text("image_rendering_started"))
                 components = await self.bilibili_manager.build_message_components(
                     dynamic, event.unified_msg_origin
                 )
@@ -567,19 +582,23 @@ class ArkCalendarPlugin(Star):
     @filter.command(RECRUIT_COMMAND.name, alias=RECRUIT_COMMAND.alias_set)
     async def recruit_command(self, event: AstrMessageEvent):
         """根据标签计算明日方舟公开招募可能出现的干员及保底星级。"""
+        # 从原文剥离命令名后取全部参数，支持空格/顿号/斜线分隔。
+        raw_text = self._argument_text(event, RECRUIT_COMMAND)
+
+        if is_recruitment_easter_egg_query(raw_text):
+            yield event.plain_result(RECRUITMENT_EASTER_EGG_MESSAGE)
+            return
+
         if not self.recruitment_source:
             yield event.plain_result(self.messages.text("recruit_uninitialized"))
             return
-
-        # 从原文剥离命令名后取全部参数，支持空格/顿号/斜线分隔
-        raw_text = self._argument_text(event, RECRUIT_COMMAND)
 
         if not raw_text.strip():
             help_text = (
                 "━━━━━━━━━━━━━━━━━━━━\n"
                 "🏷️  方舟公招计算器\n"
                 "━━━━━━━━━━━━━━━━━━━━\n\n"
-                "用法：/方舟公招 <标签1> [标签2] [标签3] [标签4] [标签5]\n\n"
+                "用法：/方舟公招 <标签1> [标签2] [标签3] …\n\n"
                 "示例：\n"
                 "  /方舟公招 近卫干员 输出 生存\n"
                 "  /方舟公招 资深干员 医疗干员\n"
@@ -594,11 +613,12 @@ class ArkCalendarPlugin(Star):
                 "━━━━━━━━━━━━━━━━━━━━"
             )
             try:
+                yield event.plain_result(self.messages.text("image_rendering_started"))
                 rendered_help = await self.renderer.recruitment_help({
                     "职业": ["近卫干员", "狙击干员", "术师干员", "医疗干员", "重装干员", "辅助干员", "特种干员", "先锋干员"],
                     "位置": ["近战位", "远程位"],
                     "稀有度": ["新手", "资深干员（保底5★）", "高级资深干员（保底6★）"],
-                    "词缀": ["输出", "治疗", "生存", "防护", "控场", "爆发", "支援", "减速", "削弱", "群攻", "位移", "召唤", "快速复活", "费用回复", "支援机械", "元素"],
+                "词缀": ["输出", "治疗", "生存", "防护", "控场", "爆发", "支援", "减速", "削弱", "群攻", "位移", "召唤", "快速复活", "费用回复", "支援机械", "元素"],
                 })
                 if isinstance(rendered_help, (str, Path)) and Path(str(rendered_help)).is_file():
                     yield event.image_result(str(rendered_help))
@@ -610,10 +630,6 @@ class ArkCalendarPlugin(Star):
 
         # 解析标签：支持空格、顿号、斜线、逗号分隔
         raw_tags = [t.strip() for t in re.split(r"[,，、/／\s]+", raw_text) if t.strip()]
-
-        if len(raw_tags) > 5:
-            yield event.plain_result(self.messages.text("recruit_too_many_tags", count=len(raw_tags)))
-            return
 
         try:
             pool_data = await self.recruitment_source.get_recruitment_pool()
@@ -635,6 +651,7 @@ class ArkCalendarPlugin(Star):
 
             results = calculator.calculate(valid_tags)
             try:
+                yield event.plain_result(self.messages.text("image_rendering_started"))
                 rendered = await self.renderer.recruitment_result(results, valid_tags)
                 if isinstance(rendered, (str, Path)) and Path(str(rendered)).is_file():
                     yield event.image_result(str(rendered))
@@ -647,9 +664,34 @@ class ArkCalendarPlugin(Star):
             logger.error("公招计算失败。", exc_info=True)
             yield event.plain_result(self.messages.text("recruit_failed"))
 
+    @filter.command(RECURRENCE_COMMAND.name, alias=RECURRENCE_COMMAND.alias_set)
+    async def recurrence_command(self, event: AstrMessageEvent, scope: str = ""):
+        """按最近一次出率提升结束时间查询干员未复刻排行榜。"""
+        raw_arguments = self._argument_text(event, RECURRENCE_COMMAND, scope).strip()
+        try:
+            report = await self.service.recurrence_report(raw_arguments)
+        except ValueError as exc:
+            yield event.plain_result(str(exc))
+            return
+        except Exception:
+            logger.error("生成未复刻排行榜失败。", exc_info=True)
+            yield event.plain_result("未复刻排行榜暂时不可用，请稍后重试。")
+            return
+        if not report["rows"]:
+            yield event.plain_result("当前筛选条件下没有可排行的干员记录。")
+            return
+        try:
+            yield event.plain_result(self.messages.text("image_rendering_started"))
+            image = await self.renderer.recurrence_report(report)
+            yield event.image_result(str(image))
+        except Exception:
+            logger.error("渲染未复刻排行榜失败。", exc_info=True)
+            yield event.plain_result("未复刻排行榜渲染失败，请稍后重试。")
+
     @filter.command(HELP_COMMAND.name, alias=HELP_COMMAND.alias_set)
     async def help_command(self, event: AstrMessageEvent):
         """查看方舟日历的指令、别称与配置说明。"""
+        yield event.plain_result(self.messages.text("image_rendering_started"))
         image = await self.help_manager.get_help_image(
             "full",
             user_commands=USER_COMMANDS,
@@ -702,6 +744,7 @@ class ArkCalendarPlugin(Star):
             yield event.plain_result(self.messages.text("historical_range_invalid", error=exc))
             return
         try:
+            yield event.plain_result(self.messages.text("image_rendering_started"))
             snapshot = await self.service.historical_snapshot(target_day)
             image = await self.renderer.historical_calendar(snapshot)
             yield event.image_result(str(image))

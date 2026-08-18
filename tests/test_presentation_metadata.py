@@ -12,6 +12,7 @@ RENDER_TEMPLATES = (
     "history_schedule.html",
     "bilibili_dynamic.html",
     "recruitment.html",
+    "recurrence.html",
 )
 
 
@@ -36,6 +37,8 @@ def test_recruitment_content_is_larger_than_its_title_supporting_style():
     assert ".op{display:flex;align-items:center" in template
     assert ".op-avatar{width:54px;height:54px" in template
     assert "font-size:21px" in template
+    assert 'class="recruit-rule"' in template
+    assert "默认按 9 小时计算，候选最低 3★" in template
 
 
 def test_message_previews_cover_the_current_builtin_message_profiles():
@@ -63,8 +66,8 @@ def test_bilibili_config_order_and_video_delivery_description():
     ]
     assert "不下载或发送视频文件" in items["push_types"]["hint"]
     render_items = schema["cache_and_render"]["items"]
-    assert "公招图和B站动态图" in render_items["render_device_scale_factor_level"]["hint"]
-    assert "公招图和B站动态图始终使用 PNG" in render_items["render_image_type"]["hint"]
+    assert "公招图、B站动态图和未复刻排行图" in render_items["render_device_scale_factor_level"]["hint"]
+    assert "公招图、B站动态图和未复刻排行图始终使用 PNG" in render_items["render_image_type"]["hint"]
 
 
 def test_unpublished_pool_display_config_defaults_to_enabled():

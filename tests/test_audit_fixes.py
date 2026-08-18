@@ -6,7 +6,12 @@ from types import SimpleNamespace
 
 from core.models import CalendarSnapshot, TimelineItem, parse_iso
 from core.command_args import split_name_and_time
-from core.recruitment_calculator import RecruitmentCalculator, format_result
+from core.recruitment_calculator import (
+    RECRUITMENT_EASTER_EGG_MESSAGE,
+    RecruitmentCalculator,
+    format_result,
+    is_recruitment_easter_egg_query,
+)
 from core.render_cache import CalendarImageCache, validate_rendered_image
 from core.renderer import CalendarRenderer
 from core.subscription import SubscriptionManager
@@ -15,6 +20,14 @@ from sources.recruitment import RecruitmentSource
 
 def subscription_timezone():
     return ZoneInfo("Asia/Shanghai")
+
+
+def test_recruitment_easter_egg_accepts_all_and_star_case_insensitively():
+    assert is_recruitment_easter_egg_query(" all ") is True
+    assert is_recruitment_easter_egg_query("ALL") is True
+    assert is_recruitment_easter_egg_query("*") is True
+    assert is_recruitment_easter_egg_query("all 输出") is False
+    assert "BV1y14y157MD" in RECRUITMENT_EASTER_EGG_MESSAGE
 
 
 def _snapshot() -> CalendarSnapshot:
@@ -334,6 +347,26 @@ def test_recruitment_aliases_sorting_and_full_output():
     )
     assert "干员9" in text
     assert "…共" not in text
+
+
+def test_recruitment_uses_nine_hour_rarity_floor():
+    calculator = RecruitmentCalculator([
+        {"name": "THRM-EX", "rarity": 1, "tags": ["爆发"]},
+        {"name": "刻刀", "rarity": 4, "tags": ["爆发"]},
+        {"name": "GALLUS²", "rarity": 1, "tags": ["削弱"]},
+        {"name": "夜烟", "rarity": 4, "tags": ["削弱"]},
+        {"name": "Lancet-2", "rarity": 1, "tags": ["治疗"]},
+        {"name": "安赛尔", "rarity": 3, "tags": ["治疗"]},
+    ])
+
+    results = {result["tags"][0]: result for result in calculator.calculate(["爆发", "削弱", "治疗"])}
+
+    assert results["爆发"]["min_rarity"] == 4
+    assert results["削弱"]["min_rarity"] == 4
+    assert results["治疗"]["min_rarity"] == 3
+    assert [op["name"] for op in results["爆发"]["operators"]] == ["刻刀"]
+    assert [op["name"] for op in results["削弱"]["operators"]] == ["夜烟"]
+    assert [op["name"] for op in results["治疗"]["operators"]] == ["安赛尔"]
 
 
 def test_recruitment_merges_combinations_with_identical_results():
