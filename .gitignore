@@ -50,6 +50,7 @@ Thumbs.db
 
 # Codex 本地审查、补丁与回滚验证材料
 .codex_artifacts/
+/.verification/
 
 # Claude Code 本地规划产物
 .claude/

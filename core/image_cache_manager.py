@@ -60,6 +60,7 @@ class CalendarImageManager:
             "include_long_term": config_value(self.config, "basic", "include_long_term", True, "include_long_term"),
             "show_source_footer": config_value(self.config, "basic", "show_source_footer", True, "show_source_footer"),
             "pool_detail_cards": config_value(self.config, "basic", "pool_detail_cards", True, "pool_detail_cards"),
+            "show_unpublished_pools": self.service.show_unpublished_pools(),
         }
 
     # ── 图片获取入口 ───────────────────────────────────────────

@@ -66,7 +66,7 @@ class CalendarService:
         "anything-ics / 生日",
         "anything-ics / 活动",
         "PRTS / 首页",
-        "ArknightsGachaData",
+        "Torappu / gacha_table.json",
     })
     SOURCE_CACHE_KIND = "ark_calendar_source_cache"
     MIN_TIMELINE_DAYS = 7
@@ -214,12 +214,16 @@ class CalendarService:
             legacy_key="timeline_days",
         )
 
+    def show_unpublished_pools(self) -> bool:
+        return bool(self.value("basic", "show_unpublished_pools", True, "show_unpublished_pools"))
+
     def _snapshot_data_config(self) -> dict[str, Any]:
         return {
             "timeline_days": self.timeline_days(),
             "include_recent_operators": bool(self.value("basic", "include_recent_operators", True, "include_recent_operators")),
             "include_long_term": bool(self.value("basic", "include_long_term", True, "include_long_term")),
             "pool_detail_cards": bool(self.value("basic", "pool_detail_cards", True, "pool_detail_cards")),
+            "show_unpublished_pools": self.show_unpublished_pools(),
             "anything_ics_base_url": str(self.value("data_sources", "anything_ics_base_url", "", "anything_ics_base_url") or ""),
             "prts_base_url": str(self.value("data_sources", "prts_base_url", "", "prts_base_url") or ""),
             "gacha_data_url": str(self.value("data_sources", "gacha_data_url", "", "gacha_data_url") or ""),
@@ -915,6 +919,9 @@ class CalendarService:
             cached = previous.get(pool.get("id", ""))
             six = list(pool.get("six", [])) or (list(cached.six_star_up) if cached else [])
             weighted = list(pool.get("weighted", [])) or (list(cached.weighted_up) if cached else [])
+            unpublished = bool(pool.get("unpublished")) or pool.get("name") == "未知卡池"
+            item_type = self.gacha.label(pool.get("type", ""), pool.get("name", ""), unpublished)
+            display_name = item_type if unpublished else pool.get("name", "")
             images: list[str] = []
             if not image and six:
                 urls = await self._safe_avatar_urls(six[:2])
@@ -927,9 +934,9 @@ class CalendarService:
                 images = [item for item in images if item]
             result.append(TimelineItem(
                 id=pool.get("id", ""),
-                name=pool.get("name", ""),
+                name=display_name,
                 category="gacha",
-                item_type=self.gacha.label(pool.get("type", "")),
+                item_type=item_type,
                 start=pool["start"].isoformat(),
                 end=pool["end"].isoformat(),
                 image=image,

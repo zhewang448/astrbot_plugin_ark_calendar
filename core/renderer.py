@@ -43,7 +43,8 @@ class CalendarRenderer:
         start, end = parse_iso(snapshot.timeline_start), parse_iso(snapshot.timeline_end)
         now = parse_iso(snapshot.generated_at)
         items = [self._timeline(x, start, end, now) for x in snapshot.events]
-        pools = [self._timeline(x, start, end, now) for x in snapshot.gacha_pools]
+        pools = [self._timeline(x, start, end, now) for x in self._visible_gacha_pools(snapshot.gacha_pools)]
+        pool_details = self._pool_details(pools)
         longs = [self._timeline(x, start, end, now) for x in snapshot.long_term_events]
         hero = next(
             (x["image"] for x in [*items, *pools, *longs] if x["image"]),
@@ -66,7 +67,7 @@ class CalendarRenderer:
                 for group in snapshot.upcoming_birthdays
             ],
             "recent_operators": [asdict(item) for item in snapshot.recent_operators],
-            "events": items, "pools": pools, "longs": longs, "ticks": ticks,
+            "events": items, "pools": pools, "pool_details": pool_details, "longs": longs, "ticks": ticks,
             "timeline_days": timeline_days,
             "today_left": max(0, min(100, (now-start).total_seconds()/(end-start).total_seconds()*100)),
             "date_cn": now.strftime("%Y / %m / %d"), "data_date_text": snapshot.calendar_date,
@@ -83,6 +84,11 @@ class CalendarRenderer:
     async def historical_calendar(self, snapshot: CalendarSnapshot) -> str:
         """保留旧调用入口，但历史测试改用正常日报模板和布局。"""
         return await self.calendar(snapshot, historical=True)
+
+    def _visible_gacha_pools(self, pools):
+        if self.service.show_unpublished_pools():
+            return list(pools)
+        return [pool for pool in pools if not pool.item_type.startswith("未公布")]
 
     async def bilibili_dynamic(
         self,
@@ -306,11 +312,17 @@ class CalendarRenderer:
             countdown = prefix + (f"{hours // 24}天{hours % 24}时" if hours >= 24 else f"{hours}小时")
         base = {key: getattr(item, key) for key in item.__slots__}
         width = max(1.5, min(100 - left, right - left))
-        return {**base, "left": left, "width": width, "start_text": s.astimezone(CN_TZ).strftime("%m.%d %H:%M"), "end_text": e.astimezone(CN_TZ).strftime("%m.%d %H:%M"), "countdown": countdown, "color": self.COLORS.get(item.item_type, self.COLORS.get(item.category, "#4d8a72"))}
+        color = "#858b91" if item.item_type.startswith("未公布") else self.COLORS.get(item.item_type, self.COLORS.get(item.category, "#4d8a72"))
+        return {**base, "left": left, "width": width, "start_text": s.astimezone(CN_TZ).strftime("%m.%d %H:%M"), "end_text": e.astimezone(CN_TZ).strftime("%m.%d %H:%M"), "countdown": countdown, "color": color}
 
     async def _static_assets(self, charset: str):
         """按本次实际用到的字形提供子集字体，避免把 10.85 MB 完整字体塞进请求体。"""
         return {"font": await self._font_data_uri(charset)}
+
+    @staticmethod
+    def _pool_details(pools: list[dict]) -> list[dict]:
+        """详情区只展示已经有六星 UP 信息的卡池。"""
+        return [pool for pool in pools if pool.get("six_star_up")]
 
     async def _font_data_uri(self, charset: str) -> str:
         """优先返回子集 woff2；子集化不可用时回退到内嵌完整字体，保证不缺字。"""

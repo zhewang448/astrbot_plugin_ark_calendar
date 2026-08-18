@@ -8,9 +8,9 @@
   <a href="https://count.getloli.com/"><img src="https://count.getloli.com/get/@:astrbot_plugin_ark_calendar?theme=rule34" alt="访问统计"></a>
 </p>
 
-明日方舟信息聚合与查询插件。插件聚合 PRTS、anything-ics 与 ArknightsGachaData，生成罗德岛风格的活动、寻访和作战图片，并提供订阅、生日、B站动态和公开招募工具。
+明日方舟信息聚合与查询插件。插件聚合 PRTS、anything-ics、Torappu 与 ArknightsGachaData，生成罗德岛风格的活动、寻访和作战图片，并提供订阅、生日、B站动态和公开招募工具。
 
-当前版本：`v0.9.2`
+当前版本：`v0.9.3`
 
 ## 文档导航
 
@@ -74,7 +74,8 @@
 
 - [PRTS Wiki](https://prts.wiki)：首页今日信息、活动详情、卡池表格、干员资料与图片。
 - [anything-ics](https://github.com/SmallZombie/anything-ics)：活动时间与干员生日。
-- [ArknightsGachaData](https://github.com/s-yh-china/ArknightsGachaData)：卡池时间、类型和 ID。
+- [Torappu / Arknights Asset Storage](https://torappu.prts.wiki/gamedata/latest/excel/gacha_table.json)：最新卡池开关时间、规则类型和卡池 ID。
+- [ArknightsGachaData](https://github.com/s-yh-china/ArknightsGachaData)：补充正式名称、历史类型和 ID，并作为时间轴回退源。
 - [PRTS Gacha Server Data](https://weedy.prts.wiki/)：补全卡池六星 UP 信息。
 
 本插件使用的游戏图片版权属于上海鹰角网络科技有限公司及其关联公司；PRTS 页面内容遵循其站点声明。本项目仅用于非商业信息展示。
