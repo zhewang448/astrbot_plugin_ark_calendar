@@ -66,13 +66,13 @@ body{margin:0;width:1320px;color:#172025;background:#edf0ef;font-family:ArkSerif
     {% else %}
       <div class="tags">{% for tag in selected_tags %}<span class="tag">{{ tag }}</span>{% endfor %}</div>
       <div class="section-head"><h2>推荐组合</h2><span>{{ rows|length }} VALID COMBINATIONS</span></div>
-      <p class="recruit-rule">规则：默认按 9 小时计算，候选最低 3★；资深/高级资深可锁定 5★/6★，其余标签仍可能被划去。</p>
+      <p class="recruit-rule">规则：默认按 9 小时计算，1★、2★不计入保底；资深/高级资深可锁定 5★/6★，其余标签仍可能被划去。</p>
       <section class="rows">
         {% for row in rows %}
           <article class="row{% if row.recommended %} recommended{% endif %}" style="--rarity:{% if row.min_rarity >= 6 %}#d9a21b{% elif row.min_rarity >= 5 %}#d9a21b{% elif row.min_rarity >= 4 %}#7655a0{% else %}#4f8798{% endif %}">
             <div class="row-top">
               <div class="combo">{% for combination in row.tag_combinations %}<span>{{ combination }}</span>{% endfor %}</div>
-              <div class="guarantee">保底 {{ row.min_rarity }}★</div>
+              <div class="guarantee">{% if row.has_guarantee %}保底 {{ row.min_rarity }}★{% else %}无 3★保底{% endif %}</div>
             </div>
             {% if row.top_senior %}<div class="notice">高级资深干员：建议 9 小时</div>{% elif row.senior %}<div class="notice">资深干员：建议 9 小时</div>{% endif %}
             <div class="operators">

@@ -191,6 +191,7 @@ class CalendarRenderer:
                 ],
                 "operators": result.get("operators", []),
                 "min_rarity": int(result.get("min_rarity", 0) or 0),
+                "has_guarantee": bool(result.get("has_guarantee", True)),
                 "recommended": index == 0,
                 "senior": bool(result.get("has_senior")),
                 "top_senior": bool(result.get("has_top_senior")),

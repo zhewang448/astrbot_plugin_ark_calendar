@@ -357,16 +357,24 @@ def test_recruitment_uses_nine_hour_rarity_floor():
         {"name": "夜烟", "rarity": 4, "tags": ["削弱"]},
         {"name": "Lancet-2", "rarity": 1, "tags": ["治疗"]},
         {"name": "安赛尔", "rarity": 3, "tags": ["治疗"]},
+        {"name": "夜刀", "rarity": 2, "tags": ["先锋干员"]},
+        {"name": "芬", "rarity": 3, "tags": ["先锋干员"]},
+        {"name": "黑角", "rarity": 2, "tags": ["新手"]},
     ])
 
-    results = {result["tags"][0]: result for result in calculator.calculate(["爆发", "削弱", "治疗"])}
+    results = {result["tags"][0]: result for result in calculator.calculate(["爆发", "削弱", "治疗", "先锋干员", "新手"])}
 
     assert results["爆发"]["min_rarity"] == 4
     assert results["削弱"]["min_rarity"] == 4
     assert results["治疗"]["min_rarity"] == 3
-    assert [op["name"] for op in results["爆发"]["operators"]] == ["刻刀"]
-    assert [op["name"] for op in results["削弱"]["operators"]] == ["夜烟"]
-    assert [op["name"] for op in results["治疗"]["operators"]] == ["安赛尔"]
+    assert results["先锋干员"]["min_rarity"] == 3
+    assert [op["name"] for op in results["爆发"]["operators"]] == ["刻刀", "THRM-EX"]
+    assert [op["name"] for op in results["削弱"]["operators"]] == ["夜烟", "GALLUS²"]
+    assert [op["name"] for op in results["治疗"]["operators"]] == ["安赛尔", "Lancet-2"]
+    assert [op["name"] for op in results["先锋干员"]["operators"]] == ["芬", "夜刀"]
+    assert results["新手"]["has_guarantee"] is False
+    assert [op["name"] for op in results["新手"]["operators"]] == ["黑角"]
+    assert "【无3★保底】" in format_result([results["新手"]], selected_tags=["新手"])
 
 
 def test_recruitment_merges_combinations_with_identical_results():

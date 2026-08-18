@@ -38,7 +38,7 @@ def test_recruitment_content_is_larger_than_its_title_supporting_style():
     assert ".op-avatar{width:54px;height:54px" in template
     assert "font-size:21px" in template
     assert 'class="recruit-rule"' in template
-    assert "默认按 9 小时计算，候选最低 3★" in template
+    assert "默认按 9 小时计算，1★、2★不计入保底" in template
 
 
 def test_message_previews_cover_the_current_builtin_message_profiles():
@@ -83,3 +83,25 @@ def test_readme_links_to_split_documentation():
     for path in ("docs/commands.md", "docs/configuration.md", "docs/operation.md"):
         assert path in readme
         assert (ROOT / path).is_file()
+
+
+def test_recruitment_easter_egg_uses_a_subtle_help_menu_note():
+    from types import SimpleNamespace
+
+    from core.help_manager import command_rows
+
+    main = (ROOT / "main.py").read_text(encoding="utf-8")
+    template = (ROOT / "templates/help.html").read_text(encoding="utf-8")
+
+    assert 'help_note="如果参数是 all 或 *，会触发阿米娅的小彩蛋。"' in main
+    assert 'class="menu-note"' in template
+    assert 'color:#78848a' in template
+    command = SimpleNamespace(
+        name="方舟公招",
+        aliases=(),
+        summary="公招说明",
+        help_note="如果参数是 all 或 *，会触发阿米娅的小彩蛋。",
+        argument_hint="",
+        example="",
+    )
+    assert command_rows([command])[0]["help_note"] == command.help_note

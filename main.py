@@ -57,6 +57,7 @@ class CommandSpec:
     summary: str = ""
     argument_hint: str = ""
     example: str = ""
+    help_note: str = ""
 
     @property
     def alias_set(self) -> set[str]:
@@ -133,7 +134,8 @@ BILIBILI_DYNAMIC_TEST_COMMAND = CommandSpec(
 RECRUIT_COMMAND = CommandSpec(
     "方舟公招",
     ("公招计算", "明日方舟公招", "舟公招"),
-    "输入标签计算可能招募的干员及保底星级，并以招募终端图片返回结果；悄悄告诉你：如果参数是 all 或 *，会触发阿米娅的小彩蛋。",
+    "输入标签计算可能招募的干员及保底星级，并以招募终端图片返回结果。",
+    help_note="如果参数是 all 或 *，会触发阿米娅的小彩蛋。",
     argument_hint="<标签1> [标签2] [标签3] …",
     example="/方舟公招 近卫干员 输出 生存",
 )
