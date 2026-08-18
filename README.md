@@ -50,13 +50,22 @@
 </p>
 </details>
 
-### 2. B 站动态
+### 2. 未复刻排行
+
+<details>
+<summary>展开查看未复刻排行</summary>
+<p align="center">
+  <img src="assets/readme/recurrence-report.webp" alt="六星干员未复刻排行报告" width="900">
+</p>
+</details>
+
+### 3. B 站动态
 
 <p align="center">
   <img src="assets/readme/bilibili-dynamic-image.webp" alt="B站动态预览" width="700">
 </p>
 
-### 3. 公招计算
+### 4. 公招计算
 
 <details>
 <summary>展开查看公招计算结果</summary>
@@ -65,11 +74,14 @@
 </p>
 </details>
 
-### 4.指令手册
+### 5. 指令手册
 
+<details>
+<summary>展开查看指令手册</summary>
 <p align="center">
   <img src="assets/readme/command-manual.webp" alt="罗德岛终端手册预览" width="900">
 </p>
+</details>
 
 ## 🙏 致谢
 
