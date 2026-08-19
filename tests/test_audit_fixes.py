@@ -163,23 +163,35 @@ def test_help_subscription_items_include_long_term_events():
     assert [item["name"] for item in renderer.subscribable_items(snapshot)] == ["长期活动"]
 
 
-def test_unpublished_pool_timeline_is_gray_and_has_no_detail_card():
+def test_pool_detail_cards_require_banner():
     renderer = CalendarRenderer.__new__(CalendarRenderer)
     renderer.COLORS = CalendarRenderer.COLORS
     now = datetime(2026, 8, 18, 12, tzinfo=subscription_timezone())
-    item = TimelineItem(
-        id="unknown", name="未公布标准卡池", category="gacha", item_type="未公布标准卡池",
-        start="2026-08-18T04:00:00+08:00", end="2026-08-20T04:00:00+08:00",
+    start = "2026-08-18T04:00:00+08:00"
+    end = "2026-08-20T04:00:00+08:00"
+    without_banner = TimelineItem(
+        id="without-banner", name="未公布标准卡池", category="gacha", item_type="未公布标准卡池",
+        start=start, end=end, six_star_up=["能天使"],
     )
-    rendered = renderer._timeline(
-        item,
+    with_banner = TimelineItem(
+        id="with-banner", name="标准寻访", category="gacha", item_type="标准寻访",
+        start=start, end=end, detail_image="data:image/webp;base64,banner",
+    )
+    rendered_without_banner = renderer._timeline(
+        without_banner,
+        datetime(2026, 8, 18, 0, tzinfo=subscription_timezone()),
+        datetime(2026, 8, 25, 0, tzinfo=subscription_timezone()),
+        now,
+    )
+    rendered_with_banner = renderer._timeline(
+        with_banner,
         datetime(2026, 8, 18, 0, tzinfo=subscription_timezone()),
         datetime(2026, 8, 25, 0, tzinfo=subscription_timezone()),
         now,
     )
 
-    assert rendered["color"] == "#858b91"
-    assert renderer._pool_details([rendered]) == []
+    assert rendered_without_banner["color"] == "#858b91"
+    assert renderer._pool_details([rendered_without_banner, rendered_with_banner]) == [rendered_with_banner]
 
 
 def test_unpublished_pool_visibility_setting_filters_daily_report():

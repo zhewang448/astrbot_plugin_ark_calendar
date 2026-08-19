@@ -77,6 +77,11 @@ def test_unpublished_pool_display_config_defaults_to_enabled():
     assert item["default"] is True
     assert "方舟日报" in item["description"]
 
+    file_item = schema["basic"]["items"]["send_calendar_as_file"]
+    assert file_item["type"] == "bool"
+    assert file_item["default"] is False
+    assert "文件" in file_item["description"]
+
 
 def test_readme_links_to_split_documentation():
     readme = (ROOT / "README.md").read_text(encoding="utf-8")

@@ -36,6 +36,12 @@
         "type": "bool",
         "default": true
       },
+      "send_calendar_as_file": {
+        "description": "将方舟日报作为文件发送",
+        "type": "bool",
+        "default": false,
+        "hint": "开启后，手动日报、强制刷新、历史日程和自动日报发送文件卡片而不是图片预览；需要点击文件查看原图。"
+      },
       "recurrence_default_display_count": {
         "description": "未复刻排行默认显示数量",
         "type": "string",

@@ -302,7 +302,7 @@ class ArkCalendarPlugin(Star):
             quality_notice = data_quality_notice(quality, self.messages)
             if quality_notice:
                 yield event.plain_result(quality_notice)
-            yield event.image_result(str(cached))
+            yield self._calendar_image_result(event, cached)
             return
         if self.image_manager.send_rendering_notice():
             yield event.plain_result(self.messages.text("rendering_started"))
@@ -314,7 +314,7 @@ class ArkCalendarPlugin(Star):
             image, image_state, fallback_manifest = await self.image_manager.get_calendar_image(snapshot, display_config)
             if image_state == "fallback":
                 yield event.plain_result(self.image_manager.fallback_notice(fallback_manifest, self.messages))
-            yield event.image_result(str(image))
+            yield self._calendar_image_result(event, image)
             await self.notification_manager.observe_health(outcome, "手动日历")
         except Exception:
             logger.error("生成方舟日历失败。", exc_info=True)
@@ -722,7 +722,7 @@ class ArkCalendarPlugin(Star):
             image, image_state, fallback_manifest = await self.image_manager.get_calendar_image(snapshot, display_config)
             if image_state == "fallback":
                 yield event.plain_result(self.image_manager.fallback_notice(fallback_manifest, self.messages))
-            yield event.image_result(str(image))
+            yield self._calendar_image_result(event, image)
             await self.notification_manager.observe_health(outcome, "管理员强制刷新")
         except Exception:
             logger.error("强制刷新方舟日历失败。", exc_info=True)
@@ -749,7 +749,7 @@ class ArkCalendarPlugin(Star):
             yield event.plain_result(self.messages.text("image_rendering_started"))
             snapshot = await self.service.historical_snapshot(target_day)
             image = await self.renderer.historical_calendar(snapshot)
-            yield event.image_result(str(image))
+            yield self._calendar_image_result(event, image)
         except Exception:
             logger.error("历史日程测试图片生成失败。", exc_info=True)
             yield event.plain_result(self.messages.text("historical_render_failed"))
@@ -791,6 +791,15 @@ class ArkCalendarPlugin(Star):
         ]
 
     # ── 配置读取（简化包装） ───────────────────────────────────
+
+    def _send_calendar_as_file(self) -> bool:
+        return bool(self._value("basic", "send_calendar_as_file", False))
+
+    def _calendar_image_result(self, event: AstrMessageEvent, image: Path | str):
+        if self._send_calendar_as_file():
+            path = Path(str(image))
+            return event.chain_result([Comp.File(name=path.name, file=str(path))])
+        return event.image_result(str(image))
 
     def _value(self, section: str, key: str, default: Any, legacy_key: str | None = None) -> Any:
         return config_value(self.config, section, key, default, legacy_key)
@@ -1329,7 +1338,10 @@ class ArkCalendarPlugin(Star):
                 logger.warning(f"定时方舟日报不支持主动投递至 SID {sid}。")
                 continue
             try:
-                components = [Comp.Plain(text=caption), Comp.Image.fromFileSystem(str(image))]
+                if self._send_calendar_as_file():
+                    components = [Comp.Plain(text=caption), Comp.File(name=Path(str(image)).name, file=str(image))]
+                else:
+                    components = [Comp.Plain(text=caption), Comp.Image.fromFileSystem(str(image))]
                 dispatched = await self.context.send_message(sid, MessageChain(components))
                 if dispatched is False:
                     failed.append(sid)

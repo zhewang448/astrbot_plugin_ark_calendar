@@ -342,8 +342,8 @@ class CalendarRenderer:
 
     @staticmethod
     def _pool_details(pools: list[dict]) -> list[dict]:
-        """详情区只展示已经有六星 UP 信息的卡池。"""
-        return [pool for pool in pools if pool.get("six_star_up")]
+        """详情区只展示已经获取到卡池 banner 的卡池。"""
+        return [pool for pool in pools if pool.get("detail_image")]
 
     async def _font_data_uri(self, charset: str) -> str:
         """优先返回子集 woff2；子集化不可用时回退到内嵌完整字体，保证不缺字。"""
