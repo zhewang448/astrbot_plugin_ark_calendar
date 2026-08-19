@@ -80,3 +80,37 @@ def test_bilibili_dynamic_logs_failed_image_download():
 
     assert asyncio.run(source._download_images(["https://i0.hdslb.com/bfs/new_dyn/test.jpg?token=secret"])) == []
     assert warnings == ["B站动态图片下载失败：https://i0.hdslb.com/bfs/new_dyn/test.jpg（AssetTooLarge）"]
+
+def test_bilibili_default_rsshub_instances_are_currently_usable_mirrors():
+    assert BilibiliDynamicSource.DEFAULT_RSSHUB_INSTANCES == [
+        "https://rsshub.liumingye.cn/bilibili/user/dynamic/161775300",
+        "https://rsshub-balancer.virworks.moe/bilibili/user/dynamic/161775300",
+    ]
+
+
+def test_bilibili_dynamic_merges_concurrent_mirrors_and_deduplicates_links():
+    class Http:
+        async def text(self, url, timeout):
+            assert timeout == 15
+            return {
+                "first": """<rss><channel>
+                    <item><title>旧动态</title><link>https://t.bilibili.com/1</link><guid>first-old</guid><pubDate>Wed, 19 Aug 2026 08:00:00 GMT</pubDate></item>
+                    <item><title>重复动态</title><link>https://t.bilibili.com/2</link><guid>first-shared</guid><pubDate>Wed, 19 Aug 2026 09:00:00 GMT</pubDate></item>
+                </channel></rss>""",
+                "second": """<rss><channel>
+                    <item><title>重复动态</title><link>https://t.bilibili.com/2</link><guid>second-shared</guid><pubDate>Wed, 19 Aug 2026 09:00:00 GMT</pubDate></item>
+                    <item><title>新动态</title><link>https://t.bilibili.com/3</link><guid>second-new</guid><pubDate>Wed, 19 Aug 2026 10:00:00 GMT</pubDate></item>
+                </channel></rss>""",
+            }[url]
+
+    source = BilibiliDynamicSource(Http(), None, SimpleNamespace())
+    source.rsshub_instances = ["first", "second"]
+
+    dynamics = asyncio.run(source.recent_dynamics(limit=3))
+
+    assert [dynamic["id"] for dynamic in dynamics] == [
+        "https://t.bilibili.com/3",
+        "https://t.bilibili.com/2",
+        "https://t.bilibili.com/1",
+    ]
+    assert source.last_fetch_ok is True

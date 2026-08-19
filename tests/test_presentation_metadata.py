@@ -57,7 +57,7 @@ def test_bilibili_config_order_and_video_delivery_description():
     schema = json.loads((ROOT / "_conf_schema.json").read_text(encoding="utf-8"))
     assert list(schema) == [
         "basic", "scheduled_report", "scheduled_birthday_greeting", "bilibili_dynamic",
-        "cache_and_render", "messages", "admin_notification", "data_sources",
+        "cache_and_render", "messages", "admin_notification", "data_sources", "developer_mode",
     ]
     items = schema["bilibili_dynamic"]["items"]
     assert list(items) == [
@@ -77,10 +77,42 @@ def test_unpublished_pool_display_config_defaults_to_enabled():
     assert item["default"] is True
     assert "方舟日报" in item["description"]
 
-    file_item = schema["basic"]["items"]["send_calendar_as_file"]
-    assert file_item["type"] == "bool"
-    assert file_item["default"] is False
-    assert "文件" in file_item["description"]
+    assert "send_calendar_as_file" not in schema["basic"]["items"]
+    developer_items = schema["developer_mode"]["items"]
+    assert developer_items["enabled"]["default"] is False
+    blank_height = developer_items["calendar_extra_blank_height"]
+    assert blank_height["default"] == 0
+    assert blank_height["condition"] == {"enabled": True}
+
+
+def test_calendar_template_uses_the_developer_blank_height():
+    template = (ROOT / "templates" / "calendar.html").read_text(encoding="utf-8")
+    assert "calendar_extra_blank_height" in template
+
+
+def test_calendar_extra_blank_height_requires_developer_mode():
+    from core.renderer import CalendarRenderer
+
+    class Service:
+        def __init__(self, enabled, height):
+            self.enabled = enabled
+            self.height = height
+
+        def value(self, section, key, default):
+            assert (section, key, default) == ("developer_mode", "enabled", False)
+            return self.enabled
+
+        def int_value(self, section, key, default, *, minimum, maximum):
+            assert (section, key, default, minimum, maximum) == (
+                "developer_mode", "calendar_extra_blank_height", 0, 0, 30000
+            )
+            return self.height
+
+    renderer = CalendarRenderer.__new__(CalendarRenderer)
+    renderer.service = Service(False, 1200)
+    assert renderer._calendar_extra_blank_height() == 0
+    renderer.service = Service(True, 1200)
+    assert renderer._calendar_extra_blank_height() == 1200
 
 
 def test_readme_links_to_split_documentation():

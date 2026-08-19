@@ -194,6 +194,28 @@ def test_pool_detail_cards_require_banner():
     assert renderer._pool_details([rendered_without_banner, rendered_with_banner]) == [rendered_with_banner]
 
 
+def test_core_selection_and_joint_operation_timeline_colors_are_distinct():
+    renderer = CalendarRenderer.__new__(CalendarRenderer)
+    renderer.COLORS = CalendarRenderer.COLORS
+    start = datetime(2026, 8, 18, 0, tzinfo=subscription_timezone())
+    end = datetime(2026, 8, 25, 0, tzinfo=subscription_timezone())
+    core_selection = TimelineItem(
+        id="core-selection", name="中坚甄选", category="gacha", item_type="中坚甄选",
+        start=start.isoformat(), end=end.isoformat(),
+    )
+    joint_operation = TimelineItem(
+        id="joint-operation", name="联合行动", category="gacha", item_type="联合行动",
+        start=start.isoformat(), end=end.isoformat(),
+    )
+
+    core_color = renderer._timeline(core_selection, start, end, start)["color"]
+    joint_color = renderer._timeline(joint_operation, start, end, start)["color"]
+
+    assert core_color == "#3c6680"
+    assert joint_color == "#b36d10"
+    assert core_color != joint_color
+
+
 def test_unpublished_pool_visibility_setting_filters_daily_report():
     renderer = CalendarRenderer.__new__(CalendarRenderer)
     start = "2026-08-18T04:00:00+08:00"
