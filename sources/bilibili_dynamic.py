@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime
 from email.utils import parsedate_to_datetime
 from urllib.parse import urlparse
@@ -19,8 +20,7 @@ class BilibiliDynamicSource:
     # RSSHub 公共实例（已验证可用，按优先级排序）
     DEFAULT_RSSHUB_INSTANCES = [
         "https://rsshub.liumingye.cn/bilibili/user/dynamic/161775300",
-        "https://rsshub.ktachibana.party/bilibili/user/dynamic/161775300",
-        "https://rsshub.pseudoyu.com/bilibili/user/dynamic/161775300",
+        "https://rsshub-balancer.virworks.moe/bilibili/user/dynamic/161775300",
     ]
     MAX_STATE_ITEMS = 500
     # B站会把多张图拼成长图，单张原图可能超过通用资源上限。
@@ -69,49 +69,63 @@ class BilibiliDynamicSource:
             - cached_images: 本地缓存的图片路径列表（仅当download_images=True）
             - dynamic_type: 动态类型（video/image/text/repost）
         """
-        xml = await self._fetch_rss()
-        if not xml:
+        feeds = await self._fetch_rss()
+        if not feeds:
             return []
 
-        soup = BeautifulSoup(xml, "xml")
-        items = soup.find_all("item")
+        dynamics_by_id: dict[str, dict] = {}
+        for xml in feeds:
+            soup = BeautifulSoup(xml, "xml")
+            for item in soup.find_all("item"):
+                try:
+                    dynamic = self._parse_item(item)
+                    if dynamic:
+                        # 镜像可能使用不同 GUID，但 B 站动态链接是稳定的唯一标识。
+                        dynamics_by_id.setdefault(dynamic["id"], dynamic)
+                except Exception:
+                    # 单条动态解析失败不影响其他动态
+                    continue
 
-        dynamics = []
-        for item in items[:limit]:
-            try:
-                dynamic = self._parse_item(item)
-                if dynamic:
-                    if download_images and dynamic["images"]:
-                        dynamic["cached_images"] = await self._download_images(dynamic["images"])
-                    else:
-                        dynamic["cached_images"] = []
-
-                    dynamics.append(dynamic)
-            except Exception:
-                # 单条动态解析失败不影响其他动态
-                continue
-
+        dynamics = sorted(
+            dynamics_by_id.values(),
+            key=lambda dynamic: dynamic["pub_date"] or datetime.min.replace(tzinfo=CN_TZ),
+            reverse=True,
+        )[:limit]
+        for dynamic in dynamics:
+            if download_images and dynamic["images"]:
+                dynamic["cached_images"] = await self._download_images(dynamic["images"])
+            else:
+                dynamic["cached_images"] = []
         return dynamics
 
-    async def _fetch_rss(self) -> str:
-        """获取RSS XML内容，失败时尝试备用镜像站。"""
-        for url in self.rsshub_instances:
-            try:
-                xml = await self.http.text(url, timeout=15)
-                if xml and BeautifulSoup(xml, "xml").find("item"):
-                    self.last_fetch_ok = True
-                    self.last_error = ""
-                    self.last_success_at = datetime.now(CN_TZ)
-                    self.consecutive_failures = 0
-                    return xml
-            except Exception as exc:
-                self.last_error = str(exc)
-                self.last_failed_instance = url
-                self.consecutive_failures += 1
-                continue
+    async def _fetch_rss(self) -> list[str]:
+        """并发获取全部 RSSHub 镜像，保留每个有效源的内容。"""
+        urls = tuple(dict.fromkeys(self.rsshub_instances))
+        results = await asyncio.gather(
+            *(self.http.text(url, timeout=15) for url in urls),
+            return_exceptions=True,
+        )
+        feeds: list[str] = []
+        failures: list[tuple[str, Exception]] = []
+        for url, result in zip(urls, results):
+            if isinstance(result, Exception):
+                failures.append((url, result))
+            elif result and BeautifulSoup(result, "xml").find("item"):
+                feeds.append(result)
+
+        if feeds:
+            self.last_fetch_ok = True
+            self.last_error = ""
+            self.last_success_at = datetime.now(CN_TZ)
+            self.consecutive_failures = 0
+            return feeds
 
         self.last_fetch_ok = False
-        return ""
+        self.consecutive_failures += 1
+        if failures:
+            self.last_failed_instance, error = failures[-1]
+            self.last_error = str(error)
+        return []
 
     async def hydrate_images(self, dynamic: dict) -> dict:
         """为已确认需要投递的动态下载图片。"""
@@ -134,7 +148,7 @@ class BilibiliDynamicSource:
 
         title = title_tag.get_text(strip=True)
         link = link_tag.get_text(strip=True)
-        dynamic_id = guid_tag.get_text(strip=True)
+        dynamic_id = link
 
         # 解析发布时间
         pub_date = None

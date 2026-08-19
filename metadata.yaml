@@ -2,7 +2,7 @@ name: astrbot_plugin_ark_calendar
 display_name: 罗德岛行动终端
 desc: 明日方舟行动日报与工具插件：生成罗德岛风格活动、寻访与作战长图，支持生日查询、活动订阅、B站动态查询与推送、公开招募计算、自动日报和生日祝贺。
 short_desc: 明日方舟日历、订阅、B站动态与公开招募计算。
-version: v0.9.4
+version: v0.9.5
 author: bushikq
 repo: https://github.com/zhewang448/astrbot_plugin_ark_calendar
 social_link: https://github.com/zhewang448

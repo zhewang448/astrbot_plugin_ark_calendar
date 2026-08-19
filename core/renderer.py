@@ -21,7 +21,7 @@ SOURCE_FONT_ASSET = "SourceHanSerifCN-Medium-6.otf"
 
 
 class CalendarRenderer:
-    COLORS = {"event": "#087c92", "登录活动": "#f5c335", "限定寻访": "#c83e43", "标准寻访": "#7555a0", "中坚寻访": "#3c6680", "单人寻访": "#8a5c49", "联动寻访": "#c83e43"}
+    COLORS = {"event": "#087c92", "登录活动": "#f5c335", "限定寻访": "#c83e43", "标准寻访": "#7555a0", "中坚寻访": "#3c6680", "中坚甄选": "#3c6680", "联合行动": "#b36d10", "单人寻访": "#8a5c49", "联动寻访": "#c83e43"}
 
     def __init__(self, plugin, service):
         self.plugin = plugin
@@ -76,6 +76,7 @@ class CalendarRenderer:
             "hero": hero,
             "show_footer": self.service.value("basic", "show_source_footer", True, "show_source_footer"),
             "pool_detail_cards": bool(self.service.value("basic", "pool_detail_cards", True, "pool_detail_cards")),
+            "calendar_extra_blank_height": self._calendar_extra_blank_height(),
             "historical": historical,
         }
         # 字体子集要按最终数据里出现的字形来裁，所以放在 data 组装之后。
@@ -90,6 +91,18 @@ class CalendarRenderer:
         if self.service.show_unpublished_pools():
             return list(pools)
         return [pool for pool in pools if not pool.item_type.startswith("未公布")]
+
+    def _calendar_extra_blank_height(self) -> int:
+        """返回开发者测试用的日报底部额外空白高度。"""
+        if not bool(self.service.value("developer_mode", "enabled", False)):
+            return 0
+        return self.service.int_value(
+            "developer_mode",
+            "calendar_extra_blank_height",
+            0,
+            minimum=0,
+            maximum=30000,
+        )
 
     async def bilibili_dynamic(
         self,
@@ -342,8 +355,8 @@ class CalendarRenderer:
 
     @staticmethod
     def _pool_details(pools: list[dict]) -> list[dict]:
-        """详情区只展示已经有六星 UP 信息的卡池。"""
-        return [pool for pool in pools if pool.get("six_star_up")]
+        """详情区只展示已经获取到卡池 banner 的卡池。"""
+        return [pool for pool in pools if pool.get("detail_image")]
 
     async def _font_data_uri(self, charset: str) -> str:
         """优先返回子集 woff2；子集化不可用时回退到内嵌完整字体，保证不缺字。"""

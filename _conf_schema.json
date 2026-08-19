@@ -740,5 +740,31 @@
       }
     },
     "hint": "仅在数据源不可访问、需要代理或使用镜像时修改。"
+  },
+  "developer_mode": {
+    "description": "开发者模式",
+    "type": "object",
+    "hint": "警告：仅供开发与排查图片效果时使用。普通用户请勿开启或修改本组配置，异常设置可能导致图片过大、渲染缓慢或渲染失败。",
+    "items": {
+      "enabled": {
+        "description": "启用开发者模式",
+        "type": "bool",
+        "default": false
+      },
+      "calendar_extra_blank_height": {
+        "description": "日报底部额外空白高度（px）",
+        "type": "int",
+        "default": 0,
+        "slider": {
+          "min": 0,
+          "max": 30000,
+          "step": 100
+        },
+        "hint": "仅用于测试。0 表示不追加；填写正整数后，在日报和历史日程底部追加对应高度的空白区域。原有内容、字体和 1440px 宽度均保持不变。",
+        "condition": {
+          "enabled": true
+        }
+      }
+    }
   }
 }

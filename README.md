@@ -10,7 +10,7 @@
 
 明日方舟信息聚合与查询插件。插件聚合 PRTS、anything-ics、Torappu 与 ArknightsGachaData，生成罗德岛风格的活动、寻访和作战图片，并提供订阅、生日、B站动态和公开招募工具。
 
-当前版本：`v0.9.4`
+当前版本：`v0.9.5`
 
 ## 文档导航
 
@@ -82,6 +82,12 @@
   <img src="assets/readme/command-manual.webp" alt="罗德岛终端手册预览" width="900">
 </p>
 </details>
+
+QQ 手机端可能会对较短的长图采用不同的预览缩放策略，导致文字看起来不清晰。实测表明，在宽度、字体和渲染设置不变时，增加图片总高度可能改善手机端显示效果。如需提高原始输出质量，请使用 PNG 并将渲染清晰度设为 `high` 或 `ultra`。
+
+## 问题反馈
+
+欢迎通过 [GitHub Issue](https://github.com/zhewang448/astrbot_plugin_ark_calendar/issues) 反馈问题、提出功能建议或分享使用体验。尽量附上相关日志。
 
 ## 🙏 致谢
 

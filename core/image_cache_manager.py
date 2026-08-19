@@ -61,6 +61,10 @@ class CalendarImageManager:
             "show_source_footer": config_value(self.config, "basic", "show_source_footer", True, "show_source_footer"),
             "pool_detail_cards": config_value(self.config, "basic", "pool_detail_cards", True, "pool_detail_cards"),
             "show_unpublished_pools": self.service.show_unpublished_pools(),
+            "developer_mode_enabled": config_value(self.config, "developer_mode", "enabled", False),
+            "calendar_extra_blank_height": config_value(
+                self.config, "developer_mode", "calendar_extra_blank_height", 0
+            ),
         }
 
     # ── 图片获取入口 ───────────────────────────────────────────
