@@ -117,8 +117,16 @@ class GachaSource:
             match = self._match_overview(pool_start, pool_end, overview, pool_name)
             if match and match.get("six"):
                 six = match["six"]
+            # ArknightsGachaData 维护了带期数的正式名称（例如“中坚甄选-第一十四期”）。
+            # PRTS 的卡池一览名称有时会被压缩成“甄选14”“联合行动23”等短名，
+            # 因此只有在正式名称缺失或属于占位值时，才用 PRTS 名称补齐。
             display_name = legacy.get("name") or raw_pool.get("gachaPoolName", "")
-            if match and match.get("name") and not self._is_placeholder_name(match.get("name")):
+            if (
+                self._is_placeholder_name(display_name)
+                and match
+                and match.get("name")
+                and not self._is_placeholder_name(match.get("name"))
+            ):
                 display_name = match["name"]
             unpublished = self._is_placeholder_name(display_name)
             if unpublished:

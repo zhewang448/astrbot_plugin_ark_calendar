@@ -93,6 +93,60 @@ def test_overview_can_confirm_joint_operation_name():
     assert pools[0]["six"] == ["干员甲", "干员乙"]
 
 
+def test_formal_legacy_name_wins_over_prts_short_name():
+    source = GachaSource(FakeHttp({"gachaPoolClient": [_torappu_pool()]}, {
+        "pool": {
+            "NORM_76_0_3": {
+                "id": "NORM_76_0_3",
+                "name": "联合行动-第二十三期",
+                "type": "NORMAL",
+                "start": 1787040000,
+                "end": 1788206399,
+            }
+        }
+    }), "pool_info.json")
+    start = datetime(2026, 8, 18, 0, 0, tzinfo=CN_TZ)
+    end = datetime(2026, 9, 2, 0, 0, tzinfo=CN_TZ)
+    overview = [{
+        "name": "联合行动23",
+        "start": "2026-08-18 16:00",
+        "end": "2026-09-01 03:59",
+        "six": [],
+        "image": "",
+    }]
+
+    pools = asyncio.run(source.pools(start, end, overview))
+
+    assert pools[0]["name"] == "联合行动-第二十三期"
+
+
+def test_formal_selection_name_wins_over_prts_short_name():
+    source = GachaSource(FakeHttp({"gachaPoolClient": [_torappu_pool()]}, {
+        "pool": {
+            "NORM_76_0_3": {
+                "id": "NORM_76_0_3",
+                "name": "中坚甄选-第一十四期",
+                "type": "FESCLASSIC",
+                "start": 1787040000,
+                "end": 1788206399,
+            }
+        }
+    }), "pool_info.json")
+    start = datetime(2026, 8, 18, 0, 0, tzinfo=CN_TZ)
+    end = datetime(2026, 9, 2, 0, 0, tzinfo=CN_TZ)
+    overview = [{
+        "name": "甄选14",
+        "start": "2026-08-18 16:00",
+        "end": "2026-09-01 03:59",
+        "six": [],
+        "image": "",
+    }]
+
+    pools = asyncio.run(source.pools(start, end, overview))
+
+    assert pools[0]["name"] == "中坚甄选-第一十四期"
+
+
 def test_numeric_overview_name_does_not_replace_formal_name():
     source = GachaSource(FakeHttp({"gachaPoolClient": [_torappu_pool()]}, {
         "pool": {
