@@ -10,6 +10,8 @@ import astrbot.api.message_components as Comp
 from astrbot.api import logger
 from astrbot.api.event import MessageChain
 
+from .bilibili_media import extract_bilibili_video_url
+from .parser_bridge import fetch_video_path
 from .platform_utils import platform_supports_proactive_send
 
 if TYPE_CHECKING:
@@ -32,6 +34,7 @@ class BilibiliDynamicManager:
         config: dict[str, Any],
         renderer: Any | None = None,
         require_baseline: bool = False,
+        notification_manager: Any | None = None,
     ) -> None:
         """初始化管理器。
 
@@ -44,6 +47,7 @@ class BilibiliDynamicManager:
         self.context = context
         self.config = config
         self.renderer = renderer
+        self.notification_manager = notification_manager
         self._push_lock = asyncio.Lock()
         self._baseline_ready = not require_baseline
 
@@ -313,6 +317,8 @@ class BilibiliDynamicManager:
                     if hydrate_images:
                         dynamic = await hydrate_images(dynamic)
                     pending_targets = record.get("targets", {})
+                    parser_video_path = await self._get_parser_video_path(dynamic, pending_targets)
+                    video_failures: list[str] = []
                     for sid, delivered in pending_targets.items():
                         if delivered:
                             continue
@@ -328,6 +334,9 @@ class BilibiliDynamicManager:
                                 logger.warning(f"B站动态未投递：动态={dyn_id}，目标={sid}")
                                 continue
                             await self._send_forward_images(dynamic, sid)
+                            await self._send_parser_video(
+                                dynamic, sid, parser_video_path, video_failures
+                            )
                             pending_targets[sid] = True
                             sent_count += 1
                             await asyncio.sleep(0.5)  # 限流
@@ -335,6 +344,8 @@ class BilibiliDynamicManager:
                             logger.error(f"B站动态推送失败：动态={dyn_id}，目标={sid}", exc_info=True)
                             failed_count += 1
 
+                    if video_failures:
+                        await self._notify_video_send_failed(dynamic, video_failures)
                     self.source.save_state(state)
 
                 logger.info(f"B站动态推送完成：成功 {sent_count} 次投递，失败 {failed_count} 次。")
@@ -478,6 +489,76 @@ class BilibiliDynamicManager:
                 logger.warning("B站动态原图合并转发未投递：目标=%s", target_sid)
         except Exception:
             logger.warning("B站动态原图合并转发失败：目标=%s", target_sid, exc_info=True)
+
+    def _video_via_parser_enabled(self) -> bool:
+        """读取“视频动态额外发送视频文件”开关。"""
+        return bool(
+            self.config.get("bilibili_dynamic", {}).get("send_video_via_parser", False)
+        )
+
+    async def _get_parser_video_path(
+        self,
+        dynamic: dict[str, Any],
+        pending_targets: Any,
+    ):
+        """同一条视频动态只解析下载一次，多个目标复用本地文件。"""
+        if not pending_targets or not self._video_via_parser_enabled():
+            return None
+        if dynamic.get("dynamic_type") != "video":
+            return None
+
+        video_url = extract_bilibili_video_url(str(dynamic.get("description_html", "") or ""))
+        if not video_url:
+            logger.debug("B站视频动态未提取到可解析的视频链接。")
+            return None
+        return await fetch_video_path(self.context, video_url)
+
+    async def _send_parser_video(
+        self,
+        dynamic: dict[str, Any],
+        target_sid: str,
+        video_path,
+        failures: list[str],
+    ) -> None:
+        """在图文推送成功后尝试单独发送视频；失败不回滚图文。"""
+        if video_path is None:
+            if self._video_via_parser_enabled() and dynamic.get("dynamic_type") == "video":
+                if target_sid not in failures:
+                    failures.append(target_sid)
+            return
+        try:
+            dispatched = await self.context.send_message(
+                target_sid,
+                MessageChain([Comp.Video.fromFileSystem(str(video_path))]),
+            )
+            if dispatched is False:
+                logger.warning("B站动态视频未投递：目标=%s", target_sid)
+                if target_sid not in failures:
+                    failures.append(target_sid)
+        except Exception:
+            logger.warning("B站动态视频发送失败：目标=%s", target_sid, exc_info=True)
+            if target_sid not in failures:
+                failures.append(target_sid)
+
+    async def _notify_video_send_failed(
+        self,
+        dynamic: dict[str, Any],
+        failures: list[str],
+    ) -> None:
+        """按动态聚合上报视频失败，避免多群失败重复刷屏。"""
+        if not self.notification_manager:
+            return
+        unique_targets = list(dict.fromkeys(str(sid) for sid in failures if str(sid)))
+        if not unique_targets:
+            return
+        title = str(dynamic.get("title", "") or "官方动态").strip() or "官方动态"
+        await self.notification_manager.notify(
+            "【B站动态视频发送失败】\n"
+            f"动态：{title}\n"
+            f"失败目标：{'、'.join(unique_targets)}\n"
+            "图文推送已保留；请检查 astrbot_plugin_parser 及其 B站解析器配置。",
+            "bilibili_video_send_failed",
+        )
 
     async def build_list_components(self, dynamics: list[dict[str, Any]]) -> list:
         """将动态列表渲染为图片，失败时回退为简洁文本。"""

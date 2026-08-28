@@ -1,4 +1,5 @@
 import json
+import re
 from pathlib import Path
 
 from core.messages import PROFILES
@@ -53,6 +54,19 @@ def test_message_previews_cover_the_current_builtin_message_profiles():
         assert items[preview_key]["default"] == expected
 
 
+def test_release_version_is_aligned_across_metadata_readme_and_changelog():
+    metadata = (ROOT / "metadata.yaml").read_text(encoding="utf-8")
+    match = re.search(r"^version:\s*v?(\d+\.\d+\.\d+)\s*$", metadata, re.MULTILINE)
+    assert match is not None
+    version = match.group(1)
+
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    assert f"当前版本：`v{version}`" in readme
+
+    changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+    assert re.search(rf"^## {re.escape(version)} - \d{{4}}-\d{{2}}-\d{{2}}$", changelog, re.MULTILINE)
+
+
 def test_bilibili_config_order_and_video_delivery_description():
     schema = json.loads((ROOT / "_conf_schema.json").read_text(encoding="utf-8"))
     assert list(schema) == [
@@ -62,9 +76,14 @@ def test_bilibili_config_order_and_video_delivery_description():
     items = schema["bilibili_dynamic"]["items"]
     assert list(items) == [
         "push_enabled", "target_sid_list", "check_interval_minutes", "push_types",
-        "render_image_count_threshold", "use_forward_on_qq", "list_default_count", "rsshub_base_url",
+        "send_video_via_parser", "render_image_count_threshold", "use_forward_on_qq",
+        "list_default_count", "rsshub_base_url",
     ]
-    assert "不下载或发送视频文件" in items["push_types"]["hint"]
+    assert "转发动态优先按转发分类" in items["push_types"]["hint"]
+    video_item = items["send_video_via_parser"]
+    assert video_item["type"] == "bool"
+    assert video_item["default"] is False
+    assert "astrbot_plugin_parser" in video_item["hint"]
     render_items = schema["cache_and_render"]["items"]
     assert "公招图、B站动态图和未复刻排行图" in render_items["render_device_scale_factor_level"]["hint"]
     assert "公招图、B站动态图和未复刻排行图始终使用 PNG" in render_items["render_image_type"]["hint"]

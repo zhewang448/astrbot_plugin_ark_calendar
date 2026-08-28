@@ -10,7 +10,7 @@
 
 明日方舟信息聚合与查询插件。插件聚合 PRTS、anything-ics、Torappu 与 ArknightsGachaData，生成罗德岛风格的活动、寻访和作战图片，并提供订阅、生日、B站动态和公开招募工具。
 
-当前版本：`v0.9.6`
+当前版本：`v0.9.7`
 
 ## 文档导航
 
@@ -23,7 +23,7 @@
 
 - 今日作战信息、活动与寻访时间轴、卡池详情和干员生日。
 - 活动与卡池订阅提醒，支持群聊 @ 行为。
-- 官方 B站动态查询与推送，支持文字、图片、视频动态和转发筛选。
+- 官方 B站动态查询与推送，支持文字、图片、视频动态和转发筛选；视频动态可选借助 [astrbot_plugin_parser](https://github.com/Zhalslar/astrbot_plugin_parser) 下载并发送视频文件。
 - 公开招募标签计算、别名识别和招募终端图片；按游戏内 9 小时规则计算保底，支持不限制输入词条数量。
 - 公招参数为 `all` 或 `*` 时触发阿米娅彩蛋，不渲染图片。
 - 干员未复刻排行榜：按最近一次出率提升寻访结束时间统计，并展示商店兑换历史。
@@ -36,6 +36,7 @@
 1. 将插件目录放入 AstrBot 的 `data/plugins/`。
 2. 在 WebUI 安装依赖并启用插件。
 3. 发送 `/方舟日历帮助`（或 `/方舟终端帮助`、`/明日方舟终端帮助`）查看当前指令和配置说明。
+4. 如需视频动态附带发送视频文件，另安装并启用 [astrbot_plugin_parser](https://github.com/Zhalslar/astrbot_plugin_parser)，再开启本插件“视频动态附带发送视频”。
 
 详细安装要求、T2I 服务和运行目录见[安装、文案与运行数据](docs/operation.md)。
 
@@ -98,5 +99,6 @@ QQ 手机端可能会对较短的长图采用不同的预览缩放策略，导�
 - [Torappu / Arknights Asset Storage](https://torappu.prts.wiki/gamedata/latest/excel/gacha_table.json)：最新卡池开关时间、规则类型和卡池 ID。
 - [ArknightsGachaData](https://github.com/s-yh-china/ArknightsGachaData)：补充正式名称、历史类型和 ID，并作为时间轴回退源。
 - [PRTS Gacha Server Data](https://weedy.prts.wiki/)：补全卡池六星 UP 信息。
+- [astrbot_plugin_parser](https://github.com/Zhalslar/astrbot_plugin_parser)：为 B站视频动态提供可选的视频解析与下载能力。
 
 本插件使用的游戏图片版权属于上海鹰角网络科技有限公司及其关联公司；PRTS 页面内容遵循其站点声明。本项目仅用于非商业信息展示。

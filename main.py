@@ -226,6 +226,7 @@ class ArkCalendarPlugin(Star):
             config=self.config,
             renderer=self.renderer,
             require_baseline=True,
+            notification_manager=self.notification_manager,
         )
         # 建立动态历史基线依赖外部 RSSHub，不能阻塞插件加载。
         self._bilibili_baseline_task = asyncio.create_task(

@@ -31,6 +31,14 @@ def _install_astrbot_stubs() -> None:
         def __init__(self, path: str):
             self.path = path
 
+    class Video:
+        @classmethod
+        def fromFileSystem(cls, path: str):
+            return cls(path)
+
+        def __init__(self, path: str):
+            self.path = path
+
     class MessageChain(list):
         pass
 
@@ -43,6 +51,7 @@ def _install_astrbot_stubs() -> None:
             self.nodes = nodes
 
     components.Plain = Plain
+    components.Video = Video
     components.Image = Image
     event.MessageChain = MessageChain
     platform.MessageType = SimpleNamespace(GROUP_MESSAGE=SimpleNamespace(value="Group"))
@@ -414,3 +423,93 @@ def test_new_target_does_not_receive_previously_detected_dynamic(monkeypatch):
     assert asyncio.run(manager.check_and_push()) == (0, 0)
     assert sent == ["p:Group:1"]
     assert source.state["dynamics"]["target-change"] == {"state": "ignored"}
+
+
+def test_auto_push_sends_parser_video(monkeypatch, tmp_path):
+    sent = []
+    video_file = tmp_path / "video.mp4"
+    video_file.write_bytes(b"video")
+
+    class Context:
+        async def send_message(self, sid, chain):
+            sent.append((sid, chain))
+            return True
+
+    async def fake_fetch_video_path(_context, video_url):
+        assert video_url == "https://www.bilibili.com/video/BV1videoTest"
+        return video_file
+
+    monkeypatch.setattr(bilibili_manager, "fetch_video_path", fake_fetch_video_path)
+    source = FakeSource([{
+        "id": "video", "dynamic_type": "video", "title": "视频动态",
+        "description_text": "视频链接：https://www.bilibili.com/video/BV1videoTest",
+        "description_html": '<a href="https://www.bilibili.com/video/BV1videoTest">视频</a>',
+        "link": "https://example.invalid/dynamic",
+    }])
+    manager = bilibili_manager.BilibiliDynamicManager(
+        source,
+        Context(),
+        {
+            "bilibili_dynamic": {
+                "push_enabled": True,
+                "target_sid_list": ["p:Group:1"],
+                "push_types": ["video"],
+                "send_video_via_parser": True,
+            }
+        },
+    )
+    monkeypatch.setattr(bilibili_manager, "platform_supports_proactive_send", lambda *_: True)
+
+    assert asyncio.run(manager.check_and_push()) == (1, 0)
+    assert len(sent) == 2
+    assert sent[1][1][0].path == str(video_file)
+    assert source.state["dynamics"]["video"]["targets"] == {"p:Group:1": True}
+
+
+def test_auto_push_aggregates_parser_video_failures(monkeypatch):
+    sent = []
+    notifications = []
+
+    class Context:
+        async def send_message(self, sid, _chain):
+            sent.append(sid)
+            return True
+
+    class Notifier:
+        async def notify(self, text, event):
+            notifications.append((text, event))
+
+    async def fake_fetch_video_path(_context, _video_url):
+        return None
+
+    monkeypatch.setattr(bilibili_manager, "fetch_video_path", fake_fetch_video_path)
+    source = FakeSource([{
+        "id": "video", "dynamic_type": "video", "title": "视频动态",
+        "description_html": '<a href="https://www.bilibili.com/video/BV1videoTest">视频</a>',
+        "link": "https://example.invalid/dynamic",
+    }])
+    manager = bilibili_manager.BilibiliDynamicManager(
+        source,
+        Context(),
+        {
+            "bilibili_dynamic": {
+                "push_enabled": True,
+                "target_sid_list": ["p:Group:1", "p:Group:2"],
+                "push_types": ["video"],
+                "send_video_via_parser": True,
+            }
+        },
+        notification_manager=Notifier(),
+    )
+    monkeypatch.setattr(bilibili_manager, "platform_supports_proactive_send", lambda *_: True)
+
+    assert asyncio.run(manager.check_and_push()) == (2, 0)
+    assert len(sent) == 2
+    assert len(notifications) == 1
+    text, event = notifications[0]
+    assert event == "bilibili_video_send_failed"
+    assert "p:Group:1、p:Group:2" in text
+    assert source.state["dynamics"]["video"]["targets"] == {
+        "p:Group:1": True,
+        "p:Group:2": True,
+    }
