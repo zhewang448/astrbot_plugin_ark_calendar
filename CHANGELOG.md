@@ -8,7 +8,7 @@
 
 ### 新增
 
-- **B站视频动态文件推送。** 新增 `bilibili_dynamic.send_video_via_parser`（默认关闭）。视频动态在图文摘要推送成功后，可借助 [astrbot_plugin_parser](https://github.com/Zhalslar/astrbot_plugin_parser) 下载并发送视频文件；同一条动态的多个目标复用同一份视频文件，解析、下载或投递失败不影响图文推送。
+- **B站视频动态文件推送。** 新增 `bilibili_dynamic.send_video_via_parser`（默认关闭）。视频动态在 `/方舟动态 <编号>` 查询和定时推送的图文摘要之后，可借助 [astrbot_plugin_parser](https://github.com/Zhalslar/astrbot_plugin_parser) 下载并发送视频文件；同一条动态的多个目标复用同一份视频文件，解析、下载或投递失败不影响图文推送。
 - **视频推送失败聚合通知。** 同一条视频动态在多个会话发送失败时，按动态聚合为一次管理员通知，避免重复刷屏；需启用管理员异常通知。
 - **视频分类口径对齐。** 按 RSS 内容结构识别 B站视频链接，转发动态优先按转发分类；共享同一套链接提取逻辑，确保分类与实际发送使用同一链接。
 

@@ -513,3 +513,45 @@ def test_auto_push_aggregates_parser_video_failures(monkeypatch):
         "p:Group:1": True,
         "p:Group:2": True,
     }
+
+
+def test_manual_query_builds_parser_video_components(monkeypatch, tmp_path):
+    video_file = tmp_path / "manual.mp4"
+    video_file.write_bytes(b"video")
+
+    async def fake_fetch_video_path(_context, video_url):
+        assert video_url == "https://www.bilibili.com/video/BV1videoTest"
+        return video_file
+
+    monkeypatch.setattr(bilibili_manager, "fetch_video_path", fake_fetch_video_path)
+    manager = bilibili_manager.BilibiliDynamicManager(
+        FakeSource([]),
+        SimpleNamespace(),
+        {
+            "bilibili_dynamic": {
+                "send_video_via_parser": True,
+            }
+        },
+    )
+    dynamic = {
+        "dynamic_type": "video",
+        "description_html": '<a href="https://www.bilibili.com/video/BV1videoTest">视频</a>',
+    }
+
+    components = asyncio.run(manager.build_parser_video_components(dynamic, "p:Group:1"))
+    assert len(components) == 1
+    assert components[0].path == str(video_file)
+
+
+def test_manual_query_skips_parser_video_when_disabled():
+    manager = bilibili_manager.BilibiliDynamicManager(
+        FakeSource([]),
+        SimpleNamespace(),
+        {"bilibili_dynamic": {"send_video_via_parser": False}},
+    )
+    dynamic = {
+        "dynamic_type": "video",
+        "description_html": '<a href="https://www.bilibili.com/video/BV1videoTest">视频</a>',
+    }
+
+    assert asyncio.run(manager.build_parser_video_components(dynamic, "p:Group:1")) == []

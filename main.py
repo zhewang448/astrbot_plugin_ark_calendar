@@ -554,6 +554,11 @@ class ArkCalendarPlugin(Star):
                 )
                 if forward_components:
                     yield event.chain_result(forward_components)
+                video_components = await self.bilibili_manager.build_parser_video_components(
+                    dynamic, event.unified_msg_origin
+                )
+                if video_components:
+                    yield event.chain_result(video_components)
 
         except Exception:
             logger.error("查询B站动态失败。", exc_info=True)

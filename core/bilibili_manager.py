@@ -513,6 +513,22 @@ class BilibiliDynamicManager:
             return None
         return await fetch_video_path(self.context, video_url)
 
+    async def build_parser_video_components(self, dynamic: dict[str, Any], target_sid: str) -> list:
+        """手动查询时构建 parser 视频组件；未开启或解析失败返回空列表。"""
+        if not self._video_via_parser_enabled() or dynamic.get("dynamic_type") != "video":
+            return []
+
+        video_path = await self._get_parser_video_path(dynamic, [target_sid])
+        if video_path is None:
+            logger.warning("B站动态查询视频解析失败：目标=%s", target_sid)
+            return []
+
+        try:
+            return [Comp.Video.fromFileSystem(str(video_path))]
+        except Exception:
+            logger.warning("B站动态查询视频组件构造失败：目标=%s", target_sid, exc_info=True)
+            return []
+
     async def _send_parser_video(
         self,
         dynamic: dict[str, Any],
