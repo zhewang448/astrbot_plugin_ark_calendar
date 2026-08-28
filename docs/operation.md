@@ -10,6 +10,8 @@
 - Python 3.10 或更高版本
 - 能访问配置的数据源和 T2I 渲染服务的网络
 
+如需 B站视频动态附带发送视频文件，另安装并启用 [astrbot_plugin_parser](https://github.com/Zhalslar/astrbot_plugin_parser)，并在其 B站解析器中配置清晰度、编码、Cookie、时长限制和缓存。
+
 插件使用 AstrBot 系统配置中的 `t2i_strategy` 和 `t2i_endpoint` 生成 HTML 图片。远程 T2I 的网络延迟、排队和长图尺寸都会影响首次渲染耗时。需要减少远程延迟时，可部署 [AstrBot T2I Service](https://github.com/AstrBotDevs/astrbot-t2i-service)。
 
 ## 消息文案

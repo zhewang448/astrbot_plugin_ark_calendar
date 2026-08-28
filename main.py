@@ -226,6 +226,7 @@ class ArkCalendarPlugin(Star):
             config=self.config,
             renderer=self.renderer,
             require_baseline=True,
+            notification_manager=self.notification_manager,
         )
         # 建立动态历史基线依赖外部 RSSHub，不能阻塞插件加载。
         self._bilibili_baseline_task = asyncio.create_task(
@@ -553,6 +554,11 @@ class ArkCalendarPlugin(Star):
                 )
                 if forward_components:
                     yield event.chain_result(forward_components)
+                video_components = await self.bilibili_manager.build_parser_video_components(
+                    dynamic, event.unified_msg_origin
+                )
+                if video_components:
+                    yield event.chain_result(video_components)
 
         except Exception:
             logger.error("查询B站动态失败。", exc_info=True)

@@ -10,6 +10,11 @@ from bs4 import BeautifulSoup
 
 from .http import HttpClient
 
+try:
+    from ..core.bilibili_media import extract_bilibili_video_url
+except ImportError:  # 兼容测试环境按顶层包导入
+    from core.bilibili_media import extract_bilibili_video_url
+
 CN_TZ = ZoneInfo("Asia/Shanghai")
 
 
@@ -169,7 +174,7 @@ class BilibiliDynamicSource:
         description_text, images = self._parse_description(description_html)
 
         # 判断动态类型
-        dynamic_type = self._classify_dynamic(title, description_text, images)
+        dynamic_type = self._classify_dynamic(title, description_text, images, html=description_html)
 
         return {
             "id": dynamic_id,
@@ -201,18 +206,19 @@ class BilibiliDynamicSource:
 
         return text, images
 
-    def _classify_dynamic(self, title: str, text: str, images: list[str] | None = None) -> str:
-        """根据标题和内容判断动态类型。"""
-        combined = f"{title} {text}".lower()
+    def _classify_dynamic(self, title: str, text: str, images: list[str] | None = None, html: str = "") -> str:
+        """按 RSS 内容结构判断动态类型。
 
-        if any(keyword in combined for keyword in ["pv", "预告", "宣传片"]):
-            return "video"
-        elif images or any(keyword in combined for keyword in ["立绘", "时装", "皮肤"]):
-            return "image"
-        elif any(keyword in combined for keyword in ["转发", "@", "互动"]):
+        转发优先于视频，避免转发 PV 被误判为官方视频动态；
+        视频判断复用共享提取器，保证分类结果与后续发送使用同一个链接。
+        """
+        if "//转发自:" in text or "转发自: @" in text:
             return "repost"
-        else:
-            return "text"
+        if extract_bilibili_video_url(html):
+            return "video"
+        if images:
+            return "image"
+        return "text"
 
     @staticmethod
     def format_relative_time(pub_date: datetime | None) -> str:
