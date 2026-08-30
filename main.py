@@ -36,6 +36,7 @@ from .core.status_formatter import (
 )
 from .core.subscription import Subscription, SubscriptionManager
 from .core.bilibili_manager import BilibiliDynamicManager
+from .core.ai_tools import TOOL_NAMES, build_ai_tools
 from .core.recruitment_calculator import (
     RECRUITMENT_EASTER_EGG_MESSAGE,
     RecruitmentCalculator,
@@ -208,6 +209,7 @@ class ArkCalendarPlugin(Star):
         self._daily_precache_time = "04:00"
         self._startup_precache_task: asyncio.Task[None] | None = None
         self._bilibili_baseline_task: asyncio.Task[None] | None = None
+        self._ai_tools_registered = False
 
     async def initialize(self) -> None:
         await self.service.initialize()
@@ -235,6 +237,7 @@ class ArkCalendarPlugin(Star):
         )
         # 创建公招数据源
         self.recruitment_source = RecruitmentSource(http=self.service.http)
+        self._register_ai_tools()
         self._initialize_scheduler()
         # 重载后的图片预热：默认开启，让首次帮助命令直接命中缓存。
         # v0.8.2 起帮助图请求体已降到 1.35 MB，预热不再明显影响 AstrBot 前端；
@@ -247,6 +250,7 @@ class ArkCalendarPlugin(Star):
         logger.info(f"罗德岛行动终端插件 v{self.service.plugin_version} 已初始化。")
 
     async def terminate(self) -> None:
+        self._unregister_ai_tools()
         if self._bilibili_baseline_task and not self._bilibili_baseline_task.done():
             self._bilibili_baseline_task.cancel()
             await asyncio.gather(self._bilibili_baseline_task, return_exceptions=True)
@@ -259,6 +263,35 @@ class ArkCalendarPlugin(Star):
             self.scheduler.shutdown(wait=False)
             logger.info("方舟日历定时任务调度器已关闭。")
         await self.service.close()
+
+    def _register_ai_tools(self) -> None:
+        """按配置注册结构化只读 AI 工具；重载时同步撤销旧工具。"""
+        self._unregister_ai_tools()
+        enabled = bool(self._value("ai", "enabled", False))
+        if not enabled:
+            logger.info("方舟日历 AI 工具未启用。")
+            self._ai_tools_registered = False
+            return
+        add_tools = getattr(self.context, "add_llm_tools", None)
+        if not callable(add_tools):
+            logger.warning("当前 AstrBot 版本缺少 add_llm_tools，AI 工具未注册。")
+            self._ai_tools_registered = False
+            return
+        toolset = build_ai_tools(self)
+        add_tools(*toolset.tools)
+        self._ai_tools_registered = True
+        logger.info("方舟日历 AI 工具已注册：%s", ", ".join(toolset.names()))
+
+    def _unregister_ai_tools(self) -> None:
+        """移除本插件注册的工具，避免重载后保留旧实例引用。"""
+        manager_getter = getattr(self.context, "get_llm_tool_manager", None)
+        manager = manager_getter() if callable(manager_getter) else None
+        if manager is not None:
+            remove = getattr(manager, "remove_tool", None) or getattr(manager, "remove_func", None)
+            for name in TOOL_NAMES:
+                if callable(remove):
+                    remove(name)
+        self._ai_tools_registered = False
 
     def _ensure_subscription_scheduler(self) -> None:
         """订阅首次建立时启动仅包含一次性提醒任务的调度器。"""
