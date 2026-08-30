@@ -4,6 +4,19 @@
 
 版本号遵循 `主版本.次版本.修订号`。日期为 `Asia/Shanghai` 时区。
 
+## 0.9.8 - 2026-08-30
+
+### 新增
+
+- **结构化 AI 工具。** 接入 AstrBot LLM Tool，返回经过裁剪的 JSON 文本，不发送日报图片；支持今日信息、活动与卡池、干员生日、公招、未复刻排行、订阅状态、数据源状态和官方 B 站动态查询。
+- **AI 工具选择与总控。** 新增 `ai.enabled`、`ai.enabled_tools`、`ai.max_items` 配置，可整体启停、按函数选择并限制返回条数；升级时兼容旧版默认工具列表。
+- **AI 订阅管理。** 新增 `ark_calendar_subscribe` 和 `ark_calendar_unsubscribe`，支持活动/卡池匹配、提醒时间和“下个卡池”查询；新增 `ai.allow_subscription_mutations` 独立开关，首次调用只返回确认预览，确认后才写入。
+- **干员 UP 信息查询。** 新增 `ark_calendar_operator_history`，返回指定干员最近一次 UP 结束日期和累计 UP 次数，不包含进店历史。
+
+### 文档
+
+- **AI 调用说明。** 新增 `docs/ai.md`，说明配置、工具清单、缓存数据裁剪、订阅写操作确认和数据来源边界。
+
 ## 0.9.7 - 2026-08-28
 
 ### 新增
