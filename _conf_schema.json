@@ -768,7 +768,10 @@
           "ark_calendar_recurrence",
           "ark_calendar_subscriptions",
           "ark_calendar_status",
-          "ark_calendar_bilibili"
+          "ark_calendar_bilibili",
+          "ark_calendar_operator_history",
+          "ark_calendar_subscribe",
+          "ark_calendar_unsubscribe"
         ],
         "labels": [
           "今日信息",
@@ -778,7 +781,10 @@
           "未复刻排行",
           "我的订阅",
           "数据源状态",
-          "B站动态"
+          "B站动态",
+          "干员最近一次 UP",
+          "添加活动/卡池订阅",
+          "取消活动/卡池订阅"
         ],
         "default": [
           "ark_calendar_today",
@@ -788,9 +794,18 @@
           "ark_calendar_recurrence",
           "ark_calendar_subscriptions",
           "ark_calendar_status",
-          "ark_calendar_bilibili"
+          "ark_calendar_bilibili",
+          "ark_calendar_operator_history",
+          "ark_calendar_subscribe",
+          "ark_calendar_unsubscribe"
         ],
         "hint": "多选要暴露给宿主 AI 的函数；默认全部开启。取消全部后不会注册任何函数。"
+      },
+      "allow_subscription_mutations": {
+        "description": "允许 AI 修改订阅",
+        "type": "bool",
+        "default": false,
+        "hint": "开启后，且勾选了对应函数时，AI 才能添加或取消活动/卡池订阅；每次写入仍要求 confirmed=true。"
       },
       "max_items": {
         "description": "AI 单次最多返回条数",
