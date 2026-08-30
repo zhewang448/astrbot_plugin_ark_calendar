@@ -71,7 +71,7 @@ def test_bilibili_config_order_and_video_delivery_description():
     schema = json.loads((ROOT / "_conf_schema.json").read_text(encoding="utf-8"))
     assert list(schema) == [
         "basic", "scheduled_report", "scheduled_birthday_greeting", "bilibili_dynamic",
-        "cache_and_render", "messages", "admin_notification", "data_sources", "developer_mode",
+        "cache_and_render", "messages", "admin_notification", "data_sources", "ai", "developer_mode",
     ]
     items = schema["bilibili_dynamic"]["items"]
     assert list(items) == [
@@ -87,6 +87,14 @@ def test_bilibili_config_order_and_video_delivery_description():
     render_items = schema["cache_and_render"]["items"]
     assert "公招图、B站动态图和未复刻排行图" in render_items["render_device_scale_factor_level"]["hint"]
     assert "公招图、B站动态图和未复刻排行图始终使用 PNG" in render_items["render_image_type"]["hint"]
+
+
+def test_ai_tools_are_selectable_and_default_to_all():
+    schema = json.loads((ROOT / "_conf_schema.json").read_text(encoding="utf-8"))
+    item = schema["ai"]["items"]["enabled_tools"]
+    assert item["type"] == "list"
+    assert item["default"] == item["options"]
+    assert len(item["labels"]) == len(item["options"])
 
 
 def test_unpublished_pool_display_config_defaults_to_enabled():

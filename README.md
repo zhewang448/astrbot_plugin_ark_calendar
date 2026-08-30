@@ -16,6 +16,7 @@
 
 - [指令与交互](docs/commands.md)：普通指令、管理员指令、示例和 B站消息发送规则。
 - [配置与定时任务](docs/configuration.md)：配置顺序、画质作用范围、自动任务、订阅和 B站推送。
+- [AI 调用与结构化数据](docs/ai.md)：LLM Tool 配置、工具列表、运行数据裁剪和调用边界。
 - [安装、文案与运行数据](docs/operation.md)：安装要求、消息风格、缓存目录和数据来源。
 - [版本更新记录](CHANGELOG.md)
 

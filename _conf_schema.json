@@ -747,6 +747,65 @@
     },
     "hint": "仅在数据源不可访问、需要代理或使用镜像时修改。"
   },
+  "ai": {
+    "description": "AI 工具与结构化数据",
+    "type": "object",
+    "items": {
+      "enabled": {
+        "description": "启用 AI 工具",
+        "type": "bool",
+        "default": false,
+        "hint": "开启后，宿主 AI 可通过工具读取本插件的结构化日历数据；工具只返回文本 JSON，不发送图片。"
+      },
+      "enabled_tools": {
+        "description": "启用的 AI 工具",
+        "type": "list",
+        "options": [
+          "ark_calendar_today",
+          "ark_calendar_events",
+          "ark_calendar_birthday",
+          "ark_calendar_recruitment",
+          "ark_calendar_recurrence",
+          "ark_calendar_subscriptions",
+          "ark_calendar_status",
+          "ark_calendar_bilibili"
+        ],
+        "labels": [
+          "今日信息",
+          "活动与卡池",
+          "干员生日",
+          "公开招募",
+          "未复刻排行",
+          "我的订阅",
+          "数据源状态",
+          "B站动态"
+        ],
+        "default": [
+          "ark_calendar_today",
+          "ark_calendar_events",
+          "ark_calendar_birthday",
+          "ark_calendar_recruitment",
+          "ark_calendar_recurrence",
+          "ark_calendar_subscriptions",
+          "ark_calendar_status",
+          "ark_calendar_bilibili"
+        ],
+        "hint": "多选要暴露给宿主 AI 的函数；默认全部开启。取消全部后不会注册任何函数。"
+      },
+      "max_items": {
+        "description": "AI 单次最多返回条数",
+        "type": "int",
+        "default": 30,
+        "slider": {
+          "min": 1,
+          "max": 100,
+          "step": 1
+        },
+        "hint": "限制活动、卡池、生日和排行结果的数量，避免过大的模型上下文。"
+      }
+    },
+    "hint": "AI 工具默认关闭。启用后提供只读查询，不开放订阅、取消订阅和强制刷新等写操作。"
+  },
   "developer_mode": {
     "description": "开发者模式",
     "type": "object",
