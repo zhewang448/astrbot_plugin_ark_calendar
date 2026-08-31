@@ -18,8 +18,12 @@ PROFESSION_TAG: dict[str, str] = {
     "SNIPER": "狙击干员",
     "CASTER": "术师干员",
     "MEDIC": "医疗干员",
+    # 当前 character_table 使用 TANK、SUPPORT、SPECIAL；保留旧值以兼容历史快照。
+    "TANK": "重装干员",
     "DEFENDER": "重装干员",
+    "SUPPORT": "辅助干员",
     "SUPPORTER": "辅助干员",
+    "SPECIAL": "特种干员",
     "SPECIALIST": "特种干员",
     "PIONEER": "先锋干员",
 }
