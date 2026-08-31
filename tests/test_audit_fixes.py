@@ -102,20 +102,24 @@ def test_subscription_due_check_does_not_read_snapshot(tmp_path: Path):
 def test_legacy_subscription_record_gets_fixed_reminder_time(tmp_path: Path):
     logger = SimpleNamespace(warning=lambda *a, **k: None, info=lambda *a, **k: None)
     manager = SubscriptionManager(tmp_path, logger=logger)
+    end_time = datetime.now(subscription_timezone()).replace(
+        hour=4, minute=0, second=0, microsecond=0
+    ) + timedelta(days=2)
+    expected_remind_at = (end_time - timedelta(days=1)).replace(hour=9, minute=30).isoformat()
     manager.cache.save("subscriptions.json", {
         "fixed-legacy:u:platform:Group:1": {
             "item_id": "fixed-legacy",
             "item_name": "旧记录活动",
             "item_type": "event",
-            "end_time": "2026-08-20T04:00:00+08:00",
+            "end_time": end_time.isoformat(),
             "user_id": "u",
             "session_id": "platform:Group:1",
             "remind_time": "09:30",
         }
     })
     subscriptions = manager.get_user_subscriptions("u")
-    assert subscriptions[0].remind_at == "2026-08-19T09:30:00+08:00"
-    assert manager.cache.load("subscriptions.json")["fixed-legacy:u:platform:Group:1"]["remind_at"] == "2026-08-19T09:30:00+08:00"
+    assert subscriptions[0].remind_at == expected_remind_at
+    assert manager.cache.load("subscriptions.json")["fixed-legacy:u:platform:Group:1"]["remind_at"] == expected_remind_at
 
 
 def test_subscription_rejects_invalid_time_without_treating_it_as_name():
@@ -340,6 +344,38 @@ def test_recruitment_source_uses_gacha_detail_allowlist():
 
     pool = asyncio.run(RecruitmentSource(FakeHttp()).get_recruitment_pool())
     assert {item["name"] for item in pool["characters"]} == {"小车", "公招干员"}
+
+
+def test_recruitment_source_attaches_current_profession_tags():
+    class FakeHttp:
+        async def json(self, url: str):
+            if url.endswith("gacha_table.json"):
+                return {
+                    "recruitDetail": (
+                        "说明文字\r\n★★★\\n近卫/狙击/术师/医疗/重装/辅助/特种/先锋\r\n"
+                        "--------------------\r\n"
+                    )
+                }
+            return {
+                "guard": {"name": "近卫", "rarity": "TIER_3", "profession": "WARRIOR", "position": "MELEE"},
+                "sniper": {"name": "狙击", "rarity": "TIER_3", "profession": "SNIPER", "position": "RANGED"},
+                "caster": {"name": "术师", "rarity": "TIER_3", "profession": "CASTER", "position": "RANGED"},
+                "medic": {"name": "医疗", "rarity": "TIER_3", "profession": "MEDIC", "position": "RANGED"},
+                "defender": {"name": "重装", "rarity": "TIER_3", "profession": "TANK", "position": "MELEE"},
+                "supporter": {"name": "辅助", "rarity": "TIER_3", "profession": "SUPPORT", "position": "RANGED"},
+                "specialist": {"name": "特种", "rarity": "TIER_3", "profession": "SPECIAL", "position": "MELEE"},
+                "vanguard": {"name": "先锋", "rarity": "TIER_3", "profession": "PIONEER", "position": "MELEE"},
+            }
+
+    pool = asyncio.run(RecruitmentSource(FakeHttp()).get_recruitment_pool())
+    calculator = RecruitmentCalculator(pool["characters"])
+
+    for profession_tag, operator_name in (
+        ("近卫干员", "近卫"), ("狙击干员", "狙击"), ("术师干员", "术师"),
+        ("医疗干员", "医疗"), ("重装干员", "重装"), ("辅助干员", "辅助"),
+        ("特种干员", "特种"), ("先锋干员", "先锋"),
+    ):
+        assert [item["name"] for item in calculator._match_operators([profession_tag])] == [operator_name]
 
 
 def test_recruitment_source_retries_after_temporary_fetch_failure():

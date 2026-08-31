@@ -79,9 +79,9 @@ PROFESSION_TAG_MAP: dict[str, str] = {
     "狙击干员": "SNIPER",
     "术师干员": "CASTER",
     "医疗干员": "MEDIC",
-    "重装干员": "DEFENDER",
-    "辅助干员": "SUPPORTER",
-    "特种干员": "SPECIALIST",
+    "重装干员": "TANK",
+    "辅助干员": "SUPPORT",
+    "特种干员": "SPECIAL",
     "先锋干员": "PIONEER",
 }
 
