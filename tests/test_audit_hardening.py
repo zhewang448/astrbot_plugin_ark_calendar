@@ -4,6 +4,7 @@ import pytest
 
 from core.cache import JsonCache
 from core.image_scale import ImageScaler
+from core.font_subset import collect_charset
 
 
 def test_json_cache_rejects_paths_outside_root(tmp_path: Path):
@@ -51,3 +52,11 @@ def test_image_scaler_checks_dimensions_before_decoding(tmp_path: Path, monkeypa
     scaler = ImageScaler(tmp_path / "scaled")
     with pytest.raises(ValueError, match="图片像素数过大"):
         scaler._build(source, 100, 100, None, "cover", False)
+
+
+def test_collect_charset_keeps_dynamic_content_starting_with_double_slash():
+    title = "//【明日方舟 × 女神异闻录３ Reload】，新装限时上架"
+
+    charset = collect_charset("", {"title": title, "url": "//cdn.example.com/image.png"})
+
+    assert set(title) <= set(charset)
