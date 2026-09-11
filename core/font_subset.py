@@ -4,6 +4,7 @@ import asyncio
 import base64
 import hashlib
 import io
+import re
 from pathlib import Path
 from typing import Any
 
@@ -25,7 +26,7 @@ BASE_CHARS = (
 
 # 单个字符串超过这个长度基本是 base64 data URI，不含要渲染的字形，直接跳过省 CPU。
 MAX_SCANNED_STRING = 4096
-_SKIP_PREFIXES = ("data:", "http://", "https://", "//")
+_SKIP_PREFIXES = ("data:", "http://", "https://")
 
 # 内存里最多保留几份子集的 data URI（每份约 300–400 KB）。
 MEMORY_ENTRIES = 4
@@ -38,7 +39,7 @@ def _walk(value: Any, out: set[str]) -> None:
     if isinstance(value, str):
         if not value or len(value) > MAX_SCANNED_STRING:
             return
-        if value.startswith(_SKIP_PREFIXES):
+        if value.startswith(_SKIP_PREFIXES) or re.match(r"^//[A-Za-z0-9.-]+(?:/|$)", value):
             return
         out.update(value)
         return
