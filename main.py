@@ -758,9 +758,9 @@ class ArkCalendarPlugin(Star):
             quality_notice = data_quality_notice(outcome.quality, self.messages)
             if quality_notice:
                 yield event.plain_result(quality_notice)
-            image, image_state, fallback_manifest = await self.image_manager.get_calendar_image(snapshot, display_config)
-            if image_state == "fallback":
-                yield event.plain_result(self.image_manager.fallback_notice(fallback_manifest, self.messages))
+            image, _, _ = await self.image_manager.get_calendar_image(
+                snapshot, display_config, use_cache=False
+            )
             yield event.image_result(str(image))
             await self.notification_manager.observe_health(outcome, "管理员强制刷新")
         except Exception:

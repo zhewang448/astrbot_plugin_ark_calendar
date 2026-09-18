@@ -48,7 +48,8 @@ class CalendarRenderer:
         pool_details = self._pool_details(pools)
         longs = [self._timeline(x, start, end, now) for x in snapshot.long_term_events]
         hero = next(
-            (x["image"] for x in [*items, *pools, *longs] if x["image"]),
+            # 时间轴会保留已结束项目用于展示历史；头图只应从未结束项目中选择。
+            (x["image"] for x in [*items, *pools, *longs] if x["image"] and parse_iso(x["end"]) > now),
             "",
         )
         timeline_days = max(1, (end - start).days)
