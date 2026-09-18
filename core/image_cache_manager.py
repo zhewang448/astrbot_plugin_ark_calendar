@@ -75,10 +75,16 @@ class CalendarImageManager:
             return None
         return self.render_cache.lookup(self.service.last_snapshot, display_config)
 
-    async def get_calendar_image(self, snapshot, display_config: dict[str, Any]) -> CalendarImageResult:
-        """获取日历图片：命中缓存直接返回，否则渲染并入缓存。"""
-        if not self.cache_enabled():
-            return await self._render(snapshot, display_config)
+    async def get_calendar_image(
+        self,
+        snapshot,
+        display_config: dict[str, Any],
+        *,
+        use_cache: bool = True,
+    ) -> CalendarImageResult:
+        """获取日历图片；强制刷新时可完全绕过最终图片缓存。"""
+        if not use_cache or not self.cache_enabled():
+            return await self._render(snapshot, display_config, use_cache=use_cache)
         cached = self.render_cache.lookup(snapshot, display_config)
         if cached:
             self.logger.info("最终日历图片缓存命中。")
@@ -102,7 +108,13 @@ class CalendarImageManager:
 
     # ── 内部渲染 ───────────────────────────────────────────────
 
-    async def _render(self, snapshot, display_config: dict[str, Any]) -> CalendarImageResult:
+    async def _render(
+        self,
+        snapshot,
+        display_config: dict[str, Any],
+        *,
+        use_cache: bool = True,
+    ) -> CalendarImageResult:
         started = time.monotonic()
         self.logger.info("最终日历图片缓存未命中，开始调用渲染器。")
         try:
@@ -113,7 +125,7 @@ class CalendarImageManager:
                 self.logger.warning(f"方舟日历渲染耗时较长：{elapsed:.2f} 秒。")
             else:
                 self.logger.info(f"方舟日历渲染完成，耗时 {elapsed:.2f} 秒。")
-            if not self.cache_enabled():
+            if not use_cache or not self.cache_enabled():
                 return rendered, "rendered", None
             cached = self.render_cache.store(
                 rendered,
@@ -125,7 +137,11 @@ class CalendarImageManager:
             self.logger.info(f"最终日历图片已保存至插件缓存：{cached}")
             return cached, "rendered", None
         except Exception:
-            fallback = self.render_cache.fallback(self.fallback_max_age_hours()) if self.cache_enabled() else None
+            fallback = (
+                self.render_cache.fallback(self.fallback_max_age_hours())
+                if use_cache and self.cache_enabled()
+                else None
+            )
             if fallback:
                 image, manifest = fallback
                 self.logger.warning(

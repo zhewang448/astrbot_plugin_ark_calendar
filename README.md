@@ -1,6 +1,6 @@
 # 罗德岛行动终端 `astrbot_plugin_ark_calendar`
 
-[![AstrBot](https://img.shields.io/badge/AstrBot-%3E%3D4.17.0-00a8c6.svg)](https://github.com/AstrBotDevs/AstrBot)
+[![AstrBot](https://img.shields.io/badge/AstrBot-%3E%3D4.26.8-00a8c6.svg)](https://github.com/AstrBotDevs/AstrBot)
 
 ## 访问统计
 
@@ -10,7 +10,7 @@
 
 明日方舟信息聚合与查询插件。插件聚合 PRTS、anything-ics、Torappu 与 ArknightsGachaData，生成罗德岛风格的活动、寻访和作战图片，并提供订阅、生日、B站动态和公开招募工具。
 
-当前版本：`v1.0.0`
+当前版本：`v1.0.1`
 
 ## 文档导航
 
