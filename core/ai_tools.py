@@ -10,6 +10,7 @@ from astrbot.core.agent.tool import FunctionTool, ToolSet
 
 from .ai_context import compact_json_data, operator_data, snapshot_data
 from .recruitment_calculator import RecruitmentCalculator
+from .subscription import drop_paired_shops
 
 TOOL_NAMES = (
     "ark_calendar_today",
@@ -157,7 +158,7 @@ def build_ai_tools(plugin: Any) -> ToolSet:
         session_id = event.unified_msg_origin
         records = plugin.subscription_manager.get_user_subscriptions(user_id, session_id)
         needle = name.casefold()
-        matches = [item for item in records if needle in item.item_name.casefold() or item.item_name.casefold() in needle]
+        matches = drop_paired_shops([item for item in records if needle in item.item_name.casefold() or item.item_name.casefold() in needle])
         if not matches:
             return _json({"ok": False, "error": "subscription_not_found", "query": name})
         if len(matches) > 1:

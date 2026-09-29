@@ -132,10 +132,19 @@ class RecruitmentCalculator:
         folded = raw.casefold()
         if folded in TAG_ALIASES:
             return TAG_ALIASES[folded]
-        # 模糊匹配：原始标签是某个标准标签的子串（如"减速"匹配"减速"，"高资"不匹配）
-        for tag in ALL_TAGS:
-            if raw in tag or tag in raw:
-                return tag
+        # 模糊匹配：先找包含输入的标准标签，再找被输入包含的标准标签；
+        # 任一层命中多个（如"近卫干员输出"同时含"近卫干员"与"输出"）视为无法识别，
+        # 避免按集合遍历顺序随机选中其中一个。
+        if not raw:
+            return None
+        for matches in (
+            [tag for tag in ALL_TAGS if raw in tag],
+            [tag for tag in ALL_TAGS if tag in raw],
+        ):
+            if len(matches) == 1:
+                return matches[0]
+            if matches:
+                return None
         return None
 
     def normalize_tags(self, raw_tags: list[str]) -> tuple[list[str], list[str]]:
@@ -168,6 +177,7 @@ class RecruitmentCalculator:
             - tag_combinations: 候选结果相同的全部标签组合
             - operators: 该组合下可能出现的干员列表（含 name/rarity）
             - min_rarity: 保底星级
+            - robot: 是否只命中 1★ 支援机械（时限 3:50 可锁定）
             - has_senior: 是否含"资深干员"标签（保底 5★）
             - has_top_senior: 是否含"高级资深干员"标签（保底 6★）
         """
@@ -200,6 +210,15 @@ class RecruitmentCalculator:
                 # - 常规：忽略 1★、2★后的候选最低稀有度
                 has_guarantee = bool(guarantee_operators)
                 min_rarity = min((op["rarity"] for op in guarantee_operators), default=0)
+                # 9 小时招募不会出 1★、2★；有 3★+ 候选时只列这些，避免低星干员干扰合并和排序。
+                # 只命中 1★ 支援机械的组合单独标记：招募时限设为 3:50 可锁定 1★ 支援机械。
+                robot = (
+                    not has_guarantee
+                    and "支援机械" in combo
+                    and all(op["rarity"] == 1 for op in operators)
+                )
+                if has_guarantee:
+                    operators = guarantee_operators
                 if has_top_senior:
                     # 高级资深干员仅出现 6★。
                     operators = [op for op in operators if op["rarity"] == 6]
@@ -215,13 +234,17 @@ class RecruitmentCalculator:
                     "operators": sorted(operators, key=lambda x: -x["rarity"]),
                     "min_rarity": min_rarity,
                     "has_guarantee": has_guarantee,
+                    "robot": robot,
                     "has_senior": has_senior,
                     "has_top_senior": has_top_senior,
                 })
 
         results = self._merge_results(results)
-        # 排序：高保底优先；同保底时词条越多越优先；词条数相同时，命中干员越少越优先。
-        results.sort(key=lambda r: (-r["min_rarity"], -len(r["tags"]), len(r["operators"]), tuple(r["tags"])))
+        # 排序：高保底优先；无保底时 1★ 支援机械组合在前；同保底时词条越多越优先；
+        # 词条数相同时，命中干员越少越优先。
+        results.sort(key=lambda r: (
+            -r["min_rarity"], not r["robot"], -len(r["tags"]), len(r["operators"]), tuple(r["tags"]),
+        ))
         return results
 
     @staticmethod
@@ -237,6 +260,7 @@ class RecruitmentCalculator:
                 operator_key,
                 int(result.get("min_rarity", 0) or 0),
                 bool(result.get("has_guarantee", True)),
+                bool(result.get("robot")),
                 bool(result.get("has_senior")),
                 bool(result.get("has_top_senior")),
             )
@@ -336,7 +360,9 @@ def format_result(
 
         # 星级标识
         stars = "★" * min_rarity
-        if not has_guarantee:
+        if result.get("robot"):
+            guarantee = "【★】支援机械：时限设为 3:50 可锁定"
+        elif not has_guarantee:
             guarantee = "【无3★保底】"
         elif result["has_top_senior"]:
             guarantee = f"【{stars}】保底"

@@ -555,3 +555,23 @@ def test_manual_query_skips_parser_video_when_disabled():
     }
 
     assert asyncio.run(manager.build_parser_video_components(dynamic, "p:Group:1")) == []
+
+
+def test_first_seen_old_dynamic_is_treated_as_history(monkeypatch):
+    from datetime import datetime, timedelta
+
+    now = datetime.now(bilibili_manager.CN_TZ)
+    source = FakeSource([
+        {"id": "old", "title": "镜像回灌", "dynamic_type": "text", "pub_date": now - timedelta(days=3)},
+        {"id": "new", "title": "新动态", "dynamic_type": "text", "pub_date": now - timedelta(minutes=5)},
+    ], {"baseline_established": True, "push_enabled": True, "dynamics": {}})
+    manager = bilibili_manager.BilibiliDynamicManager(
+        source, SimpleNamespace(),
+        {"bilibili_dynamic": {"push_enabled": True, "target_sid_list": ["p:Group:1"]}},
+    )
+    manager._baseline_ready = True
+    monkeypatch.setattr(bilibili_manager, "platform_supports_proactive_send", lambda *_: False)
+
+    asyncio.run(manager.check_and_push())
+    assert source.state["dynamics"]["old"] == {"state": "ignored"}
+    assert source.state["dynamics"]["new"] == {"targets": {"p:Group:1": False}}

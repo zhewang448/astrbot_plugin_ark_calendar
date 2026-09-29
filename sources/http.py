@@ -54,7 +54,8 @@ class PublicResolver(AbstractResolver):
 class HttpClient:
     RETRY_STATUSES = {429, 500, 502, 503, 504}
     MAX_RETRY_AFTER_SECONDS = 60.0
-    MAX_RESPONSE_BYTES = 10 * 1024 * 1024
+    # character_table.json 已接近 8 MB 且不压缩传输，留出增长余量。
+    MAX_RESPONSE_BYTES = 32 * 1024 * 1024
     CHUNK_BYTES = 64 * 1024
     MAX_REDIRECTS = 3
     REDIRECT_STATUSES = {301, 302, 303, 307, 308}

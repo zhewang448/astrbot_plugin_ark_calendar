@@ -560,6 +560,9 @@ class CalendarService:
                 raise
 
     def _snapshot_is_fresh(self, ttl: timedelta) -> bool:
+        # 关键数据源全部失败的空快照只用于本次返回，不能在 TTL 内继续挡住重试。
+        if self.last_snapshot is not None and self.last_snapshot.refresh_quality == "failed":
+            return False
         return self._can_use_snapshot(self.last_snapshot, ttl)
 
     async def find_operator(self, query: str) -> tuple[Operator | None, list[str]]:

@@ -438,10 +438,11 @@ def test_recruitment_uses_nine_hour_rarity_floor():
     assert results["削弱"]["min_rarity"] == 4
     assert results["治疗"]["min_rarity"] == 3
     assert results["先锋干员"]["min_rarity"] == 3
-    assert [op["name"] for op in results["爆发"]["operators"]] == ["刻刀", "THRM-EX"]
-    assert [op["name"] for op in results["削弱"]["operators"]] == ["夜烟", "GALLUS²"]
-    assert [op["name"] for op in results["治疗"]["operators"]] == ["安赛尔", "Lancet-2"]
-    assert [op["name"] for op in results["先锋干员"]["operators"]] == ["芬", "夜刀"]
+    # 9 小时不会出 1★、2★，有 3★+ 候选时不再列出低星干员。
+    assert [op["name"] for op in results["爆发"]["operators"]] == ["刻刀"]
+    assert [op["name"] for op in results["削弱"]["operators"]] == ["夜烟"]
+    assert [op["name"] for op in results["治疗"]["operators"]] == ["安赛尔"]
+    assert [op["name"] for op in results["先锋干员"]["operators"]] == ["芬"]
     assert results["新手"]["has_guarantee"] is False
     assert [op["name"] for op in results["新手"]["operators"]] == ["黑角"]
     assert "【无3★保底】" in format_result([results["新手"]], selected_tags=["新手"])
@@ -498,3 +499,128 @@ def test_recruitment_result_resolves_and_downsizes_avatars():
     assert result == b"rendered"
     assert captured["rows"][0]["tag_combinations"] == ["输出", "输出 + 生存"]
     assert captured["rows"][0]["operators"][0]["avatar"].startswith("data:image/webp")
+
+
+def test_recruitment_fuzzy_tag_match_is_deterministic():
+    calculator = RecruitmentCalculator([])
+    # 同时包含两个标准标签的输入不再随集合顺序随机命中其一。
+    assert calculator.normalize_tag("近卫干员输出") is None
+    assert calculator.normalize_tag("费用") == "费用回复"
+    assert calculator.normalize_tag("资深干员们") == "资深干员"
+    assert calculator.normalize_tag("") is None
+
+
+def test_recruitment_marks_robot_only_combinations_for_short_timer():
+    calculator = RecruitmentCalculator([
+        {"name": "Castle-3", "rarity": 1, "tags": ["支援机械", "近卫干员", "近战位"]},
+        {"name": "玫兰莎", "rarity": 3, "tags": ["近卫干员", "近战位", "输出"]},
+    ])
+    results = calculator.calculate(["支援机械", "近卫干员"])
+    robot = [result for result in results if result["robot"]]
+    assert len(robot) == 1
+    assert [op["name"] for op in robot[0]["operators"]] == ["Castle-3"]
+    assert {tuple(tags) for tags in robot[0]["tag_combinations"]} == {("支援机械",), ("支援机械", "近卫干员")}
+    guard = next(result for result in results if result["tags"] == ["近卫干员"])
+    assert [op["name"] for op in guard["operators"]] == ["玫兰莎"]
+    assert "3:50" in format_result(results, selected_tags=["支援机械", "近卫干员"])
+
+
+def test_failed_snapshot_is_never_reused_as_fresh():
+    import importlib
+    import sys
+
+    # service.py 使用 ..sources 相对导入，需按插件包路径加载。
+    root = Path(__file__).resolve().parents[1]
+    sys.path.insert(0, str(root.parent))
+    try:
+        CalendarService = importlib.import_module(f"{root.name}.core.service").CalendarService
+    finally:
+        sys.path.remove(str(root.parent))
+
+    service = CalendarService.__new__(CalendarService)
+    service._can_use_snapshot = lambda snapshot, ttl: True
+    service.last_snapshot = SimpleNamespace(refresh_quality="failed")
+    assert service._snapshot_is_fresh(timedelta(minutes=30)) is False
+    service.last_snapshot = SimpleNamespace(refresh_quality="degraded")
+    assert service._snapshot_is_fresh(timedelta(minutes=30)) is True
+
+
+def test_event_shop_reminder_uses_exchange_end_when_later_than_event():
+    from core.subscription import shop_timeline_item
+
+    event = TimelineItem(
+        "evt", "月行水上", "event", "活动",
+        "2026-09-04T04:00:00+08:00", "2026-09-18T03:59:00+08:00",
+        exchange_end="2026-09-25 03:59",
+    )
+    shop = shop_timeline_item(event)
+    assert shop is not None
+    assert (shop.id, shop.name, shop.end) == ("evt:shop", "月行水上（活动商店）", "2026-09-25T03:59:00+08:00")
+    event.exchange_end = "2027-03-10 16:00:00"
+    assert shop_timeline_item(event).end == "2027-03-10T16:00:00+08:00"
+    for value in ("", "2026-09-18 03:59", "待定"):
+        event.exchange_end = value
+        assert shop_timeline_item(event) is None
+
+
+def test_operator_watch_hits_each_open_pool_once(tmp_path: Path):
+    from core.subscription import OperatorWatchManager
+
+    logger = SimpleNamespace(warning=lambda *a, **k: None, info=lambda *a, **k: None)
+    manager = OperatorWatchManager(tmp_path, logger)
+    manager.add("玫兰莎", "u", "platform:Group:1")
+    manager.add("玫兰莎", "u", "platform:Group:1")
+    now = datetime(2026, 9, 10, 12, tzinfo=subscription_timezone())
+    pools = [
+        TimelineItem("open", "开放池", "gacha", "标准寻访", "2026-09-10T04:00:00+08:00",
+                     "2026-09-24T03:59:59+08:00", weighted_up=["玫兰莎"]),
+        TimelineItem("ended", "已结束", "gacha", "标准寻访", "2026-08-10T04:00:00+08:00",
+                     "2026-08-24T03:59:59+08:00", six_star_up=["玫兰莎"]),
+        TimelineItem("other", "无关池", "gacha", "标准寻访", "2026-09-10T04:00:00+08:00",
+                     "2026-09-24T03:59:59+08:00", six_star_up=["仇白"]),
+    ]
+    hits = manager.pending_hits(pools, now)
+    assert [(watch["operator"], pool.id) for watch, pool in hits] == [("玫兰莎", "open")]
+    manager.mark_notified(hits[0][0], "open")
+    assert manager.pending_hits(pools, now) == []
+    assert manager.user_operators("u", "platform:Group:1") == ["玫兰莎"]
+    assert manager.remove("玫兰莎", "u", "platform:Group:1") is True
+    assert manager.remove("玫兰莎", "u", "platform:Group:1") is False
+
+
+def test_operator_profile_combines_recruit_recurrence_and_current_pools():
+    from core.models import Operator
+    from core.status_formatter import format_operator_profile
+
+    operator = Operator("鸿雪", 10, 5, "术师", 6)
+    pool = TimelineItem("p", "常驻标准寻访", "gacha", "标准寻访", "2026-09-10T04:00:00+08:00",
+                        "2026-09-24T03:59:59+08:00", six_star_up=["鸿雪"])
+    row = {"rate_up_end": "2026-08-27", "rate_up_days": 14, "rate_up_ongoing": False,
+           "pool_type": "标准寻访", "rate_up_count": 11, "shop_end": "2026-05-07", "shop_count": 3}
+    text = format_operator_profile(operator, None, row, [pool])
+    assert "6★　术师" in text
+    assert "生日：10 月 5 日" in text
+    assert "公开招募：不在公招池" in text
+    assert "2026-08-27 结束，已 14 天" in text and "累计 11 次" in text
+    assert "黄票商店：最近 2026-05-07，累计 3 次" in text
+    assert "- 常驻标准寻访（至 09-24 03:59）" in text
+    text = format_operator_profile(operator, ["输出", "术师干员"], None, [], recruit_available=True)
+    assert "公开招募：可招募（输出、术师干员）" in text
+    assert "最近 UP" not in text
+    assert "数据暂不可用" in format_operator_profile(operator, None, None, [], recruit_available=False)
+
+
+def test_event_subscription_adds_and_removes_its_shop_reminder(tmp_path: Path):
+    from core.subscription import drop_paired_shops
+
+    logger = SimpleNamespace(warning=lambda *a, **k: None, info=lambda *a, **k: None)
+    manager = SubscriptionManager(tmp_path, logger=logger)
+    end = datetime.now(subscription_timezone()).replace(microsecond=0) + timedelta(days=5)
+    event = TimelineItem("evt", "月行水上", "event", "活动", end.isoformat(), end.isoformat(),
+                         exchange_end=f"{end + timedelta(days=7):%Y-%m-%d %H:%M}")
+    manager.add_subscription(event, "u", "platform:Group:1")
+    subs = manager.get_user_subscriptions("u", "platform:Group:1")
+    assert [sub.item_id for sub in subs] == ["evt", "evt:shop"]
+    assert [sub.item_id for sub in drop_paired_shops(subs)] == ["evt"]
+    assert manager.remove_subscription("evt", "u", "platform:Group:1") is True
+    assert manager.get_user_subscriptions("u", "platform:Group:1") == []
