@@ -31,18 +31,11 @@ class PrtsSource:
     async def home(self, now: datetime | None = None) -> dict:
         html = await self.http.text(f"{self.base_url}/")
         soup = BeautifulSoup(html, "html.parser")
-        compact = soup.get_text(" ", strip=True)
         weekday = game_weekday(now)
         resource_schedule = self._resource_schedule(soup, weekday, self.base_url)
         chip_schedule = self._chip_schedule(soup, weekday, self.base_url)
         supplies = [item["name"] for item in resource_schedule if item.get("open")]
         chips = [item["name"] for item in chip_schedule if item.get("open")]
-        if not supplies:
-            supplies_text = self._between(compact, "物资筹备 分区：", "芯片搜索 分区：")
-            supplies = self._slash_items(supplies_text)
-        if not chips:
-            chips_text = self._between(compact, "芯片搜索 分区：", "职业芯片")
-            chips = self._slash_items(chips_text.replace("&", "/"))
         alerts: list[dict[str, str]] = []
         seen_alerts: set[tuple[str, str]] = set()
         for span in soup.select("span[data-time]"):
@@ -93,7 +86,7 @@ class PrtsSource:
         if len(rows) < 4:
             return []
         resource_cells = cls._direct_cells(rows[0])
-        resource_days = cls._direct_cells(rows[1])
+        resource_days = cls._day_cells(rows[1], len(resource_cells))
         result: list[dict] = []
         for cell, day_cell in zip(resource_cells, resource_days):
             image = cell.select_one("img[src]")
@@ -130,7 +123,7 @@ class PrtsSource:
         if len(rows) < 4:
             return []
         cells = cls._direct_cells(rows[2])
-        day_cells = cls._direct_cells(rows[3])
+        day_cells = cls._day_cells(rows[3], len(cells))
         result: list[dict] = []
         chip_names = ["术师&狙击", "先锋&辅助", "医疗&重装", "近卫&特种"]
         for index, (cell, day_cell) in enumerate(zip(cells, day_cells)):
@@ -161,17 +154,22 @@ class PrtsSource:
 
     @staticmethod
     def _resource_table(soup: BeautifulSoup):
+        # 按指向“资源收集#物资筹备/#芯片搜索”的图标定位；开放日文字在全天开放期间会被整行替换。
         for table in soup.find_all("table"):
-            text = table.get_text(" ", strip=True)
-            if "常驻" in text and "二三五日" in text and "一四六日" in text:
-                rows = table.find_all("tr")
-                if len(rows) >= 4 and sum(len(row.select("img[src]")) for row in rows[:3]) >= 5:
-                    return table
+            hrefs = {unquote(a.get("href", "")).rpartition("#")[2] for a in table.select("a[href]")}
+            if {"物资筹备", "芯片搜索"} <= hrefs and len(table.find_all("tr")) >= 4:
+                return table
         return None
 
     @staticmethod
     def _direct_cells(row) -> list:
         return row.find_all(["td", "th"], recursive=False)
+
+    @classmethod
+    def _day_cells(cls, row, count: int) -> list:
+        """全天开放期间开放日行合并成一个单元格，此时让它覆盖整行。"""
+        cells = cls._direct_cells(row)
+        return cells * count if len(cells) == 1 else cells
 
     @staticmethod
     def _file_name(url: str) -> str:
@@ -210,7 +208,7 @@ class PrtsSource:
     @staticmethod
     def _days_from_label(label: str) -> tuple[bool, list[int]]:
         compact = re.sub(r"\s+", "", label)
-        if any(token in compact for token in ("常驻", "全开放", "每日")):
+        if any(token in compact for token in ("常驻", "全开放", "全天开放", "每日")):
             return True, list(range(7))
         mapping = {"一": 0, "二": 1, "三": 2, "四": 3, "五": 4, "六": 5, "日": 6}
         return False, list(dict.fromkeys(mapping[ch] for ch in compact if ch in mapping))
@@ -472,15 +470,6 @@ class PrtsSource:
     def _field(text: str, name: str) -> str:
         match = re.search(rf"^\|{re.escape(name)}\s*=\s*(.*?)\s*$", text, re.M)
         return match.group(1).strip() if match else ""
-
-    @staticmethod
-    def _between(text: str, start: str, end: str) -> str:
-        match = re.search(re.escape(start) + r"\s*(.*?)\s*" + re.escape(end), text)
-        return match.group(1).strip() if match else ""
-
-    @staticmethod
-    def _slash_items(text: str) -> list[str]:
-        return [x.strip() for x in re.split(r"[/／]", text) if x.strip()]
 
     @staticmethod
     def _operator_section(soup: BeautifulSoup, title: str) -> list[dict]:
