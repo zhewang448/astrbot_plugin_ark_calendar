@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+from zoneinfo import ZoneInfo
 
 import astrbot.api.message_components as Comp
 from astrbot.api import logger
@@ -16,6 +18,10 @@ from .platform_utils import platform_supports_proactive_send
 
 if TYPE_CHECKING:
     from ..sources.bilibili_dynamic import BilibiliDynamicSource
+
+CN_TZ = ZoneInfo("Asia/Shanghai")
+# 首次见到时发布已超过该时长的动态不再推送。
+STALE_DYNAMIC_AGE = timedelta(hours=24)
 
 
 class BilibiliDynamicManager:
@@ -215,6 +221,17 @@ class BilibiliDynamicManager:
         return {"targets": {sid: False for sid in targets}}
 
     @staticmethod
+    def _is_stale_dynamic(dynamic: dict[str, Any]) -> bool:
+        """首次见到但发布已久的动态（镜像回灌、状态裁剪后重现）视为历史。"""
+        pub_date = dynamic.get("pub_date")
+        if not isinstance(pub_date, datetime):
+            return False
+        if pub_date.tzinfo is None:
+            pub_date = pub_date.replace(tzinfo=CN_TZ)
+        # ponytail: 固定 24 小时窗口；插件停机超过一天时，停机期间的动态也不会补推。
+        return datetime.now(CN_TZ) - pub_date > STALE_DYNAMIC_AGE
+
+    @staticmethod
     def _remove_unsubscribed_targets(records: dict[str, dict[str, Any]], targets: list[str]) -> None:
         """移除已退订目标，使其重新加入后不会补收旧动态。"""
         active_targets = set(targets)
@@ -285,7 +302,11 @@ class BilibiliDynamicManager:
                     dyn_id = str(dynamic["id"])
                     record = records.get(dyn_id)
                     if record is None:
-                        record = self._new_record(dynamic, targets, push_enabled, push_types)
+                        record = (
+                            {"state": "ignored"}
+                            if self._is_stale_dynamic(dynamic)
+                            else self._new_record(dynamic, targets, push_enabled, push_types)
+                        )
                         records[dyn_id] = record
                     pending_targets = record.get("targets")
                     if isinstance(pending_targets, dict) and any(not sent for sent in pending_targets.values()):

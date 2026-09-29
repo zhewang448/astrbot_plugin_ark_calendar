@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -65,7 +65,13 @@ class SubscriptionManager:
         session_id: str,
         remind_time: str = "12:00",
     ) -> Subscription:
-        """添加订阅，并把本次活动结束时间与实际提醒时间一并固化。"""
+        """添加订阅，并把本次活动结束时间与实际提醒时间一并固化。
+
+        活动商店晚于活动关闭时，同时添加一条以商店关闭时间为准的派生订阅。
+        """
+        shop_item = shop_timeline_item(item)
+        if shop_item:
+            self.add_subscription(shop_item, user_id, session_id, remind_time)
         now = datetime.now(CN_TZ)
         remind_at = _calculate_remind_at(item.end, remind_time)
         sub = Subscription(
@@ -107,9 +113,10 @@ class SubscriptionManager:
         user_id: str,
         session_id: str,
     ) -> bool:
-        """取消订阅"""
+        """取消订阅；取消活动时一并取消其活动商店订阅。"""
         subs = self._load_all_subscriptions()
         key = self._subscription_key(item_id, user_id, session_id)
+        subs.pop(self._subscription_key(f"{item_id}{SHOP_ITEM_SUFFIX}", user_id, session_id), None)
 
         if key in subs:
             item_name = subs[key].item_name
@@ -282,3 +289,120 @@ def _calculate_remind_at(end_time: str, remind_time: str) -> str:
 def _effective_attempt_at(subscription: Subscription) -> datetime:
     """失败重试优先；没有重试计划时使用固化的提醒时间。"""
     return parse_iso(subscription.retry_at or subscription.remind_at).astimezone(CN_TZ)
+
+
+SHOP_ITEM_SUFFIX = ":shop"
+
+
+def shop_timeline_item(item: TimelineItem) -> TimelineItem | None:
+    """活动商店晚于活动关闭时，派生一个以商店关闭时间为结束时间的订阅对象。"""
+    if item.category != "event" or not item.exchange_end.strip():
+        return None
+    for fmt in ("%Y-%m-%d %H:%M", "%Y-%m-%d %H:%M:%S"):
+        try:
+            shop_end = datetime.strptime(item.exchange_end.strip(), fmt).replace(tzinfo=CN_TZ)
+            break
+        except ValueError:
+            continue
+    else:
+        return None
+    try:
+        if shop_end <= parse_iso(item.end).astimezone(CN_TZ):
+            return None
+    except (TypeError, ValueError):
+        return None
+    return replace(
+        item,
+        id=f"{item.id}{SHOP_ITEM_SUFFIX}",
+        name=f"{item.name}（活动商店）",
+        end=shop_end.isoformat(),
+    )
+
+
+def drop_paired_shops(subscriptions: list[Subscription]) -> list[Subscription]:
+    """活动与其活动商店同时命中取消订阅时只保留活动；取消活动会一并取消商店。"""
+    ids = {sub.item_id for sub in subscriptions}
+    return [
+        sub for sub in subscriptions
+        if not (sub.item_id.endswith(SHOP_ITEM_SUFFIX) and sub.item_id.removesuffix(SHOP_ITEM_SUFFIX) in ids)
+    ]
+
+
+class OperatorWatchManager:
+    """干员 UP 蹲池记录：每个卡池对同一条记录只提醒一次。"""
+
+    FILE_NAME = "operator_watches.json"
+
+    def __init__(self, data_dir: Path, logger):
+        self.cache = JsonCache(data_dir / "subscriptions")
+        self.logger = logger
+
+    def add(self, operator: str, user_id: str, session_id: str) -> None:
+        watches = self._load()
+        key = f"{operator}:{user_id}:{session_id}"
+        watches.setdefault(key, {
+            "operator": operator,
+            "user_id": user_id,
+            "session_id": session_id,
+            "notified_pools": [],
+        })
+        self._save(watches)
+
+    def remove(self, operator: str, user_id: str, session_id: str) -> bool:
+        watches = self._load()
+        if watches.pop(f"{operator}:{user_id}:{session_id}", None) is None:
+            return False
+        self._save(watches)
+        return True
+
+    def user_operators(self, user_id: str, session_id: str) -> list[str]:
+        return sorted(
+            watch["operator"] for watch in self._load().values()
+            if watch["user_id"] == user_id and watch["session_id"] == session_id
+        )
+
+    def pending_hits(self, pools: list[TimelineItem], now: datetime | None = None) -> list[tuple[dict[str, Any], TimelineItem]]:
+        """返回尚未提醒过的 (蹲池记录, 命中卡池)；只看未结束且已公布 UP 名单的卡池。"""
+        current = (now or datetime.now(CN_TZ)).astimezone(CN_TZ)
+        open_pools: list[TimelineItem] = []
+        for pool in pools:
+            try:
+                if parse_iso(pool.end).astimezone(CN_TZ) > current:
+                    open_pools.append(pool)
+            except (TypeError, ValueError):
+                continue
+        hits = []
+        for watch in self._load().values():
+            for pool in open_pools:
+                if pool.id in watch["notified_pools"]:
+                    continue
+                if watch["operator"] in (*pool.six_star_up, *pool.weighted_up):
+                    hits.append((watch, pool))
+        return hits
+
+    def mark_notified(self, watch: dict[str, Any], pool_id: str) -> None:
+        watches = self._load()
+        key = f"{watch['operator']}:{watch['user_id']}:{watch['session_id']}"
+        if key in watches and pool_id not in watches[key]["notified_pools"]:
+            watches[key]["notified_pools"].append(pool_id)
+            self._save(watches)
+
+    def _load(self) -> dict[str, dict[str, Any]]:
+        data = self.cache.load(self.FILE_NAME)
+        if not isinstance(data, dict):
+            return {}
+        watches: dict[str, dict[str, Any]] = {}
+        for key, item in data.items():
+            try:
+                watches[key] = {
+                    "operator": str(item["operator"]),
+                    "user_id": str(item["user_id"]),
+                    "session_id": str(item["session_id"]),
+                    "notified_pools": [str(pool_id) for pool_id in item.get("notified_pools", [])],
+                }
+            except (KeyError, TypeError, AttributeError):
+                self.logger.warning(f"无法加载蹲池记录：{key}")
+        return watches
+
+    def _save(self, watches: dict[str, dict[str, Any]]) -> None:
+        self.cache.save(self.FILE_NAME, watches)

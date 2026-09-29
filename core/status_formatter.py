@@ -101,3 +101,55 @@ def parse_historical_day(value: str) -> date:
     if target_day > today:
         raise ValueError("只能测试今天及以前的日期")
     return target_day
+
+
+def format_operator_profile(
+    operator,
+    recruit_tags: list[str] | None,
+    recurrence_row: dict | None,
+    current_pools: list,
+    recruit_available: bool = True,
+) -> str:
+    """汇总干员生日、公招、复刻历史与当前 UP 卡池的文字档案。"""
+    lines = [f"【干员档案】{operator.name}"]
+    basics = []
+    if operator.rarity:
+        basics.append(f"{operator.rarity}★")
+    if operator.profession:
+        basics.append(operator.profession)
+    if basics:
+        lines.append("　".join(basics))
+    if operator.birthday_month and operator.birthday_day:
+        lines.append(f"生日：{operator.birthday_month} 月 {operator.birthday_day} 日")
+    else:
+        lines.append("生日：暂未公开或数据源未记录")
+    if not recruit_available:
+        lines.append("公开招募：数据暂不可用")
+    elif recruit_tags is None:
+        lines.append("公开招募：不在公招池")
+    else:
+        lines.append(f"公开招募：可招募（{'、'.join(recruit_tags) or '无词缀'}）")
+    if recurrence_row:
+        if recurrence_row.get("rate_up_ongoing"):
+            rate_up = "进行中"
+        else:
+            rate_up = f"{recurrence_row['rate_up_end']} 结束，已 {recurrence_row['rate_up_days']} 天"
+        lines.append(
+            f"最近 UP：{rate_up}（{recurrence_row.get('pool_type', '')}，"
+            f"累计 {recurrence_row.get('rate_up_count', 0)} 次）"
+        )
+        if recurrence_row.get("shop_end"):
+            lines.append(
+                f"黄票商店：最近 {recurrence_row['shop_end']}，累计 {recurrence_row.get('shop_count', 0)} 次"
+            )
+        else:
+            lines.append("黄票商店：尚未进店")
+    if current_pools:
+        lines.append("当前 UP 卡池：")
+        for pool in current_pools:
+            try:
+                end = datetime.fromisoformat(pool.end).astimezone(CN_TZ).strftime("%m-%d %H:%M")
+            except (TypeError, ValueError):
+                end = "时间未知"
+            lines.append(f"- {pool.name}（至 {end}）")
+    return "\n".join(lines)

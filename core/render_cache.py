@@ -306,24 +306,26 @@ class CalendarImageCache:
 class HelpImageCache:
     """按自然日缓存帮助长图。
 
-    帮助页里的倒计时与可订阅日程每天变一次，所以缓存只以
-    (mode, 日历日期) 为键：命中即当天复用，跨日自动失效，
-    由每日 04:00 的预缓存任务负责重新渲染。
+    帮助页里的倒计时与可订阅日程每天变一次，所以缓存以
+    (内容签名, mode, 日历日期) 为键：命中即当天复用，跨日自动失效，
+    由每日 04:00 的预缓存任务负责重新渲染。内容签名覆盖插件版本、
+    帮助模板和命令定义，升级或热重载后当天不会继续复用旧命令表。
     """
 
     MODES = ("full", "subscribe")
     # v2 重新纳入完整命令行（含 B站动态与公招），不能复用旧版当日空命令缓存。
     CACHE_VERSION = 3
 
-    def __init__(self, root: Path):
+    def __init__(self, root: Path, signature: str = ""):
         self.root = root
         self.root.mkdir(parents=True, exist_ok=True)
+        self.prefix = f"help-v{self.CACHE_VERSION}-{signature}" if signature else f"help-v{self.CACHE_VERSION}"
 
     def image_path(self, mode: str, calendar_date: str) -> Path | None:
         """返回该 mode 当日缓存图片路径；不存在或无效时返回 None。"""
         if mode not in self.MODES or not DATE_PATTERN.match(calendar_date):
             return None
-        image = self.root / f"help-v{self.CACHE_VERSION}-{mode}-{calendar_date}.png"
+        image = self.root / f"{self.prefix}-{mode}-{calendar_date}.png"
         try:
             if not image.is_file() or image.stat().st_size <= 8:
                 return None
@@ -346,7 +348,7 @@ class HelpImageCache:
         if mode not in self.MODES:
             return None
         current = now or datetime.now(CN_TZ)
-        target = self.root / f"help-v{self.CACHE_VERSION}-{mode}-{current.date().isoformat()}.png"
+        target = self.root / f"{self.prefix}-{mode}-{current.date().isoformat()}.png"
         temporary = target.with_name(f".{target.name}.{uuid4().hex}.tmp")
         try:
             write_image(rendered, temporary)
@@ -367,7 +369,7 @@ class HelpImageCache:
         """删除当日全部帮助缓存，用于管理员强制刷新后重渲染。"""
         current = now or datetime.now(CN_TZ)
         for mode in self.MODES:
-            image = self.root / f"help-v{self.CACHE_VERSION}-{mode}-{current.date().isoformat()}.png"
+            image = self.root / f"{self.prefix}-{mode}-{current.date().isoformat()}.png"
             try:
                 image.unlink(missing_ok=True)
             except OSError:
@@ -381,14 +383,17 @@ class HelpImageCache:
         }
 
     def _prune(self, keep_days: int) -> None:
-        """每个 mode 只保留最近 keep_days 天的缓存图。"""
+        """每个 mode 只保留当前签名最近 keep_days 天的缓存图，旧版本/旧签名的一并删除。"""
         for mode in self.MODES:
-            images = sorted(
-                self.root.glob(f"help-v{self.CACHE_VERSION}-{mode}-*.png"),
+            current = sorted(
+                self.root.glob(f"{self.prefix}-{mode}-*.png"),
                 key=lambda item: item.name,
                 reverse=True,
             )
-            for image in images[keep_days:]:
+            keep = {image.name for image in current[:keep_days]}
+            for image in self.root.glob(f"help-*{mode}-*.png"):
+                if image.name in keep:
+                    continue
                 try:
                     image.unlink()
                 except OSError:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import re
 from collections import defaultdict
 from dataclasses import dataclass
@@ -18,7 +19,7 @@ from astrbot.core.utils.astrbot_path import get_astrbot_plugin_data_path
 
 from .core.command_args import split_name_and_time, strip_command_prefix
 from .core.config import config_int, config_strings, config_value, sync_builtin_message_previews
-from .core.help_manager import HelpManager, generate_help_text
+from .core.help_manager import HelpManager, command_rows, generate_help_text
 from .core.image_cache_manager import CalendarImageManager
 from .core.messages import MessageCatalog
 from .core.models import parse_iso
@@ -31,10 +32,17 @@ from .core.service import CalendarService
 from .core.status_formatter import (
     birthday_details,
     data_quality_notice,
+    format_operator_profile,
     format_status,
     parse_historical_day,
 )
-from .core.subscription import Subscription, SubscriptionManager
+from .core.subscription import (
+    OperatorWatchManager,
+    Subscription,
+    SubscriptionManager,
+    drop_paired_shops,
+    shop_timeline_item,
+)
 from .core.bilibili_manager import BilibiliDynamicManager
 from .core.ai_tools import TOOL_NAMES, build_ai_tools
 from .core.recruitment_calculator import (
@@ -93,6 +101,13 @@ BIRTHDAY_COMMAND = CommandSpec(
     argument_hint="<干员名称>",
     example="/方舟生日 卡缇",
 )
+OPERATOR_COMMAND = CommandSpec(
+    "方舟干员",
+    ("干员档案", "方舟干员档案"),
+    "查看干员档案：星级职业、生日、公招词条、最近 UP 与黄票商店记录、当前 UP 卡池。",
+    argument_hint="<干员名称>",
+    example="/方舟干员 玫兰莎",
+)
 STATUS_COMMAND = CommandSpec(
     "方舟日历状态",
     ("方舟状态", "明日方舟日历状态"),
@@ -116,8 +131,22 @@ UNSUBSCRIBE_COMMAND = CommandSpec(
 SUBSCRIPTION_LIST_COMMAND = CommandSpec(
     "方舟订阅列表",
     ("我的方舟订阅", "查看订阅"),
-    "查看当前订阅的所有活动和卡池。",
+    "查看当前订阅的所有活动、卡池和蹲池干员。",
     example="/方舟订阅列表",
+)
+WATCH_COMMAND = CommandSpec(
+    "方舟蹲池",
+    ("蹲池", "订阅干员UP"),
+    "蹲指定干员；卡池 UP 名单出现该干员时提醒，每个卡池只提醒一次。",
+    argument_hint="<干员名称>",
+    example="/方舟蹲池 玫兰莎",
+)
+UNWATCH_COMMAND = CommandSpec(
+    "方舟取消蹲池",
+    ("取消蹲池", "取消订阅干员UP"),
+    "取消蹲池。",
+    argument_hint="<干员名称>",
+    example="/方舟取消蹲池 玫兰莎",
 )
 BILIBILI_DYNAMIC_COMMAND = CommandSpec(
     "方舟动态",
@@ -167,8 +196,8 @@ HISTORICAL_COMMAND = CommandSpec(
     example="/方舟历史日程测试 2026-07-01",
 )
 
-SUBSCRIPTION_COMMANDS = (SUBSCRIBE_COMMAND, UNSUBSCRIBE_COMMAND, SUBSCRIPTION_LIST_COMMAND)
-USER_COMMANDS = (CALENDAR_COMMAND, BIRTHDAY_COMMAND, STATUS_COMMAND, *SUBSCRIPTION_COMMANDS, BILIBILI_DYNAMIC_COMMAND, RECRUIT_COMMAND, RECURRENCE_COMMAND, HELP_COMMAND)
+SUBSCRIPTION_COMMANDS = (SUBSCRIBE_COMMAND, UNSUBSCRIBE_COMMAND, SUBSCRIPTION_LIST_COMMAND, WATCH_COMMAND, UNWATCH_COMMAND)
+USER_COMMANDS = (CALENDAR_COMMAND, BIRTHDAY_COMMAND, OPERATOR_COMMAND, STATUS_COMMAND, *SUBSCRIPTION_COMMANDS, BILIBILI_DYNAMIC_COMMAND, RECRUIT_COMMAND, RECURRENCE_COMMAND, HELP_COMMAND)
 ADMIN_COMMANDS = (REFRESH_COMMAND, HISTORICAL_COMMAND, BILIBILI_DYNAMIC_TEST_COMMAND)
 
 
@@ -191,8 +220,9 @@ class ArkCalendarPlugin(Star):
         self.renderer = CalendarRenderer(self, self.service)
         self.messages = MessageCatalog(config, logger)
         self.render_cache = CalendarImageCache(self.data_dir / "render")
-        self.help_cache = HelpImageCache(self.data_dir / "render")
+        self.help_cache = HelpImageCache(self.data_dir / "render", self._help_signature())
         self.subscription_manager = SubscriptionManager(self.data_dir, logger)
+        self.operator_watch_manager = OperatorWatchManager(self.data_dir, logger)
         self.bilibili_manager: BilibiliDynamicManager | None = None
         self.recruitment_source: RecruitmentSource | None = None
         self.image_manager = CalendarImageManager(
@@ -324,6 +354,17 @@ class ArkCalendarPlugin(Star):
             raise
         except Exception:
             logger.warning("重载后帮助长图预热失败，将在收到对应命令时按需重试。", exc_info=True)
+
+    def _help_signature(self) -> str:
+        """帮助图内容签名：版本、模板或命令定义变化时，当天旧帮助图不再命中。"""
+        payload = repr((
+            self.service.plugin_version,
+            self.renderer.help_template,
+            command_rows(USER_COMMANDS),
+            command_rows(ADMIN_COMMANDS),
+            command_rows(SUBSCRIPTION_COMMANDS),
+        ))
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
 
     @filter.command(CALENDAR_COMMAND.name, alias=CALENDAR_COMMAND.alias_set)
     async def calendar_command(self, event: AstrMessageEvent):
@@ -464,10 +505,13 @@ class ArkCalendarPlugin(Star):
             session_id = event.unified_msg_origin
 
             self.subscription_manager.add_subscription(item, user_id, session_id, time_to_use)
+            text = self.messages.text("subscription_added", name=item.name, time=time_to_use)
+            shop_item = shop_timeline_item(item)
+            if shop_item:
+                shop_end = parse_iso(shop_item.end).astimezone(CN_TZ).strftime("%m-%d %H:%M")
+                text += "\n" + self.messages.text("subscription_shop_added", shop_end=shop_end, time=time_to_use)
             self._ensure_subscription_scheduler()
-            yield event.plain_result(
-                self.messages.text("subscription_added", name=item.name, time=time_to_use)
-            )
+            yield event.plain_result(text)
         except Exception:
             logger.error("添加订阅失败。", exc_info=True)
             yield event.plain_result(self.messages.text("subscription_failed"))
@@ -491,6 +535,7 @@ class ArkCalendarPlugin(Star):
                 sub for sub in subscriptions
                 if normalized in sub.item_name.casefold() or sub.item_name.casefold() in normalized
             ]
+            matches = drop_paired_shops(matches)
             if not matches:
                 yield event.plain_result(self.messages.text("subscription_not_found", name=name))
                 return
@@ -516,8 +561,9 @@ class ArkCalendarPlugin(Star):
             user_id = str(event.message_obj.sender.user_id)
             session_id = event.unified_msg_origin
             subscriptions = self.subscription_manager.get_user_subscriptions(user_id, session_id)
+            watched = self.operator_watch_manager.user_operators(user_id, session_id)
 
-            if not subscriptions:
+            if not subscriptions and not watched:
                 yield event.plain_result(self.messages.text("subscription_list_empty"))
                 return
 
@@ -531,11 +577,107 @@ class ArkCalendarPlugin(Star):
                     end_str = "时间未知"
                 status = "✓ 已提醒" if sub.notified else f"⏰ {sub.remind_time} 提醒"
                 lines.append(f"{i}. [{type_label}] {sub.item_name}\n   结束时间：{end_str}\n   提醒设置：{status}")
+            if watched:
+                lines.append(f"蹲池干员：{'、'.join(watched)}")
 
             yield event.plain_result("\n\n".join(lines))
         except Exception:
             logger.error("查询订阅列表失败。", exc_info=True)
             yield event.plain_result(self.messages.text("subscription_list_failed"))
+
+    @filter.command(WATCH_COMMAND.name, alias=WATCH_COMMAND.alias_set)
+    async def watch_command(self, event: AstrMessageEvent, operator_name: str = ""):
+        """蹲指定干员的 UP 卡池。"""
+        name = self._argument_text(event, WATCH_COMMAND, operator_name).strip()
+        if not name:
+            yield event.plain_result(self.messages.text("watch_missing_name"))
+            return
+        try:
+            operator, candidates = await self.service.find_operator(name)
+            if not operator:
+                yield event.plain_result(self._operator_miss_text(name, candidates))
+                return
+            user_id = str(event.message_obj.sender.user_id)
+            session_id = event.unified_msg_origin
+            self.operator_watch_manager.add(operator.name, user_id, session_id)
+            # 当前快照里已经 UP 的卡池直接在回复里告知，并记为已提醒，避免次日重复推送。
+            snapshot = await self.service.snapshot()
+            hits = [
+                (watch, pool) for watch, pool in self.operator_watch_manager.pending_hits(snapshot.gacha_pools)
+                if watch["operator"] == operator.name and watch["user_id"] == user_id and watch["session_id"] == session_id
+            ]
+            text = self.messages.text("watch_added", operator=operator.name)
+            for watch, pool in hits:
+                self.operator_watch_manager.mark_notified(watch, pool.id)
+                text += "\n" + self.messages.text("watch_hit", user="", operator=operator.name, **self._pool_window(pool))
+            yield event.plain_result(text)
+        except Exception:
+            logger.error("添加蹲池失败。", exc_info=True)
+            yield event.plain_result(self.messages.text("watch_failed"))
+
+    @filter.command(UNWATCH_COMMAND.name, alias=UNWATCH_COMMAND.alias_set)
+    async def unwatch_command(self, event: AstrMessageEvent, operator_name: str = ""):
+        """取消蹲池。"""
+        name = self._argument_text(event, UNWATCH_COMMAND, operator_name).strip()
+        if not name:
+            yield event.plain_result(self.messages.text("watch_missing_name"))
+            return
+        user_id = str(event.message_obj.sender.user_id)
+        session_id = event.unified_msg_origin
+        try:
+            watched = self.operator_watch_manager.user_operators(user_id, session_id)
+            target = name if name in watched else None
+            if target is None:
+                operator, _ = await self.service.find_operator(name)
+                target = operator.name if operator else name
+            if self.operator_watch_manager.remove(target, user_id, session_id):
+                yield event.plain_result(self.messages.text("watch_removed", operator=target))
+            else:
+                yield event.plain_result(self.messages.text("watch_not_found", operator=target))
+        except Exception:
+            logger.error("取消蹲池失败。", exc_info=True)
+            yield event.plain_result(self.messages.text("watch_failed"))
+
+    @filter.command(OPERATOR_COMMAND.name, alias=OPERATOR_COMMAND.alias_set)
+    async def operator_command(self, event: AstrMessageEvent, operator_name: str = ""):
+        """汇总干员生日、公招、复刻历史与当前 UP 卡池。"""
+        name = self._argument_text(event, OPERATOR_COMMAND, operator_name).strip()
+        if not name:
+            yield event.plain_result(self.messages.text("operator_missing_query"))
+            return
+        try:
+            operator, candidates = await self.service.find_operator(name)
+            if not operator:
+                yield event.plain_result(self._operator_miss_text(name, candidates))
+                return
+            recruit_available = True
+            recruit_tags = None
+            try:
+                pool_data = await self.recruitment_source.get_recruitment_pool() if self.recruitment_source else None
+                characters = pool_data["characters"] if pool_data else []
+                recruit_available = bool(characters)
+                recruit_tags = next((c["tags"] for c in characters if c["name"] == operator.name), None)
+            except Exception:
+                recruit_available = False
+                logger.warning("干员档案：读取公招池失败。", exc_info=True)
+            recurrence_row = None
+            try:
+                report = await self.service.recurrence_report("全部 all")
+                recurrence_row = next((row for row in report["rows"] if row["name"] == operator.name), None)
+            except Exception:
+                logger.warning("干员档案：读取复刻历史失败。", exc_info=True)
+            snapshot = await self.service.snapshot()
+            now = datetime.now(CN_TZ)
+            current_pools = [
+                pool for pool in snapshot.gacha_pools
+                if operator.name in (*pool.six_star_up, *pool.weighted_up) and parse_iso(pool.end) > now
+            ]
+            yield event.plain_result(format_operator_profile(
+                operator, recruit_tags, recurrence_row, current_pools, recruit_available=recruit_available,
+            ))
+        except Exception:
+            logger.error("查询干员档案失败。", exc_info=True)
+            yield event.plain_result(self.messages.text("operator_lookup_failed"))
 
     @filter.command(BILIBILI_DYNAMIC_COMMAND.name, alias=BILIBILI_DYNAMIC_COMMAND.alias_set)
     async def bilibili_dynamic_command(self, event: AstrMessageEvent, index: str = ""):
@@ -808,6 +950,21 @@ class ArkCalendarPlugin(Star):
             return argument_text
         return " ".join(part for part in fallback if part).strip()
 
+    def _operator_miss_text(self, name: str, candidates: list[str]) -> str:
+        if candidates:
+            return self.messages.text("operator_candidates", candidates="\n".join(f"- {c}" for c in candidates))
+        return self.messages.text("operator_not_found", name=name)
+
+    @staticmethod
+    def _pool_window(pool) -> dict[str, str]:
+        """卡池名与开放/结束时间文案，供蹲池提醒模板使用。"""
+        try:
+            start = parse_iso(pool.start).astimezone(CN_TZ).strftime("%m-%d %H:%M")
+            end = parse_iso(pool.end).astimezone(CN_TZ).strftime("%m-%d %H:%M")
+        except (TypeError, ValueError):
+            start = end = "时间未知"
+        return {"pool": pool.name, "start": start, "end": end}
+
     @staticmethod
     def _is_birthday_today(operator) -> bool:
         now = datetime.now(CN_TZ)
@@ -954,6 +1111,8 @@ class ArkCalendarPlugin(Star):
         run_at = self.subscription_manager.get_next_reminder_at()
         if run_at is None:
             return False
+        # 已到期的提醒至少间隔 30 秒再跑，避免重试状态写不进去时同一批提醒被立即反复执行。
+        run_at = max(run_at, datetime.now(CN_TZ) + timedelta(seconds=30))
         self.scheduler.add_job(
             self._scheduled_subscription_reminder,
             "date",
@@ -1098,6 +1257,7 @@ class ArkCalendarPlugin(Star):
             logger.info("每日预缓存开始：强制刷新数据并生成当天图片缓存。")
             try:
                 snapshot, outcome = await self.service.snapshot_with_outcome(force=True)
+                await self._notify_operator_watches(snapshot)
                 calendar_image, image_state, _ = await self.image_manager.get_calendar_image(snapshot, self.image_manager._display_config())
 
                 # 任务补跑或凌晨前曾生成帮助图时，先清除当天旧版本，确保使用新快照重渲染。
@@ -1147,6 +1307,43 @@ class ArkCalendarPlugin(Star):
                     "详情请查看 AstrBot 日志。",
                     "daily_precache_failed",
                 )
+
+    async def _notify_operator_watches(self, snapshot) -> None:
+        """卡池 UP 名单出现蹲池干员时提醒；失败的留到下次预缓存重试，不影响预缓存本身。"""
+        try:
+            hits = self.operator_watch_manager.pending_hits(snapshot.gacha_pools)
+        except Exception:
+            logger.error("蹲池检查失败。", exc_info=True)
+            return
+        grouped: dict[tuple[str, str], list] = defaultdict(list)
+        for watch, pool in hits:
+            grouped[(watch["session_id"], watch["user_id"])].append((watch, pool))
+        for (session_id, user_id), items in grouped.items():
+            try:
+                if not platform_supports_proactive_send(session_id, self.context):
+                    logger.warning(f"蹲池提醒不支持主动投递至 {session_id}。")
+                    continue
+                use_at = platform_supports_at(session_id, self.context)
+                mention = "" if use_at or not is_group_session(session_id) else f"@{user_id} "
+                lines = [
+                    self.messages.text(
+                        "watch_hit",
+                        user=mention if index == 0 else "",
+                        operator=watch["operator"],
+                        **self._pool_window(pool),
+                    )
+                    for index, (watch, pool) in enumerate(items)
+                ]
+                components: list[Any] = [Comp.At(qq=user_id, name=user_id)] if use_at else []
+                components.append(Comp.Plain(text="\n\n".join(lines)))
+                if await self.context.send_message(session_id, MessageChain(components)) is False:
+                    logger.warning(f"蹲池提醒未投递至 {session_id}（订阅者 {user_id}）。")
+                    continue
+                for watch, pool in items:
+                    self.operator_watch_manager.mark_notified(watch, pool.id)
+                logger.info(f"蹲池提醒已投递至 {session_id}（订阅者 {user_id}，{len(items)} 条）。")
+            except Exception:
+                logger.error(f"向 {session_id} 发送蹲池提醒失败（订阅者 {user_id}）。", exc_info=True)
 
     async def _scheduled_report(self) -> None:
         if self._scheduled_report_lock.locked():
@@ -1252,12 +1449,17 @@ class ArkCalendarPlugin(Star):
                 # 按 (会话, 订阅者) 分组：同一人在同一会话的多条提醒合并成一条消息，
                 # 但不同订阅者各发一条，避免一条消息里出现多个 At 组件。
                 grouped: dict[tuple[str, str], list[Subscription]] = defaultdict(list)
-                end_texts: dict[str, str] = {}
+                end_texts: dict[str, tuple[str, str]] = {}
+                today = datetime.now(CN_TZ).date()
                 for sub in pending:
                     try:
-                        end_texts[sub.item_id] = parse_iso(sub.end_time).astimezone(CN_TZ).strftime("%H:%M")
+                        end = parse_iso(sub.end_time).astimezone(CN_TZ)
+                        # 提醒可能因补跑或重试晚于前一天发出，日期按实际相对天数描述。
+                        days = (end.date() - today).days
+                        end_day = {0: "今天", 1: "明天"}.get(days, f"{end:%m-%d}")
+                        end_texts[sub.item_id] = (end_day, end.strftime("%H:%M"))
                     except (TypeError, ValueError):
-                        end_texts[sub.item_id] = "未知时间"
+                        end_texts[sub.item_id] = ("", "未知时间")
                     grouped[(sub.session_id, sub.user_id)].append(sub)
 
                 success_count = 0
@@ -1283,7 +1485,8 @@ class ArkCalendarPlugin(Star):
                                 "subscription_reminder",
                                 user=mention if index == 0 else "",
                                 name=sub.item_name,
-                                end_time=end_texts.get(sub.item_id, "未知时间"),
+                                end_day=end_texts.get(sub.item_id, ("", ""))[0],
+                                end_time=end_texts.get(sub.item_id, ("", "未知时间"))[1],
                             )
                             for index, sub in enumerate(subs)
                         ]
