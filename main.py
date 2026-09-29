@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import re
 from collections import defaultdict
 from dataclasses import dataclass
@@ -18,7 +19,7 @@ from astrbot.core.utils.astrbot_path import get_astrbot_plugin_data_path
 
 from .core.command_args import split_name_and_time, strip_command_prefix
 from .core.config import config_int, config_strings, config_value, sync_builtin_message_previews
-from .core.help_manager import HelpManager, generate_help_text
+from .core.help_manager import HelpManager, command_rows, generate_help_text
 from .core.image_cache_manager import CalendarImageManager
 from .core.messages import MessageCatalog
 from .core.models import parse_iso
@@ -219,7 +220,7 @@ class ArkCalendarPlugin(Star):
         self.renderer = CalendarRenderer(self, self.service)
         self.messages = MessageCatalog(config, logger)
         self.render_cache = CalendarImageCache(self.data_dir / "render")
-        self.help_cache = HelpImageCache(self.data_dir / "render")
+        self.help_cache = HelpImageCache(self.data_dir / "render", self._help_signature())
         self.subscription_manager = SubscriptionManager(self.data_dir, logger)
         self.operator_watch_manager = OperatorWatchManager(self.data_dir, logger)
         self.bilibili_manager: BilibiliDynamicManager | None = None
@@ -353,6 +354,17 @@ class ArkCalendarPlugin(Star):
             raise
         except Exception:
             logger.warning("重载后帮助长图预热失败，将在收到对应命令时按需重试。", exc_info=True)
+
+    def _help_signature(self) -> str:
+        """帮助图内容签名：版本、模板或命令定义变化时，当天旧帮助图不再命中。"""
+        payload = repr((
+            self.service.plugin_version,
+            self.renderer.help_template,
+            command_rows(USER_COMMANDS),
+            command_rows(ADMIN_COMMANDS),
+            command_rows(SUBSCRIPTION_COMMANDS),
+        ))
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
 
     @filter.command(CALENDAR_COMMAND.name, alias=CALENDAR_COMMAND.alias_set)
     async def calendar_command(self, event: AstrMessageEvent):

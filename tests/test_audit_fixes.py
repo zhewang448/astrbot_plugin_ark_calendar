@@ -1,4 +1,5 @@
 import asyncio
+import re
 from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -16,6 +17,8 @@ from core.render_cache import CalendarImageCache, validate_rendered_image
 from core.renderer import CalendarRenderer
 from core.subscription import SubscriptionManager
 from sources.recruitment import RecruitmentSource
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 def subscription_timezone():
@@ -624,3 +627,29 @@ def test_event_subscription_adds_and_removes_its_shop_reminder(tmp_path: Path):
     assert [sub.item_id for sub in drop_paired_shops(subs)] == ["evt"]
     assert manager.remove_subscription("evt", "u", "platform:Group:1") is True
     assert manager.get_user_subscriptions("u", "platform:Group:1") == []
+
+
+def test_help_cache_is_keyed_by_content_signature(tmp_path):
+    from core.render_cache import HelpImageCache
+
+    png = b"\x89PNG\r\n\x1a\n" + b"0" * 16
+    old = HelpImageCache(tmp_path, "oldsig")
+    old.store(png, "full")
+    assert old.lookup("full")
+    new = HelpImageCache(tmp_path, "newsig")
+    # 升级后命令表变化：同日旧帮助图不能命中，写入新图时顺带清理旧签名文件。
+    assert new.lookup("full") is None
+    new.store(png, "full")
+    assert new.lookup("full")
+    assert old.lookup("full") is None
+
+
+def test_help_signature_covers_every_registered_command():
+    main = (ROOT / "main.py").read_text(encoding="utf-8")
+    specs = set(re.findall(r"^([A-Z_]+_COMMAND) = CommandSpec\(", main, re.MULTILINE))
+    listed = set()
+    for group in ("SUBSCRIPTION_COMMANDS", "USER_COMMANDS", "ADMIN_COMMANDS"):
+        body = re.search(rf"^{group} = \((.*)\)$", main, re.MULTILINE).group(1)
+        listed |= set(re.findall(r"[A-Z_]+_COMMAND\b", body))
+    # 每个 CommandSpec 都要出现在帮助分组里，避免新增指令只注册处理器却没进帮助。
+    assert specs == listed
