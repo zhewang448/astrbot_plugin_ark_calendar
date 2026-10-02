@@ -9,21 +9,76 @@
         "default": 28,
         "hint": "支持 7–90 天，过长时间轴会自动降低刻度密度。"
       },
+      "report_sections": {
+        "description": "日报栏目与顺序",
+        "type": "list",
+        "options": [
+          "today_ops",
+          "birthday",
+          "recent_operators",
+          "voucher_exchange",
+          "new_skins",
+          "new_modules",
+          "new_stages",
+          "new_furniture",
+          "events",
+          "long_term",
+          "pools",
+          "pool_details"
+        ],
+        "labels": [
+          "今日作战信息",
+          "今日生日干员",
+          "近期新增干员",
+          "首页亮点 · 凭证兑换",
+          "首页亮点 · 新增时装",
+          "首页亮点 · 新增模组",
+          "新增关卡",
+          "新增家具",
+          "活动日程",
+          "长期活动",
+          "寻访日程",
+          "寻访卡池详情"
+        ],
+        "default": [
+          "today_ops",
+          "birthday",
+          "recent_operators",
+          "voucher_exchange",
+          "new_skins",
+          "new_modules",
+          "new_stages",
+          "new_furniture",
+          "events",
+          "long_term",
+          "pools",
+          "pool_details"
+        ],
+        "hint": "日报和日历指令按此列表的顺序显示栏目，删掉的栏目不显示；新选中的栏目追加在末尾，调整顺序需删掉排在它后面的栏目再依次重新选择。相邻的首页亮点三栏合并为一行；长期活动紧跟活动日程时并入同一区块。清空时恢复全部栏目。"
+      },
+      "report_sections_migrated": {
+        "description": "旧版显示开关已迁移",
+        "type": "bool",
+        "default": false,
+        "invisible": true
+      },
       "include_recent_operators": {
-        "description": "显示近期新增干员",
-        "type": "bool",
-        "default": true
-      },
-      "include_long_term": {
-        "description": "显示长期活动",
-        "type": "bool",
-        "default": true
-      },
-      "pool_detail_cards": {
-        "description": "寻访日程下显示卡池详情卡片",
+        "description": "显示近期新增干员（已由日报栏目替代）",
         "type": "bool",
         "default": true,
-        "hint": "默认在寻访日程下方追加固定尺寸卡池卡片，避免短卡池图片和文字被压缩；可关闭以仅保留时间轴。"
+        "invisible": true
+      },
+      "include_long_term": {
+        "description": "显示长期活动（已由日报栏目替代）",
+        "type": "bool",
+        "default": true,
+        "invisible": true
+      },
+      "pool_detail_cards": {
+        "description": "寻访日程下显示卡池详情卡片（已由日报栏目替代）",
+        "type": "bool",
+        "default": true,
+        "invisible": true
       },
       "show_unpublished_pools": {
         "description": "方舟日报显示未公布卡池",

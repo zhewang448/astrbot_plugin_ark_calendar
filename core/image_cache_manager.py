@@ -56,10 +56,8 @@ class CalendarImageManager:
             "template_hash": self.renderer.template_hash,
             "render_image_type": self._value("render_image_type", "png"),
             "render_device_scale_factor_level": self._value("render_device_scale_factor_level", "high"),
-            "include_recent_operators": config_value(self.config, "basic", "include_recent_operators", True, "include_recent_operators"),
-            "include_long_term": config_value(self.config, "basic", "include_long_term", True, "include_long_term"),
+            "report_sections": self.service.report_sections(),
             "show_source_footer": config_value(self.config, "basic", "show_source_footer", True, "show_source_footer"),
-            "pool_detail_cards": config_value(self.config, "basic", "pool_detail_cards", True, "pool_detail_cards"),
             "show_unpublished_pools": self.service.show_unpublished_pools(),
             "developer_mode_enabled": config_value(self.config, "developer_mode", "enabled", False),
             "calendar_extra_blank_height": config_value(

@@ -15,7 +15,7 @@ import aiohttp
 
 from .assets import AssetCache
 from .cache import JsonCache
-from .config import config_int, config_value
+from .config import config_int, config_report_sections, config_value
 from .recurrence import DEFAULT_LIMIT, build_recurrence_report, parse_display_limit, parse_recurrence_query
 from .models import (
     BirthdayGroup,
@@ -30,7 +30,7 @@ from .models import (
 from ..sources.anything_ics import AnythingIcsSource
 from ..sources.gacha import GachaSource
 from ..sources.http import HttpClient, PublicResolver
-from ..sources.prts import PrtsSource, game_weekday
+from ..sources.prts import PrtsSource, force_open_active, game_weekday
 
 CN_TZ = ZoneInfo("Asia/Shanghai")
 
@@ -45,14 +45,16 @@ OPERATOR_AVATAR_BOX = (73, 73)       # .op img，近期新增干员
 BIRTHDAY_AVATAR_BOX = (88, 88)       # .birth-op img，当天生日干员
 HIGHLIGHT_IMAGE_BOX = (100, 100)     # .highlight-item img，首页亮点（428px 面板 4 列，实测 96px）
 STAGE_IMAGE_BOX = (176, 70)          # .stage-media img，物资/芯片关卡（4 列时 170px，取 176 覆盖两种列数）
+FURNITURE_IMAGE_BOX = (320, 180)     # .furn img，新增家具（1312px 主栏 4 列）
 
-# _hydrate_home_highlights 一次处理 5 个字段，但它们落在两种不同尺寸的容器里。
+# _hydrate_home_highlights 一次处理 6 个字段，但它们落在两种不同尺寸的容器里。
 HOME_HIGHLIGHT_BOXES = {
     "resource_schedule": STAGE_IMAGE_BOX,
     "chip_schedule": STAGE_IMAGE_BOX,
     "voucher_exchange": HIGHLIGHT_IMAGE_BOX,
     "new_skins": HIGHLIGHT_IMAGE_BOX,
     "new_modules": HIGHLIGHT_IMAGE_BOX,
+    "new_furniture": FURNITURE_IMAGE_BOX,
 }
 
 
@@ -61,7 +63,7 @@ class CalendarService:
     # 仍然能读到该属性。
     plugin_version = "dev"
 
-    SNAPSHOT_SCHEMA_VERSION = 5
+    SNAPSHOT_SCHEMA_VERSION = 6
     SOURCE_CACHE_SCHEMA_VERSION = 1
     CRITICAL_SOURCE_NAMES = frozenset({
         "anything-ics / 生日",
@@ -267,12 +269,17 @@ class CalendarService:
     def show_unpublished_pools(self) -> bool:
         return bool(self.value("basic", "show_unpublished_pools", True, "show_unpublished_pools"))
 
+    def report_sections(self) -> list[str]:
+        return config_report_sections(self.config)
+
     def _snapshot_data_config(self) -> dict[str, Any]:
+        sections = self.report_sections()
         return {
             "timeline_days": self.timeline_days(),
-            "include_recent_operators": bool(self.value("basic", "include_recent_operators", True, "include_recent_operators")),
-            "include_long_term": bool(self.value("basic", "include_long_term", True, "include_long_term")),
-            "pool_detail_cards": bool(self.value("basic", "pool_detail_cards", True, "pool_detail_cards")),
+            # 只有这三个栏目决定快照抓取的数据；栏目顺序只影响渲染。
+            "include_recent_operators": "recent_operators" in sections,
+            "include_long_term": "long_term" in sections,
+            "pool_detail_cards": "pool_details" in sections,
             "show_unpublished_pools": self.show_unpublished_pools(),
             "anything_ics_base_url": str(self.value("data_sources", "anything_ics_base_url", "", "anything_ics_base_url") or ""),
             "prts_base_url": str(self.value("data_sources", "prts_base_url", "", "prts_base_url") or ""),
@@ -688,7 +695,7 @@ class CalendarService:
         today_birthdays = [await self._operator_from_record(item, avatar_urls) for item in today_records]
 
         recent_operators: list[Operator] = []
-        if self.value("basic", "include_recent_operators", True, "include_recent_operators"):
+        if "recent_operators" in self.report_sections():
             for item in home.get("recent", [])[:4]:
                 name = item.get("name", "")
                 if not name:
@@ -736,6 +743,8 @@ class CalendarService:
             home.get("voucher_exchange", []),
             home.get("new_skins", []),
             home.get("new_modules", []),
+            home.get("new_stages", []),
+            home.get("new_furniture", []),
         )
         return CalendarSnapshot(
             generated_at=now.isoformat(),
@@ -748,7 +757,7 @@ class CalendarService:
             recent_operators=recent_operators,
             events=event_items,
             gacha_pools=gacha_items,
-            long_term_events=long_items if self.value("basic", "include_long_term", True, "include_long_term") else [],
+            long_term_events=long_items if "long_term" in self.report_sections() else [],
             source_states=source_states,
             schema_version=self.SNAPSHOT_SCHEMA_VERSION,
             data_config_hash=self._data_config_hash(),
@@ -767,6 +776,8 @@ class CalendarService:
                     current.get("always_open")
                     or current.get("all_open")
                     or weekday in allowed
+                    # 首页缓存最长 6 小时，特别开放区间按调用时刻重新判定。
+                    or force_open_active(current.get("force_open"), now)
                 )
                 schedules.append(current)
             result[key] = schedules
@@ -785,7 +796,7 @@ class CalendarService:
             current["image"] = await self.assets.data_uri(current.get("image", ""), box=box)
             return current
 
-        for key in ("resource_schedule", "chip_schedule", "voucher_exchange", "new_skins", "new_modules"):
+        for key in HOME_HIGHLIGHT_BOXES:
             items = [item for item in home.get(key, []) or [] if isinstance(item, dict)]
             box = HOME_HIGHLIGHT_BOXES[key]
             result[key] = list(await asyncio.gather(*(hydrate(item, box) for item in items)))
@@ -976,7 +987,7 @@ class CalendarService:
             ),
         )
         detail_images = []
-        if self.value("basic", "pool_detail_cards", True, "pool_detail_cards"):
+        if "pool_details" in self.report_sections():
             detail_images = await asyncio.gather(
                 *(self.assets.data_uri(pool.get("image", ""), box=POOL_DETAIL_IMAGE_BOX, quality=100, fit="contain", force_webp=True) for pool in pools_raw),
             )

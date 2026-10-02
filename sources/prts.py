@@ -20,6 +20,20 @@ def game_weekday(now: datetime | None = None) -> int:
     return ((now or datetime.now(CN_TZ)) - timedelta(hours=GAME_DAILY_RESET_HOUR)).weekday()
 
 
+def force_open_active(window: str | None, now: datetime | None = None) -> bool:
+    """PRTS 首页“特别开放”区间（"开始/结束" ISO 时间）是否覆盖当前游戏日，与页面脚本按天判定一致。"""
+    start, sep, end = str(window or "").partition("/")
+    if not sep:
+        return False
+    shift = timedelta(hours=GAME_DAILY_RESET_HOUR)
+    try:
+        start_day = (datetime.fromisoformat(start) - shift).date()
+        end_day = (datetime.fromisoformat(end) - shift).date()
+    except ValueError:
+        return False
+    return start_day <= ((now or datetime.now(CN_TZ)) - shift).date() <= end_day
+
+
 class PrtsSource:
     RECURRENCE_PAGE = "卡池一览/寻访概率提升"
 
@@ -31,9 +45,179 @@ class PrtsSource:
     async def home(self, now: datetime | None = None) -> dict:
         html = await self.http.text(f"{self.base_url}/")
         soup = BeautifulSoup(html, "html.parser")
+        # 2026-10 起 PRTS 首页改为卡片组件；旧版表格布局的解析保留作回退。
+        if soup.select_one(".mp-res[data-days]"):
+            return self._card_home(soup, now or datetime.now(CN_TZ), self.base_url)
+        return self._legacy_home(soup, game_weekday(now), self.base_url)
+
+    @classmethod
+    def _card_home(cls, soup: BeautifulSoup, now: datetime, base_url: str) -> dict:
+        res = soup.select_one("#mp-res")
+        force_open = str(res.get("data-force-open", "")) if res else ""
+        resource_schedule = cls._card_schedule(soup, "物资筹备", force_open, now, base_url)
+        chip_schedule = cls._card_schedule(soup, "芯片搜索", force_open, now, base_url)
+        return {
+            "supplies": [item["name"] for item in resource_schedule if item["open"]],
+            "chips": [item["name"] for item in chip_schedule if item["open"]],
+            "alerts": cls._card_alerts(soup, now),
+            "resource_schedule": resource_schedule,
+            "chip_schedule": chip_schedule,
+            "recent": [{"name": x["name"], "avatar": x["image"]} for x in cls._card_ops(soup, "近期新增", base_url)],
+            "birthday": [{"name": x["name"], "avatar": x["image"]} for x in cls._card_ops(soup, "今天生日", base_url)],
+            "voucher_exchange": cls._card_ops(soup, "凭证兑换", base_url, with_subtitle=False),
+            "new_skins": cls._card_ops(soup, "新增时装", base_url, with_subtitle=False),
+            "new_modules": cls._card_ops(soup, "新增模组", base_url),
+            "new_stages": cls._card_stages(soup),
+            "new_furniture": cls._card_furniture(soup, base_url),
+        }
+
+    @staticmethod
+    def _card_stages(soup: BeautifulSoup) -> list[dict]:
+        """新增关卡按活动汇总为“章节 + 关卡数”，日报只展示摘要。"""
+        result: list[dict] = []
+        for event in soup.select(".mp-stages__event"):
+            heading = event.find(["h3", "h4"])
+            if heading is None:
+                continue
+            en = heading.select_one(".ak-en")
+            code = en.get_text(strip=True) if en else ""
+            name = heading.get_text("", strip=True).removesuffix(code).strip()
+            chapters: list[dict] = []
+            chapter = ""
+            for child in event.find_all("div", recursive=False):
+                classes = child.get("class", [])
+                if "mp-stages__chapter" in classes:
+                    chapter = child.get_text(strip=True)
+                elif "mp-stages__grid" in classes and (count := len(child.select(".ak-stage"))):
+                    chapters.append({"name": chapter, "count": count})
+            if name and chapters:
+                result.append({"name": name, "code": code, "chapters": chapters})
+        return result
+
+    @staticmethod
+    def _card_furniture(soup: BeautifulSoup, base_url: str) -> list[dict]:
+        result: list[dict] = []
+        for node in soup.select(".mp-furn"):
+            anchor = node.select_one("a[title]")
+            name = anchor.get("title", "").strip() if anchor else ""
+            if not name:
+                continue
+            image = node.select_one(".mp-furn__pic img[src]")
+            tag = node.select_one(".mp-furn__name .ak-tag")
+            desc = node.select_one(".mp-furn__desc")
+            result.append({
+                "name": name,
+                "tag": tag.get_text(strip=True) if tag else "",
+                "description": desc.get_text(" ", strip=True) if desc else "",
+                # 家具图片为 //torappu.prts.wiki 协议相对地址。
+                "image": urljoin(base_url, image.get("src", "")) if image else "",
+                "href": urljoin(base_url, anchor.get("href", "")),
+            })
+        return result
+
+    @classmethod
+    def _card_schedule(cls, soup: BeautifulSoup, title: str, force_open: str, now: datetime, base_url: str) -> list[dict]:
+        group = next(
+            (node for node in soup.select(".mp-res-group")
+             if (label := node.select_one(".mp-label")) and label.get_text(strip=True) == title),
+            None,
+        )
+        if group is None:
+            return []
         weekday = game_weekday(now)
-        resource_schedule = self._resource_schedule(soup, weekday, self.base_url)
-        chip_schedule = self._chip_schedule(soup, weekday, self.base_url)
+        forced = force_open_active(force_open, now)
+        result: list[dict] = []
+        for card in group.select(".mp-res[data-days]"):
+            name_node = card.select_one(".mp-res__name")
+            image = card.select_one("img[src]")
+            label = name_node.get_text("", strip=True).replace(" ", "") if name_node else ""
+            src = urljoin(base_url, image.get("src", "")) if image else ""
+            stage = ""
+            if title == "物资筹备":
+                name = cls._resource_name(cls._file_name(src)) or label
+            else:
+                # 新版写作“重装 & 医疗”，按职业集合对齐到旧版名称（“医疗&重装”）及关卡名。
+                stage = next((key for key in cls.CHIP_STAGES if set(cls._chip_name(key).split("&")) == set(label.split("&"))), "")
+                name = cls._chip_name(stage) or label
+            if not name:
+                continue
+            # data-days 用 1-7 表示周一到周日。
+            allowed = sorted({int(ch) - 1 for ch in str(card.get("data-days", "")) if ch in "1234567"})
+            always_open = len(allowed) == 7
+            result.append({
+                "name": name,
+                "image": src,
+                "stage": stage,
+                "weekdays": allowed,
+                "weekdays_label": "常驻" if always_open else "".join("一二三四五六日"[day] for day in allowed),
+                "always_open": always_open,
+                "style_open": False,
+                "all_open": False,
+                "force_open": force_open,
+                "open": always_open or weekday in allowed or forced,
+            })
+        return result
+
+    @staticmethod
+    def _card_ops(soup: BeautifulSoup, title: str, base_url: str, with_subtitle: bool = True) -> list[dict]:
+        for group in soup.select(".mp-ops__group"):
+            heading = group.select_one(".mp-ops__title .cn")
+            if not heading or heading.get_text(strip=True) != title:
+                continue
+            result: dict[tuple[str, str], dict] = {}
+            for anchor in group.select(".ak-op-card a[title]"):
+                image = anchor.select_one(".ak-op-card__portrait > img[src]")
+                name = anchor.get("title", "").strip()
+                if not name or not image:
+                    continue
+                sub = anchor.select_one(".ak-op-card__sub")
+                subtitle = sub.get_text(" ", strip=True) if with_subtitle and sub else ""
+                result[(name, subtitle)] = {
+                    "name": name,
+                    "subtitle": subtitle,
+                    "image": urljoin(base_url, image.get("src", "")),
+                    "href": urljoin(base_url, anchor.get("href", "")),
+                }
+            return list(result.values())
+        return []
+
+    @staticmethod
+    def _card_alerts(soup: BeautifulSoup, now: datetime) -> list[dict[str, str]]:
+        alerts: list[tuple[datetime, dict[str, str]]] = []
+        weekly = soup.select_one(".mp-cd__label b")
+        if weekly and "剿灭" in weekly.get_text():
+            # 页面倒计时由脚本计算，这里按“每周一 04:00”推算下一次刷新。
+            base = now - timedelta(hours=GAME_DAILY_RESET_HOUR)
+            monday = (base - timedelta(days=base.weekday())).replace(hour=GAME_DAILY_RESET_HOUR, minute=0, second=0, microsecond=0)
+            refresh = monday + timedelta(days=7)
+            alerts.append((refresh, {"kind": "周常刷新", "name": weekly.get_text(" ", strip=True), "time": refresh.strftime("%m.%d %H:%M")}))
+        for slide in soup.select(".mp-hero__slide"):
+            eyebrow = slide.select_one(".mp-hero__eyebrow")
+            title = slide.select_one(".mp-hero__title")
+            until = slide.select_one("[data-until]")
+            if not eyebrow or not title or not until:
+                continue
+            kind_text = eyebrow.get_text(" ", strip=True).split("·")[0].strip()
+            name = title.get_text(" ", strip=True)
+            # 与旧版一致只提醒限时寻访、保全派驻和网页活动；常驻寻访的轮换不算临期事项。
+            if kind_text == "寻访" and not name.startswith("常驻"):
+                kind = "寻访结束"
+            elif kind_text in ("保全派驻", "网页活动"):
+                kind = kind_text
+            else:
+                continue
+            try:
+                end = datetime.fromisoformat(str(until.get("data-until", ""))).astimezone(CN_TZ)
+            except ValueError:
+                continue
+            if end > now:
+                alerts.append((end, {"kind": kind, "name": name, "time": end.strftime("%m.%d %H:%M")}))
+        return [item for _, item in sorted(alerts, key=lambda pair: pair[0])][:6]
+
+    @classmethod
+    def _legacy_home(cls, soup: BeautifulSoup, weekday: int, base_url: str) -> dict:
+        resource_schedule = cls._resource_schedule(soup, weekday, base_url)
+        chip_schedule = cls._chip_schedule(soup, weekday, base_url)
         supplies = [item["name"] for item in resource_schedule if item.get("open")]
         chips = [item["name"] for item in chip_schedule if item.get("open")]
         alerts: list[dict[str, str]] = []
@@ -70,11 +254,11 @@ class PrtsSource:
             "alerts": alerts[:6],
             "resource_schedule": resource_schedule,
             "chip_schedule": chip_schedule,
-            "recent": self._operator_section(soup, "近期新增"),
-            "birthday": self._operator_section(soup, "今天生日"),
-            "voucher_exchange": self._highlight_section(soup, "凭证兑换", self.base_url),
-            "new_skins": self._highlight_section(soup, "新增时装", self.base_url),
-            "new_modules": self._highlight_section(soup, "新增模组", self.base_url, split_subtitle=True),
+            "recent": cls._operator_section(soup, "近期新增"),
+            "birthday": cls._operator_section(soup, "今天生日"),
+            "voucher_exchange": cls._highlight_section(soup, "凭证兑换", base_url),
+            "new_skins": cls._highlight_section(soup, "新增时装", base_url),
+            "new_modules": cls._highlight_section(soup, "新增模组", base_url, split_subtitle=True),
         }
 
     @classmethod
@@ -189,9 +373,11 @@ class PrtsSource:
             return "碳&家具零件"
         return ""
 
-    @staticmethod
-    def _chip_stage_key(file_name: str) -> str:
-        for key in ("摧枯拉朽", "身先士卒", "固若金汤", "势不可挡"):
+    CHIP_STAGES = ("摧枯拉朽", "身先士卒", "固若金汤", "势不可挡")
+
+    @classmethod
+    def _chip_stage_key(cls, file_name: str) -> str:
+        for key in cls.CHIP_STAGES:
             if key in file_name:
                 return key
         return ""

@@ -44,6 +44,50 @@ def config_value(
     return default
 
 
+# 日报栏目，顺序即默认渲染顺序；须与 _conf_schema.json 中 basic.report_sections 的 options/default 一致。
+REPORT_SECTIONS = (
+    "today_ops", "birthday", "recent_operators",
+    "voucher_exchange", "new_skins", "new_modules", "new_stages", "new_furniture",
+    "events", "long_term", "pools", "pool_details",
+)
+# 旧版独立开关（已隐藏）：关闭时对应栏目不出现在日报中。
+LEGACY_SECTION_SWITCHES = {
+    "include_recent_operators": "recent_operators",
+    "include_long_term": "long_term",
+    "pool_detail_cards": "pool_details",
+}
+
+
+def _without_legacy_disabled(config: Any, sections: list[str]) -> list[str]:
+    disabled = {
+        section for key, section in LEGACY_SECTION_SWITCHES.items()
+        if not config_value(config, "basic", key, True, key)
+    }
+    return [section for section in sections if section not in disabled]
+
+
+def config_report_sections(config: Any) -> list[str]:
+    """读取日报栏目及顺序；未知项和重复项忽略，清空时回退默认。"""
+    raw = config_section(config, "basic").get("report_sections")
+    if not isinstance(raw, list):
+        return _without_legacy_disabled(config, list(REPORT_SECTIONS))
+    sections = list(dict.fromkeys(item for item in map(str, raw) if item in REPORT_SECTIONS))
+    return sections or list(REPORT_SECTIONS)
+
+
+def migrate_report_sections(config: Any) -> bool:
+    """首次加载新配置时把旧版三个显示开关折算进栏目列表；旧开关本身保留不动。"""
+    basic = config.get("basic") if hasattr(config, "get") else None
+    if not isinstance(basic, dict) or basic.get("report_sections_migrated"):
+        return False
+    current = basic.get("report_sections")
+    basic["report_sections"] = _without_legacy_disabled(
+        config, list(current) if isinstance(current, list) else list(REPORT_SECTIONS),
+    )
+    basic["report_sections_migrated"] = True
+    return True
+
+
 def config_strings(value: Any) -> list[str]:
     if not isinstance(value, list):
         return []
