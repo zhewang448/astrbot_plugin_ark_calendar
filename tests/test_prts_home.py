@@ -87,3 +87,109 @@ def test_resource_table_ignores_unrelated_tables():
     soup = BeautifulSoup("<table><tr><td>常驻 二三五日 一四六日</td></tr></table>", "html.parser")
 
     assert PrtsSource._resource_table(soup) is None
+
+
+def _card(days: str, name: str, file_name: str) -> str:
+    return (
+        f'<div class="mp-res" data-days="{days}"><span class="mp-res__icon">'
+        f'<img src="https://media.prts.wiki/0/03/{quote(file_name)}.png?v=x"></span>'
+        f'<span class="mp-res__name">{name}</span></div>'
+    )
+
+
+def _op_group(title: str, cards: list[tuple[str, str, str]]) -> str:
+    body = "".join(
+        f'<div class="ak-op-card"><a href="{href}" title="{name}"><span class="ak-op-card__portrait">'
+        f'<img src="https://media.prts.wiki/头像_{name}.png"><span class="ak-op-card__rarity"><img src="r.png"></span></span>'
+        f'<span class="ak-op-card__name">{name}<span class="ak-op-card__sub">{sub}</span></span></a></div>'
+        for name, sub, href in cards
+    )
+    return f'<div class="mp-ops__group"><div class="mp-ops__title"><span class="cn">{title}</span></div>{body}</div>'
+
+
+def _card_home_html(force_open: str = "") -> str:
+    resources = [
+        ("1234567", "作战记录", "道具_高级作战记录"), ("2357", "技巧概要", "道具_技巧概要·卷3"),
+        ("2467", "龙门币", "道具_龙门币"), ("1467", "采购凭证", "道具_采购凭证"), ("1356", "碳", "道具_碳素"),
+    ]
+    chips = [
+        ("2367", "近卫 &amp; 特种", "道具_近卫芯片"), ("1457", "重装 &amp; 医疗", "道具_重装芯片"),
+        ("3467", "先锋 &amp; 辅助", "道具_先锋芯片"), ("1256", "狙击 &amp; 术师", "道具_狙击芯片"),
+    ]
+
+    def group(label, cards):
+        return f'<div class="mp-res-group"><div class="mp-label">{label}</div>' + "".join(_card(*c) for c in cards) + "</div>"
+
+    hero = (
+        '<div class="mp-hero__slide"><span class="mp-hero__eyebrow">寻访 · Headhunting</span>'
+        '<h2 class="mp-hero__title">定向甄选08</h2><span class="ak-countdown" data-until="2026-10-13T03:59:00+08:00"></span></div>'
+        '<div class="mp-hero__slide"><span class="mp-hero__eyebrow">寻访 · Headhunting</span>'
+        '<h2 class="mp-hero__title">常驻标准寻访</h2><span class="ak-countdown" data-until="2026-10-08T03:59:00+08:00"></span></div>'
+        '<div class="mp-hero__slide"><span class="mp-hero__eyebrow">登录活动 · Event</span>'
+        '<h2 class="mp-hero__title">稳态测定</h2><span class="ak-countdown" data-until="2026-10-08T03:59:00+08:00"></span></div>'
+    )
+    return (
+        f'<html><body>{hero}<div class="mp-cd"><div class="mp-cd__label"><b>剿灭作战 &amp; 周常任务刷新</b><small>每周一 04:00</small></div></div>'
+        f'<div class="mp-today__res" id="mp-res" data-force-open="{force_open}">'
+        + group("物资筹备", resources) + group("芯片搜索", chips) + "</div>"
+        + _op_group("今天生日", [("古米", "10月2日", "/w/古米")])
+        + _op_group("近期新增", [("结城理", "特种 · 六星", "/w/结城理")])
+        + _op_group("凭证兑换", [("洋灰", "高级凭证兑换", "/w/洋灰")])
+        + _op_group("新增模组", [("结城理", "彼此的声音", "/w/结城理#彼此的声音")])
+        + '<div class="mp-stages__event"><div class="mw-heading"><h4>矢量突破#3 「拟生态」<span class="ak-en">VEC</span></h4></div>'
+        '<div class="mp-stages__chapter">核心突破</div><div class="mp-stages__grid">'
+        + '<div class="ak-stage"><a title="VEC-1"></a></div>' * 2
+        + '</div><div class="mp-stages__chapter">特别战线</div><div class="mp-stages__grid"><div class="ak-stage"><a title="VEC-S"></a></div></div></div>'
+        '<div class="mp-furn mp-furn--theme"><a href="/w/圣芭菲甜点店" title="圣芭菲甜点店"><span class="mp-furn__pic">'
+        '<img src="//torappu.prts.wiki/assets/furniture_theme/furni_set_dessertShop.png"></span>'
+        '<span class="mp-furn__name">圣芭菲甜点店<span class="ak-tag">主题</span></span><span class="mp-furn__desc">甜点店。</span></a></div>'
+        + "</body></html>"
+    )
+
+
+def test_card_layout_follows_data_days_and_aligns_names():
+    home = PrtsSource._card_home(BeautifulSoup(_card_home_html(), "html.parser"), TUESDAY, "https://prts.wiki")
+
+    assert [item["name"] for item in home["resource_schedule"]] == ["作战记录", "技巧概要", "龙门币", "采购凭证", "碳&家具零件"]
+    assert [item["name"] for item in home["chip_schedule"]] == ["近卫&特种", "医疗&重装", "先锋&辅助", "术师&狙击"]
+    assert home["supplies"] == ["作战记录", "技巧概要", "龙门币"]
+    assert home["chips"] == ["近卫&特种", "术师&狙击"]
+    assert home["resource_schedule"][1]["weekdays_label"] == "二三五日"
+    assert CalendarService._valid_home(home)
+
+
+def test_card_layout_force_open_window_opens_everything_until_it_ends():
+    home = PrtsSource._card_home(
+        BeautifulSoup(_card_home_html("2026-09-29T16:00:00+08:00/2026-10-20T03:59:00+08:00"), "html.parser"),
+        TUESDAY, "https://prts.wiki",
+    )
+    assert len(home["supplies"]) == 5 and len(home["chips"]) == 4
+    # 缓存在区间结束后被重新判定时恢复按周开放。
+    later = CalendarService._refresh_home_status(home, datetime(2026, 10, 20, 12, 0, tzinfo=CN_TZ))
+    assert later["supplies"] == ["作战记录", "技巧概要", "龙门币"]
+
+
+def test_card_layout_operators_and_alerts():
+    home = PrtsSource._card_home(BeautifulSoup(_card_home_html(), "html.parser"), TUESDAY, "https://prts.wiki")
+
+    assert home["birthday"] == [{"name": "古米", "avatar": "https://media.prts.wiki/头像_古米.png"}]
+    assert [x["name"] for x in home["recent"]] == ["结城理"]
+    assert home["voucher_exchange"][0]["subtitle"] == ""
+    assert home["new_modules"][0]["subtitle"] == "彼此的声音"
+    assert home["new_skins"] == []
+    assert home["alerts"] == [
+        {"kind": "周常刷新", "name": "剿灭作战 & 周常任务刷新", "time": "10.05 04:00"},
+        {"kind": "寻访结束", "name": "定向甄选08", "time": "10.13 03:59"},
+    ]
+
+
+def test_card_layout_new_stages_and_furniture():
+    home = PrtsSource._card_home(BeautifulSoup(_card_home_html(), "html.parser"), TUESDAY, "https://prts.wiki")
+
+    assert home["new_stages"] == [{
+        "name": "矢量突破#3 「拟生态」", "code": "VEC",
+        "chapters": [{"name": "核心突破", "count": 2}, {"name": "特别战线", "count": 1}],
+    }]
+    furniture = home["new_furniture"][0]
+    assert (furniture["name"], furniture["tag"]) == ("圣芭菲甜点店", "主题")
+    assert furniture["image"] == "https://torappu.prts.wiki/assets/furniture_theme/furni_set_dessertShop.png"

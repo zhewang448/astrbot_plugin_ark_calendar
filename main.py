@@ -18,7 +18,7 @@ from astrbot.api.star import Context, Star
 from astrbot.core.utils.astrbot_path import get_astrbot_plugin_data_path
 
 from .core.command_args import split_name_and_time, strip_command_prefix
-from .core.config import config_int, config_strings, config_value, sync_builtin_message_previews
+from .core.config import config_int, config_strings, config_value, migrate_report_sections, sync_builtin_message_previews
 from .core.help_manager import HelpManager, command_rows, generate_help_text
 from .core.image_cache_manager import CalendarImageManager
 from .core.messages import MessageCatalog
@@ -215,6 +215,9 @@ class ArkCalendarPlugin(Star):
         if sync_builtin_message_previews(config, self.plugin_dir / "_conf_schema.json"):
             self.config.save_config()
             logger.info("已同步内置文案预览到当前插件配置。")
+        if migrate_report_sections(config):
+            self.config.save_config()
+            logger.info("已把旧版显示开关迁移到日报栏目配置。")
         self.data_dir = Path(get_astrbot_plugin_data_path()) / "astrbot_plugin_ark_calendar"
         self.service = CalendarService(self.plugin_dir, self.data_dir, config, logger)
         self.renderer = CalendarRenderer(self, self.service)

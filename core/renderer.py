@@ -12,6 +12,8 @@ from .models import CalendarSnapshot, parse_iso
 from .render_cache import validate_rendered_image
 
 CN_TZ = ZoneInfo("Asia/Shanghai")
+# 首页亮点三栏共用 .highlight-grid，相邻时排在同一行。
+HIGHLIGHT_SECTIONS = ("voucher_exchange", "new_skins", "new_modules")
 
 # 帮助页头图固定使用打包内的这张图，不随当期活动变化；文件缺失时模板回退到纯 CSS 背景。
 HELP_HERO_ASSET = "help-hero.jpg"
@@ -76,7 +78,7 @@ class CalendarRenderer:
             "weekday": "星期" + "一二三四五六日"[now.weekday()],
             "hero": hero,
             "show_footer": self.service.value("basic", "show_source_footer", True, "show_source_footer"),
-            "pool_detail_cards": bool(self.service.value("basic", "pool_detail_cards", True, "pool_detail_cards")),
+            "section_groups": self._section_groups(self.service.report_sections()),
             "calendar_extra_blank_height": self._calendar_extra_blank_height(),
             "historical": historical,
         }
@@ -87,6 +89,21 @@ class CalendarRenderer:
     async def historical_calendar(self, snapshot: CalendarSnapshot) -> str:
         """保留旧调用入口，但历史测试改用正常日报模板和布局。"""
         return await self.calendar(snapshot, historical=True)
+
+    @staticmethod
+    def _section_groups(sections: list[str]) -> list[list[str]]:
+        """相邻的首页亮点合并为一行三栏，紧跟活动日程的长期活动并入同一区块，保持原有排版。"""
+        groups: list[list[str]] = []
+        for key in sections:
+            last = groups[-1] if groups else None
+            if last and (
+                (key in HIGHLIGHT_SECTIONS and last[0] in HIGHLIGHT_SECTIONS)
+                or (key == "long_term" and last == ["events"])
+            ):
+                last.append(key)
+            else:
+                groups.append([key])
+        return groups
 
     def _visible_gacha_pools(self, pools):
         if self.service.show_unpublished_pools():

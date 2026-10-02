@@ -79,6 +79,8 @@ class TodayInfo:
     voucher_exchange: list[dict[str, Any]] = field(default_factory=list)
     new_skins: list[dict[str, Any]] = field(default_factory=list)
     new_modules: list[dict[str, Any]] = field(default_factory=list)
+    new_stages: list[dict[str, Any]] = field(default_factory=list)
+    new_furniture: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass(slots=True)
