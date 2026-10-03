@@ -119,7 +119,7 @@ class PrtsSource:
     def _card_schedule(cls, soup: BeautifulSoup, title: str, force_open: str, now: datetime, base_url: str) -> list[dict]:
         group = next(
             (node for node in soup.select(".mp-res-group")
-             if (label := node.select_one(".mp-label")) and label.get_text(strip=True) == title),
+             if (label := node.select_one(".mp-res-group__label, .mp-label")) and label.get_text(strip=True) == title),
             None,
         )
         if group is None:
@@ -161,7 +161,7 @@ class PrtsSource:
     @staticmethod
     def _card_ops(soup: BeautifulSoup, title: str, base_url: str, with_subtitle: bool = True) -> list[dict]:
         for group in soup.select(".mp-ops__group"):
-            heading = group.select_one(".mp-ops__title .cn")
+            heading = group.select_one(".mp-ops__title .cn, .mp-ops__title [data-en]")
             if not heading or heading.get_text(strip=True) != title:
                 continue
             result: dict[tuple[str, str], dict] = {}
@@ -184,7 +184,7 @@ class PrtsSource:
     @staticmethod
     def _card_alerts(soup: BeautifulSoup, now: datetime) -> list[dict[str, str]]:
         alerts: list[tuple[datetime, dict[str, str]]] = []
-        weekly = soup.select_one(".mp-cd__label b")
+        weekly = soup.select_one(".mp-cd__label b, .mp-cd > b")
         if weekly and "剿灭" in weekly.get_text():
             # 页面倒计时由脚本计算，这里按“每周一 04:00”推算下一次刷新。
             base = now - timedelta(hours=GAME_DAILY_RESET_HOUR)

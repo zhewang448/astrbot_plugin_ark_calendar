@@ -193,3 +193,18 @@ def test_card_layout_new_stages_and_furniture():
     furniture = home["new_furniture"][0]
     assert (furniture["name"], furniture["tag"]) == ("圣芭菲甜点店", "主题")
     assert furniture["image"] == "https://torappu.prts.wiki/assets/furniture_theme/furni_set_dessertShop.png"
+
+
+def test_card_layout_2026_10_04_labels():
+    # 10-04 起分组标题改为 .mp-res-group__label / span[data-en]，周常倒计时改为 .mp-cd > b。
+    html = (
+        _card_home_html()
+        .replace('<div class="mp-label">', '<div class="ak-overline mp-res-group__label">')
+        .replace('<span class="cn">', '<span data-en="New">')
+        .replace('<div class="mp-cd__label"><b>剿灭作战 &amp; 周常任务刷新</b><small>每周一 04:00</small></div>',
+                 '<b>剿灭作战 &amp; 周常任务</b><span>后刷新</span>')
+    )
+    home = PrtsSource._card_home(BeautifulSoup(html, "html.parser"), TUESDAY, "https://prts.wiki")
+    assert CalendarService._valid_home(home)
+    assert [x["name"] for x in home["recent"]] == ["结城理"]
+    assert home["alerts"][0] == {"kind": "周常刷新", "name": "剿灭作战 & 周常任务", "time": "10.05 04:00"}
