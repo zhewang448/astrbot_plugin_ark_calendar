@@ -150,6 +150,7 @@ class FontSubsetter:
 
     def _build(self, charset: str) -> bytes:
         try:
+            import fontTools
             from fontTools import subset as ft_subset
             from fontTools.ttLib import TTFont
         except ImportError as exc:
@@ -175,8 +176,8 @@ class FontSubsetter:
 
         try:
             # fontTools 自身会输出大量 INFO 日志（Glyph names、tables 等），统一升到 WARNING 屏蔽噪音。
-            import logging
-            logging.getLogger("fontTools").setLevel(logging.WARNING)
+            # 直接用 fontTools.log（其根 logger），不引入内置 logging 模块（上架规则）。
+            fontTools.log.setLevel("WARNING")
 
             subsetter = ft_subset.Subsetter(options=options)
             subsetter.populate(text=charset)
