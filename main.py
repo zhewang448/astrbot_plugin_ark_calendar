@@ -13,7 +13,7 @@ from zoneinfo import ZoneInfo
 import astrbot.api.message_components as Comp
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from astrbot.api import AstrBotConfig, logger
-from astrbot.api.event import AstrMessageEvent, MessageChain, filter
+from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star
 from astrbot.core.utils.astrbot_path import get_astrbot_plugin_data_path
 
@@ -24,7 +24,7 @@ from .core.image_cache_manager import CalendarImageManager
 from .core.messages import MessageCatalog
 from .core.models import parse_iso
 from .core.notification_manager import NotificationManager
-from .core.platform_utils import is_group_session, platform_supports_at, platform_supports_proactive_send
+from .core.platform_utils import mention_parts, send_proactive
 from .core.render_cache import CalendarImageCache, HelpImageCache
 from .core.renderer import CalendarRenderer
 from .core.scheduler_utils import normalize_weekdays, parse_schedule_times
@@ -41,6 +41,7 @@ from .core.subscription import (
     Subscription,
     SubscriptionManager,
     drop_paired_shops,
+    match_by_name,
     shop_timeline_item,
 )
 from .core.bilibili_manager import BilibiliDynamicManager
@@ -50,6 +51,8 @@ from .core.recruitment_calculator import (
     RecruitmentCalculator,
     format_result,
     is_recruitment_easter_egg_query,
+    recruitment_help_groups,
+    recruitment_help_text,
 )
 from .sources.bilibili_dynamic import BilibiliDynamicSource
 from .sources.recruitment import RecruitmentSource
@@ -164,7 +167,7 @@ BILIBILI_DYNAMIC_TEST_COMMAND = CommandSpec(
 RECRUIT_COMMAND = CommandSpec(
     "方舟公招",
     ("公招计算", "明日方舟公招", "舟公招"),
-    "输入标签计算可能招募的干员及保底星级，并以招募终端图片返回结果。",
+    "输入标签计算可能招募的干员及保底星级，并以招募终端图片返回结果；标签数上限可在配置中调整（默认 5 个）。",
     help_note="如果参数是 all 或 *，会触发阿米娅的小彩蛋。",
     argument_hint="<标签1> [标签2] [标签3] …",
     example="/方舟公招 近卫干员 输出 生存",
@@ -269,7 +272,7 @@ class ArkCalendarPlugin(Star):
             name="ark_calendar_bilibili_baseline",
         )
         # 创建公招数据源
-        self.recruitment_source = RecruitmentSource(http=self.service.http)
+        self.recruitment_source = RecruitmentSource(self.service.http, game_data=self.service.game_data)
         self._register_ai_tools()
         self._initialize_scheduler()
         # 重载后的图片预热：默认开启，让首次帮助命令直接命中缓存。
@@ -532,13 +535,7 @@ class ArkCalendarPlugin(Star):
             user_id = str(event.message_obj.sender.user_id)
             session_id = event.unified_msg_origin
             subscriptions = self.subscription_manager.get_user_subscriptions(user_id, session_id)
-            normalized = name.casefold()
-            exact = [sub for sub in subscriptions if sub.item_name.casefold() == normalized]
-            matches = exact or [
-                sub for sub in subscriptions
-                if normalized in sub.item_name.casefold() or sub.item_name.casefold() in normalized
-            ]
-            matches = drop_paired_shops(matches)
+            matches = drop_paired_shops(match_by_name(subscriptions, name, lambda sub: sub.item_name))
             if not matches:
                 yield event.plain_result(self.messages.text("subscription_not_found", name=name))
                 return
@@ -653,23 +650,27 @@ class ArkCalendarPlugin(Star):
             if not operator:
                 yield event.plain_result(self._operator_miss_text(name, candidates))
                 return
-            recruit_available = True
-            recruit_tags = None
-            try:
-                pool_data = await self.recruitment_source.get_recruitment_pool() if self.recruitment_source else None
+            # 公招池、复刻历史、快照互不依赖，并发读取；前两项失败只影响对应栏目。
+            async def recruit_info() -> tuple[bool, list[str] | None]:
+                try:
+                    pool_data = await self.recruitment_source.get_recruitment_pool() if self.recruitment_source else None
+                except Exception:
+                    logger.warning("干员档案：读取公招池失败。", exc_info=True)
+                    return False, None
                 characters = pool_data["characters"] if pool_data else []
-                recruit_available = bool(characters)
-                recruit_tags = next((c["tags"] for c in characters if c["name"] == operator.name), None)
-            except Exception:
-                recruit_available = False
-                logger.warning("干员档案：读取公招池失败。", exc_info=True)
-            recurrence_row = None
-            try:
-                report = await self.service.recurrence_report("全部 all")
-                recurrence_row = next((row for row in report["rows"] if row["name"] == operator.name), None)
-            except Exception:
-                logger.warning("干员档案：读取复刻历史失败。", exc_info=True)
-            snapshot = await self.service.snapshot()
+                return bool(characters), next((c["tags"] for c in characters if c["name"] == operator.name), None)
+
+            async def recurrence_info() -> dict | None:
+                try:
+                    report = await self.service.recurrence_report("全部 all")
+                except Exception:
+                    logger.warning("干员档案：读取复刻历史失败。", exc_info=True)
+                    return None
+                return next((row for row in report["rows"] if row["name"] == operator.name), None)
+
+            (recruit_available, recruit_tags), recurrence_row, snapshot = await asyncio.gather(
+                recruit_info(), recurrence_info(), self.service.snapshot(),
+            )
             now = datetime.now(CN_TZ)
             current_pools = [
                 pool for pool in snapshot.gacha_pools
@@ -780,38 +781,15 @@ class ArkCalendarPlugin(Star):
             return
 
         if not raw_text.strip():
-            help_text = (
-                "━━━━━━━━━━━━━━━━━━━━\n"
-                "🏷️  方舟公招计算器\n"
-                "━━━━━━━━━━━━━━━━━━━━\n\n"
-                "用法：/方舟公招 <标签1> [标签2] [标签3] …\n\n"
-                "示例：\n"
-                "  /方舟公招 近卫干员 输出 生存\n"
-                "  /方舟公招 资深干员 医疗干员\n"
-                "  /方舟公招 高级资深干员\n\n"
-                "可用职业标签（也可省略「干员」两字）：\n"
-                "  近卫、狙击、术师、医疗、重装、辅助、特种、先锋\n\n"
-                "可用位置标签：近战位、远程位\n\n"
-                "特殊标签：资深干员（保底5★）、高级资深干员（保底6★）\n\n"
-                "词缀标签：输出、治疗、生存、防护、控场、爆发、支援、减速、\n"
-                "          削弱、群攻、位移、召唤、快速复活、费用回复、\n"
-                "          支援机械（小车）、元素\n"
-                "━━━━━━━━━━━━━━━━━━━━"
-            )
             try:
                 yield event.plain_result(self.messages.text("image_rendering_started"))
-                rendered_help = await self.renderer.recruitment_help({
-                    "职业": ["近卫干员", "狙击干员", "术师干员", "医疗干员", "重装干员", "辅助干员", "特种干员", "先锋干员"],
-                    "位置": ["近战位", "远程位"],
-                    "稀有度": ["新手", "资深干员（保底5★）", "高级资深干员（保底6★）"],
-                "词缀": ["输出", "治疗", "生存", "防护", "控场", "爆发", "支援", "减速", "削弱", "群攻", "位移", "召唤", "快速复活", "费用回复", "支援机械", "元素"],
-                })
+                rendered_help = await self.renderer.recruitment_help(recruitment_help_groups())
                 if isinstance(rendered_help, (str, Path)) and Path(str(rendered_help)).is_file():
                     yield event.image_result(str(rendered_help))
                     return
             except Exception:
                 logger.warning("公招帮助图片渲染失败，回退文字版。", exc_info=True)
-            yield event.plain_result(help_text)
+            yield event.plain_result(recruitment_help_text())
             return
 
         # 解析标签：支持空格、顿号、斜线、逗号分隔
@@ -833,6 +811,13 @@ class ArkCalendarPlugin(Star):
 
             if not valid_tags:
                 yield event.plain_result(self.messages.text("recruit_empty_tags"))
+                return
+
+            max_tags = self.service.recruit_max_tags()
+            if max_tags is not None and len(valid_tags) > max_tags:
+                yield event.plain_result(
+                    self.messages.text("recruit_too_many_tags", count=len(valid_tags), max=max_tags)
+                )
                 return
 
             results = calculator.calculate(valid_tags)
@@ -894,9 +879,10 @@ class ArkCalendarPlugin(Star):
         """管理员强制刷新数据并重新生成日历。"""
         yield event.plain_result(self.messages.text("force_refresh_started"))
         try:
-            snapshot, outcome = await self.service.snapshot_with_outcome(force=True)
+            # 先让角色表与公招名单失效，接下来的强制刷新会顺带重新获取，公招计算直接复用。
             if self.recruitment_source:
                 self.recruitment_source.clear_cache()
+            snapshot, outcome = await self.service.snapshot_with_outcome(force=True)
             # 帮助页会展示可订阅日程；强制刷新后不能继续复用旧帮助图。
             self.help_cache.invalidate()
             display_config = self.image_manager._display_config()
@@ -974,20 +960,20 @@ class ArkCalendarPlugin(Star):
         return operator.birthday_month == now.month and operator.birthday_day == now.day
 
     def _find_timeline_items(self, snapshot, name: str) -> list:
-        """根据名称查找全部匹配的活动或卡池。"""
-        name_normalized = name.lower().strip()
-        all_items = snapshot.events + snapshot.gacha_pools + snapshot.long_term_events
+        """根据名称查找可订阅（尚未结束）的活动或卡池。
 
-        # 精确匹配
-        exact = [item for item in all_items if item.name.lower() == name_normalized]
-        if exact:
-            return exact
-
-        # 模糊匹配
-        return [
-            item for item in all_items
-            if name_normalized in item.name.lower() or item.name.lower() in name_normalized
-        ]
+        时间轴从昨天开始，已结束的项目仍在快照里；订阅它们会立刻被当作过期清理，
+        因此与帮助页的可订阅日程保持同一口径，只匹配未结束项。
+        """
+        now = datetime.now(CN_TZ)
+        open_items = []
+        for item in [*snapshot.events, *snapshot.gacha_pools, *snapshot.long_term_events]:
+            try:
+                if parse_iso(item.end) > now:
+                    open_items.append(item)
+            except (TypeError, ValueError):
+                continue
+        return match_by_name(open_items, name, lambda item: item.name)
 
     # ── 配置读取（简化包装） ───────────────────────────────────
 
@@ -1323,11 +1309,7 @@ class ArkCalendarPlugin(Star):
             grouped[(watch["session_id"], watch["user_id"])].append((watch, pool))
         for (session_id, user_id), items in grouped.items():
             try:
-                if not platform_supports_proactive_send(session_id, self.context):
-                    logger.warning(f"蹲池提醒不支持主动投递至 {session_id}。")
-                    continue
-                use_at = platform_supports_at(session_id, self.context)
-                mention = "" if use_at or not is_group_session(session_id) else f"@{user_id} "
+                components, mention = mention_parts(session_id, user_id, self.context)
                 lines = [
                     self.messages.text(
                         "watch_hit",
@@ -1337,13 +1319,10 @@ class ArkCalendarPlugin(Star):
                     )
                     for index, (watch, pool) in enumerate(items)
                 ]
-                components: list[Any] = [Comp.At(qq=user_id, name=user_id)] if use_at else []
                 components.append(Comp.Plain(text="\n\n".join(lines)))
-                if await self.context.send_message(session_id, MessageChain(components)) is False:
-                    logger.warning(f"蹲池提醒未投递至 {session_id}（订阅者 {user_id}）。")
+                if not await send_proactive(self.context, session_id, components, logger, f"蹲池提醒（订阅者 {user_id}）"):
                     continue
-                for watch, pool in items:
-                    self.operator_watch_manager.mark_notified(watch, pool.id)
+                self.operator_watch_manager.mark_notified_many([(watch, pool.id) for watch, pool in items])
                 logger.info(f"蹲池提醒已投递至 {session_id}（订阅者 {user_id}，{len(items)} 条）。")
             except Exception:
                 logger.error(f"向 {session_id} 发送蹲池提醒失败（订阅者 {user_id}）。", exc_info=True)
@@ -1468,21 +1447,7 @@ class ArkCalendarPlugin(Star):
                 success_count = 0
                 for (session_id, user_id), subs in grouped.items():
                     try:
-                        if not platform_supports_proactive_send(session_id, self.context):
-                            logger.warning(f"订阅提醒不支持主动投递至 {session_id}。")
-                            self.subscription_manager.defer_reminders(
-                                subs, datetime.now(CN_TZ) + timedelta(minutes=5)
-                            )
-                            continue
-                        use_at = platform_supports_at(session_id, self.context)
-                        # 白名单平台由 At 组件负责提醒，正文不再拼 @；其他群聊退化为纯文本 @。
-                        if use_at:
-                            mention = ""
-                        elif is_group_session(session_id):
-                            mention = f"@{user_id} "
-                        else:
-                            mention = ""
-
+                        components, mention = mention_parts(session_id, user_id, self.context)
                         lines = [
                             self.messages.text(
                                 "subscription_reminder",
@@ -1494,25 +1459,18 @@ class ArkCalendarPlugin(Star):
                             for index, sub in enumerate(subs)
                         ]
 
-                        components: list[Any] = []
-                        if use_at:
-                            components.append(Comp.At(qq=user_id, name=user_id))
+                        use_at = bool(components)
                         components.append(Comp.Plain(text="\n\n".join(lines)))
-
-                        dispatched = await self.context.send_message(session_id, MessageChain(components))
-                        if dispatched is False:
-                            logger.warning(
-                                f"订阅提醒未投递至 {session_id}（订阅者 {user_id}）："
-                                "请确认该 SID 对应的平台适配器仍在运行。"
-                            )
+                        if not await send_proactive(
+                            self.context, session_id, components, logger, f"订阅提醒（订阅者 {user_id}）"
+                        ):
                             self.subscription_manager.defer_reminders(
                                 subs, datetime.now(CN_TZ) + timedelta(minutes=5)
                             )
                             continue
 
                         # 只标记本次确实发出去的订阅，失败的留到下一轮重试。
-                        for sub in subs:
-                            self.subscription_manager.mark_notified(sub)
+                        self.subscription_manager.mark_notified_many(subs)
 
                         success_count += len(subs)
                         logger.info(
@@ -1550,38 +1508,19 @@ class ArkCalendarPlugin(Star):
         sent: list[str] = []
         failed: list[str] = []
         for sid in targets:
-            if not platform_supports_proactive_send(sid, self.context):
-                failed.append(sid)
-                logger.warning(f"自动生日祝贺不支持主动投递至 SID {sid}。")
-                continue
-            try:
-                dispatched = await self.context.send_message(sid, MessageChain([Comp.Plain(text=text)]))
-                if dispatched is False:
-                    failed.append(sid)
-                    logger.warning(f"自动生日祝贺未投递至 SID {sid}。")
-                    continue
+            if await send_proactive(self.context, sid, [Comp.Plain(text=text)], logger, "自动生日祝贺"):
                 sent.append(sid)
-            except Exception:
+            else:
                 failed.append(sid)
-                logger.error(f"自动生日祝贺发送到 SID {sid} 失败。", exc_info=True)
         return sent, failed
+
     async def _send_scheduled_image(self, targets: list[str], image: Path | str, caption: str) -> tuple[int, list[str]]:
         sent = 0
         failed: list[str] = []
         for sid in targets:
-            if not platform_supports_proactive_send(sid, self.context):
-                failed.append(sid)
-                logger.warning(f"定时方舟日报不支持主动投递至 SID {sid}。")
-                continue
-            try:
-                components = [Comp.Plain(text=caption), Comp.Image.fromFileSystem(str(image))]
-                dispatched = await self.context.send_message(sid, MessageChain(components))
-                if dispatched is False:
-                    failed.append(sid)
-                    logger.warning(f"定时方舟日报未投递至 SID {sid}。")
-                    continue
+            components = [Comp.Plain(text=caption), Comp.Image.fromFileSystem(str(image))]
+            if await send_proactive(self.context, sid, components, logger, "定时方舟日报"):
                 sent += 1
-            except Exception:
+            else:
                 failed.append(sid)
-                logger.error(f"定时方舟日报发送到 SID {sid} 失败。", exc_info=True)
         return sent, failed

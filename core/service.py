@@ -16,6 +16,7 @@ import aiohttp
 from .assets import AssetCache
 from .cache import JsonCache
 from .config import config_int, config_report_sections, config_value
+from .recruitment_calculator import DEFAULT_RECRUIT_MAX_TAGS
 from .recurrence import DEFAULT_LIMIT, build_recurrence_report, parse_display_limit, parse_recurrence_query
 from .models import (
     BirthdayGroup,
@@ -29,6 +30,7 @@ from .models import (
 )
 from ..sources.anything_ics import AnythingIcsSource
 from ..sources.gacha import GachaSource
+from ..sources.game_data import GameDataSource
 from ..sources.http import HttpClient, PublicResolver
 from ..sources.prts import PrtsSource, force_open_active, game_weekday
 
@@ -92,11 +94,11 @@ class CalendarService:
         self.anything: AnythingIcsSource | None = None
         self.prts: PrtsSource | None = None
         self.gacha: GachaSource | None = None
+        self.game_data: GameDataSource | None = None
         self.refresh_lock = asyncio.Lock()
         self.recurrence_lock = asyncio.Lock()
         self._event_detail_semaphore = asyncio.Semaphore(4)
         self._birthdays: list[dict] = []
-        self._birthday_index_source: list[dict] | None = None
         self._birthday_by_normalized_name: dict[str, dict] = {}
         self._birthday_by_display_name: dict[str, dict] = {}
         self._birthday_search_records: tuple[tuple[str, str, dict], ...] = ()
@@ -106,11 +108,6 @@ class CalendarService:
         self._avatar_url_cache: dict[str, str] | None = None
         self.last_snapshot: CalendarSnapshot | None = None
         self.last_known_good_snapshot: CalendarSnapshot | None = None
-        self.last_refresh_error = ""
-        self.last_refresh_quality = "failed"
-        self.last_refresh_used_cache = False
-        self.last_refresh_source_states: list[SourceState] = []
-        self.last_refresh_finished_at = ""
         self.last_refresh_outcome = RefreshOutcome()
 
     async def initialize(self) -> None:
@@ -126,7 +123,7 @@ class CalendarService:
             trust_env=True,
             headers={
                 "User-Agent": f"AstrBot-ArkCalendar/{self.plugin_version}",
-                "Accept-Encoding": "identity",
+                "Accept-Encoding": "gzip, deflate",
             },
         )
         self.http = HttpClient(self.session, proxy=proxy)
@@ -141,6 +138,7 @@ class CalendarService:
             self.http,
             self.value("data_sources", "prts_base_url", "https://prts.wiki", "prts_base_url"),
         )
+        self.game_data = GameDataSource(self.http, self.cache, self.logger)
         self.gacha = GachaSource(
             self.http,
             self.value(
@@ -149,30 +147,25 @@ class CalendarService:
                 "https://raw.githubusercontent.com/s-yh-china/ArknightsGachaData/master/data/pool_info.json",
                 "gacha_data_url",
             ),
+            game_data=self.game_data,
         )
-        cached = self.cache.load("snapshot.json")
-        if isinstance(cached, dict):
+        # 只有完整快照会落盘；snapshot.json 是旧版写入的同内容副本，仅作升级兼容读取。
+        for cache_name in ("last_known_good_snapshot.json", "snapshot.json"):
+            cached = self.cache.load(cache_name)
+            if not isinstance(cached, dict):
+                continue
             try:
-                self.last_snapshot = CalendarSnapshot.from_dict(cached)
+                self.last_known_good_snapshot = CalendarSnapshot.from_dict(cached)
+                break
             except Exception:
-                self.logger.warning("无法读取日历快照缓存。", exc_info=True)
-        known_good = self.cache.load("last_known_good_snapshot.json")
-        if isinstance(known_good, dict):
-            try:
-                self.last_known_good_snapshot = CalendarSnapshot.from_dict(known_good)
-            except Exception:
-                self.logger.warning("无法读取最近一次完整日历快照。", exc_info=True)
-        if self.last_known_good_snapshot is None and self.last_snapshot is not None:
-            if self._snapshot_refresh_quality(self.last_snapshot.source_states) == "fresh":
-                self.last_known_good_snapshot = self.last_snapshot
+                self.logger.warning(f"无法读取日历快照缓存：{cache_name}。", exc_info=True)
+        self.last_snapshot = self.last_known_good_snapshot
         if self.last_snapshot is not None:
-            self._publish_refresh_outcome(RefreshOutcome(
+            self.last_refresh_outcome = RefreshOutcome(
                 quality=self.last_snapshot.refresh_quality,
-                error=self.last_refresh_error,
                 used_cache=any(state.used_cache for state in self.last_snapshot.source_states),
                 source_states=list(self.last_snapshot.source_states),
-                finished_at=self.last_refresh_finished_at,
-            ))
+            )
 
     def _http_proxy(self) -> str:
         plugin_proxy = str(self.value("data_sources", "http_proxy", "", "http_proxy") or "").strip()
@@ -212,6 +205,11 @@ class CalendarService:
             "cache_and_render", "data_cache_ttl_minutes", 120,
             minimum=1, maximum=10080, legacy_key="cache_ttl_minutes",
         ))
+
+    def recruit_max_tags(self) -> int | None:
+        """公招最多接受的有效标签数；配置为 0 时返回 None，表示不限制。"""
+        limit = self.int_value("basic", "recruit_max_tags", DEFAULT_RECRUIT_MAX_TAGS, minimum=0)
+        return limit or None
 
     def recurrence_default_limit(self) -> int | None:
         """读取未复刻排行榜默认数量；非法旧配置回退到内置默认值。"""
@@ -482,16 +480,6 @@ class CalendarService:
     def snapshot_is_fresh(self) -> bool:
         return self._snapshot_is_fresh(self.cache_ttl())
 
-    def _publish_refresh_outcome(self, outcome: RefreshOutcome) -> RefreshOutcome:
-        """把本次刷新结果同步到全局 last_refresh_*，供状态展示等旧调用方使用。"""
-        self.last_refresh_outcome = outcome
-        self.last_refresh_quality = outcome.quality
-        self.last_refresh_error = outcome.error
-        self.last_refresh_used_cache = outcome.used_cache
-        self.last_refresh_source_states = list(outcome.source_states)
-        self.last_refresh_finished_at = outcome.finished_at
-        return outcome
-
     async def snapshot(self, force: bool = False) -> CalendarSnapshot:
         result, _ = await self.snapshot_with_outcome(force=force)
         return result
@@ -527,27 +515,24 @@ class CalendarService:
                     self.last_known_good_snapshot,
                     self.snapshot_fallback_max_age(),
                 ):
-                    self.cache.save("snapshot-degraded.json", result.to_dict())
                     outcome.quality = "fallback"
                     outcome.error = "关键数据源不可用"
                     outcome.used_cache = True
                     self.last_snapshot = self.last_known_good_snapshot
                     self.logger.warning("关键数据源不可用，已使用最近一次完整快照。")
-                    self._publish_refresh_outcome(outcome)
+                    self.last_refresh_outcome = outcome
                     return self.last_known_good_snapshot, outcome  # type: ignore[return-value]
 
                 self.last_snapshot = result
                 if quality == "fresh":
                     self.last_known_good_snapshot = result
-                    self.cache.save("snapshot.json", result.to_dict())
                     self.cache.save("last_known_good_snapshot.json", result.to_dict())
                 else:
-                    self.cache.save("snapshot-degraded.json", result.to_dict())
                     outcome.error = "关键数据源不可用" if quality == "failed" else ""
                 self.logger.info(
                     f"方舟日历数据刷新完成（{quality}），耗时 {time.monotonic() - started:.2f} 秒。"
                 )
-                self._publish_refresh_outcome(outcome)
+                self.last_refresh_outcome = outcome
                 return result, outcome
             except Exception as exc:
                 outcome = RefreshOutcome(
@@ -561,9 +546,9 @@ class CalendarService:
                     outcome.used_cache = True
                     self.last_snapshot = self.last_known_good_snapshot
                     self.logger.warning("方舟日历刷新失败，已使用最近一次完整快照。")
-                    self._publish_refresh_outcome(outcome)
+                    self.last_refresh_outcome = outcome
                     return self.last_known_good_snapshot, outcome  # type: ignore[return-value]
-                self._publish_refresh_outcome(outcome)
+                self.last_refresh_outcome = outcome
                 raise
 
     def _snapshot_is_fresh(self, ttl: timedelta) -> bool:
@@ -574,8 +559,6 @@ class CalendarService:
 
     async def find_operator(self, query: str) -> tuple[Operator | None, list[str]]:
         await self._ensure_reference_data()
-        if getattr(self, "_birthday_index_source", None) is not self._birthdays:
-            self._set_birthdays(self._birthdays)
         normalized = self.normalize_name(query)
         record = self._birthday_by_normalized_name.get(normalized)
         if record:
@@ -624,7 +607,6 @@ class CalendarService:
             if isinstance(month, int) and isinstance(day, int):
                 by_date.setdefault((month, day), []).append(item)
         self._birthdays = birthdays
-        self._birthday_index_source = birthdays
         self._birthday_by_normalized_name = by_normalized_name
         self._birthday_by_display_name = by_display_name
         self._birthday_search_records = tuple(search_records)
@@ -993,20 +975,31 @@ class CalendarService:
             )
         else:
             detail_images = [""] * len(pools_raw)
-        result: list[TimelineItem] = []
-        for pool, image, detail_image in zip(pools_raw, primary_images, detail_images):
+        up_lists: list[tuple[list[str], list[str]]] = []
+        for pool in pools_raw:
             cached = previous.get(pool.get("id", ""))
-            six = list(pool.get("six", [])) or (list(cached.six_star_up) if cached else [])
-            weighted = list(pool.get("weighted", [])) or (list(cached.weighted_up) if cached else [])
+            up_lists.append((
+                list(pool.get("six", [])) or (list(cached.six_star_up) if cached else []),
+                list(pool.get("weighted", [])) or (list(cached.weighted_up) if cached else []),
+            ))
+        # 没有卡池图时用前两位六星头像代替；所有卡池的头像地址合并成一次批量查询。
+        portrait_names = [
+            name
+            for image, (six, _) in zip(primary_images, up_lists)
+            if not image
+            for name in six[:2]
+        ]
+        portrait_urls = await self._safe_avatar_urls(portrait_names) if portrait_names else {}
+        result: list[TimelineItem] = []
+        for pool, image, detail_image, (six, weighted) in zip(pools_raw, primary_images, detail_images, up_lists):
             unpublished = bool(pool.get("unpublished")) or pool.get("name") == "未知卡池"
             item_type = self.gacha.label(pool.get("type", ""), pool.get("name", ""), unpublished)
             display_name = item_type if unpublished else pool.get("name", "")
             images: list[str] = []
             if not image and six:
-                urls = await self._safe_avatar_urls(six[:2])
                 images = list(await asyncio.gather(
                     *(
-                        self.assets.data_uri(urls.get(name, ""), box=TIMELINE_PORTRAIT_BOX)
+                        self.assets.data_uri(portrait_urls.get(name, ""), box=TIMELINE_PORTRAIT_BOX)
                         for name in six[:2]
                     ),
                 ))
@@ -1035,7 +1028,8 @@ class CalendarService:
         name = record["name"]
         birthday = record.get("birthday") or {}
         info = self._operator_index.get(name, {})
-        urls = avatar_urls or await self._safe_avatar_urls([name])
+        # 空 dict 表示已批量查询过但没有结果（例如 PRTS 不可用），不能再逐条重查。
+        urls = avatar_urls if avatar_urls is not None else await self._safe_avatar_urls([name])
         avatar = await self.assets.data_uri(urls.get(name, ""), box=BIRTHDAY_AVATAR_BOX)
         return Operator(
             name=name,

@@ -42,15 +42,7 @@ class HelpManager:
         if cached:
             self.logger.info(f"帮助长图命中当日缓存：{mode}。")
             return cached
-        lock = self._help_render_locks.get(mode)
-        if lock is None:
-            return await self._render_help_image(
-                mode,
-                user_commands=user_commands,
-                admin_commands=admin_commands,
-                subscription_commands=subscription_commands,
-            )
-        async with lock:
+        async with self._help_render_locks[mode]:
             cached = self.help_cache.lookup(mode)
             if cached:
                 self.logger.info(f"帮助长图缓存由并发请求生成：{mode}。")

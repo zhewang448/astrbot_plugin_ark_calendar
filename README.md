@@ -10,7 +10,7 @@
 
 明日方舟信息聚合与查询插件。插件聚合 PRTS、anything-ics、Torappu 与 ArknightsGachaData，生成罗德岛风格的活动、寻访和作战图片，并提供订阅、生日、B站动态和公开招募工具。
 
-当前版本：`v1.2.2`
+当前版本：`v1.2.3`
 
 ## 文档导航
 
@@ -28,7 +28,7 @@
 - 干员蹲池：卡池 UP 名单出现指定干员时提醒。
 - 干员档案：汇总星级职业、生日、公招词条、复刻与黄票商店记录、当前 UP 卡池。
 - 官方 B站动态查询与推送，支持文字、图片、视频动态和转发筛选；视频动态可选借助 [astrbot_plugin_parser](https://github.com/Zhalslar/astrbot_plugin_parser) 下载并发送视频文件。
-- 公开招募标签计算、别名识别和招募终端图片；按游戏内 9 小时规则计算保底，支持不限制输入词条数量。
+- 公开招募标签计算、别名识别和招募终端图片；按游戏内 9 小时规则计算保底；默认最多输入 5 个标签，可在配置中调整或不限制。
 - 公招参数为 `all` 或 `*` 时触发阿米娅彩蛋，不渲染图片。
 - 干员未复刻排行榜：按最近一次出率提升寻访结束时间统计，并展示商店兑换历史。
 - 日报、历史日程、帮助图、公招图和 B站动态图均支持清晰度档位。
@@ -101,7 +101,7 @@ QQ 手机端可能会对较短的长图采用不同的预览缩放策略，导�
 
 - [PRTS Wiki](https://prts.wiki)：首页今日信息、活动详情、卡池表格、干员资料、未复刻历史与图片。
 - [anything-ics](https://github.com/SmallZombie/anything-ics)：活动时间与干员生日。
-- [Torappu / Arknights Asset Storage](https://torappu.prts.wiki/gamedata/latest/excel/gacha_table.json)：最新卡池开关时间、规则类型和卡池 ID。
+- [Torappu / Arknights Asset Storage](https://torappu.prts.wiki/gamedata/latest/excel/gacha_table.json)：最新卡池开关时间、规则类型、卡池 ID 和公开招募名单；角色表用于 UP 干员名称与公招词条。
 - [ArknightsGachaData](https://github.com/s-yh-china/ArknightsGachaData)：补充正式名称、历史类型和 ID，并作为时间轴回退源。
 - [PRTS Gacha Server Data](https://weedy.prts.wiki/)：补全卡池六星 UP 信息。
 - [astrbot_plugin_parser](https://github.com/Zhalslar/astrbot_plugin_parser)：为 B站视频动态提供可选的视频解析与下载能力。

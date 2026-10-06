@@ -13,6 +13,7 @@ from astrbot.api import logger
 from astrbot.api.event import MessageChain
 
 from .bilibili_media import extract_bilibili_video_url
+from .config import config_int
 from .parser_bridge import fetch_video_path
 from .platform_utils import platform_supports_proactive_send
 
@@ -22,6 +23,8 @@ if TYPE_CHECKING:
 CN_TZ = ZoneInfo("Asia/Shanghai")
 # 首次见到时发布已超过该时长的动态不再推送。
 STALE_DYNAMIC_AGE = timedelta(hours=24)
+# 推送循环里"尚未渲染"的哨兵；渲染失败的结果是 None，同样需要被复用。
+_NOT_RENDERED = object()
 
 
 class BilibiliDynamicManager:
@@ -130,8 +133,7 @@ class BilibiliDynamicManager:
 
     def _list_default_count(self) -> int:
         """获取列表默认显示条数。"""
-        value = self.config.get("bilibili_dynamic", {}).get("list_default_count", 5)
-        return max(1, min(20, int(value)))
+        return config_int(self.config, "bilibili_dynamic", "list_default_count", 5, minimum=1, maximum=20)
 
     def _push_targets(self) -> list[str]:
         """获取推送目标SID列表。"""
@@ -144,11 +146,7 @@ class BilibiliDynamicManager:
 
     def _render_image_count_threshold(self) -> int:
         """图片数不超过此值时，将文字与全部图片绘制进一张终端图。"""
-        value = self.config.get("bilibili_dynamic", {}).get("render_image_count_threshold", 1)
-        try:
-            return max(0, min(9, int(value)))
-        except (TypeError, ValueError, OverflowError):
-            return 1
+        return config_int(self.config, "bilibili_dynamic", "render_image_count_threshold", 1, minimum=0, maximum=9)
 
     def _push_types(self) -> list[str]:
         """获取允许自动推送的动态类型。空列表表示不做类型过滤。"""
@@ -266,10 +264,13 @@ class BilibiliDynamicManager:
         """
         try:
             limit = max(index, fallback_limit)
-            dynamics = await self.source.recent_dynamics(limit=limit, download_images=True)
+            # 列表只取元数据，选中的那一条再下载图片，避免把前 limit 条的图全部下一遍。
+            dynamics = await self.source.recent_dynamics(limit=limit, download_images=False)
             if index < 1 or index > len(dynamics):
                 return None
-            return dynamics[index - 1]
+            dynamic = dynamics[index - 1]
+            hydrate_images = getattr(self.source, "hydrate_images", None)
+            return await hydrate_images(dynamic) if hydrate_images else dynamic
         except Exception:
             logger.error(f"查询B站动态详情（序号={index}）失败。", exc_info=True)
             return None
@@ -340,6 +341,8 @@ class BilibiliDynamicManager:
                     pending_targets = record.get("targets", {})
                     parser_video_path = await self._get_parser_video_path(dynamic, pending_targets)
                     video_failures: list[str] = []
+                    # 卡片内容与目标会话无关，同一条动态只渲染一次，所有目标复用。
+                    rendered: Any = _NOT_RENDERED
                     for sid, delivered in pending_targets.items():
                         if delivered:
                             continue
@@ -348,7 +351,9 @@ class BilibiliDynamicManager:
                             logger.warning(f"B站动态不支持主动投递：动态={dyn_id}，目标={sid}")
                             continue
                         try:
-                            components = await self.build_message_components(dynamic, sid)
+                            if rendered is _NOT_RENDERED:
+                                rendered = await self._render_dynamic(dynamic)
+                            components = self._message_components(dynamic, rendered)
                             dispatched = await self.context.send_message(sid, MessageChain(components))
                             if dispatched is False:
                                 failed_count += 1
@@ -393,6 +398,7 @@ class BilibiliDynamicManager:
             dynamic = dynamics[0]
             sent_count = 0
             failed_count = 0
+            rendered: Any = _NOT_RENDERED
 
             for sid in targets:
                 if not platform_supports_proactive_send(sid, self.context):
@@ -400,7 +406,9 @@ class BilibiliDynamicManager:
                     logger.warning(f"B站动态测试推送不支持主动投递：目标={sid}")
                     continue
                 try:
-                    components = await self.build_message_components(dynamic, sid)
+                    if rendered is _NOT_RENDERED:
+                        rendered = await self._render_dynamic(dynamic)
+                    components = self._message_components(dynamic, rendered)
                     dispatched = await self.context.send_message(sid, MessageChain(components))
                     if dispatched is False:
                         failed_count += 1
@@ -433,42 +441,46 @@ class BilibiliDynamicManager:
         Returns:
             普通消息链组件列表；超阈值原图转发由 build_forward_components() 单独构造。
         """
+        return self._message_components(dynamic, await self._render_dynamic(dynamic))
+
+    async def _render_dynamic(self, dynamic: dict[str, Any]) -> Any | None:
+        """按图片数阈值渲染动态卡片：不超过阈值时连图一起画，否则只画文字。失败返回 None。"""
+        if self.renderer is None:
+            return None
+        cached_images = [str(path) for path in dynamic.get("cached_images", []) if Path(path).is_file()]
+        include_images = len(dynamic.get("images") or cached_images) <= self._render_image_count_threshold()
+        try:
+            return await self.renderer.bilibili_dynamic(dynamic, include_images=include_images)
+        except Exception:
+            logger.warning(
+                "B站动态图片渲染失败，回退到文字链。" if include_images else "B站动态文字图片渲染失败，回退到文字链。",
+                exc_info=True,
+            )
+            return None
+
+    def _message_components(self, dynamic: dict[str, Any], rendered: Any | None) -> list:
+        """由渲染结果组装普通消息链；每次调用都新建组件，不在目标之间共享组件对象。"""
         cached_images = [str(path) for path in dynamic.get("cached_images", []) if Path(path).is_file()]
         declared_count = len(dynamic.get("images") or cached_images)
-        threshold = self._render_image_count_threshold()
+        link = str(dynamic.get("link", "") or "")
         # 兼容未注入渲染器的第三方调用方；插件主流程始终注入 CalendarRenderer。
         if self.renderer is None:
-            link = str(dynamic.get("link", "") or "")
             components = [Comp.Plain(text=self._fallback_text(dynamic, ""))]
             components.extend(Comp.Image.fromFileSystem(image) for image in cached_images)
             if link:
                 components.append(Comp.Plain(text=f"查看完整动态：{link}"))
             return components
-        renderable = declared_count <= threshold and self.renderer is not None
 
-        rendered = None
-        if renderable:
-            try:
-                rendered = await self.renderer.bilibili_dynamic(dynamic, include_images=True)
-            except Exception:
-                logger.warning("B站动态图片渲染失败，回退到文字链。", exc_info=True)
-        if rendered is None and self.renderer is not None and declared_count > threshold:
-            try:
-                rendered = await self.renderer.bilibili_dynamic(dynamic, include_images=False)
-            except Exception:
-                logger.warning("B站动态文字图片渲染失败，回退到文字链。", exc_info=True)
-
-        link = str(dynamic.get("link", "") or "")
         link_text = f"查看完整动态：{link}" if link else ""
         components: list = []
-        if rendered is not None and isinstance(rendered, (str, Path)) and Path(str(rendered)).is_file():
+        if isinstance(rendered, (str, Path)) and Path(str(rendered)).is_file():
             # 链接与渲染图片处在同一条消息链中，阅读顺序固定为图片、链接。
             components.append(Comp.Image.fromFileSystem(str(rendered)))
             if link_text:
                 components.append(Comp.Plain(text=link_text))
         else:
             components.append(Comp.Plain(text=self._fallback_text(dynamic, link_text)))
-            if declared_count <= threshold:
+            if declared_count <= self._render_image_count_threshold():
                 # 渲染服务短暂不可用时仍保留动态原图，避免小图动态丢失内容。
                 components.extend(Comp.Image.fromFileSystem(image) for image in cached_images)
 

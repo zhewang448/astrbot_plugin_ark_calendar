@@ -17,6 +17,7 @@ from uuid import uuid4
 import aiohttp
 
 from .image_scale import ImageScaler
+from .keyed_lock import KeyedLocks
 
 
 class UnsafeAssetUrl(ValueError):
@@ -59,8 +60,7 @@ class AssetCache:
         self.session = session
         self.proxy = proxy.strip()
         self.logger = logger
-        self._download_locks: dict[str, tuple[asyncio.Lock, int]] = {}
-        self._download_locks_guard = asyncio.Lock()
+        self._download_locks = KeyedLocks()
         self._data_uri_cache: OrderedDict[tuple[str, int, int], str] = OrderedDict()
         self._data_uri_cache_bytes = 0
         self._data_uri_semaphore = asyncio.Semaphore(self.DATA_URI_CONCURRENCY)
@@ -188,57 +188,53 @@ class AssetCache:
 
     async def _download(self, url: str, *, max_bytes: int | None = None) -> Path:
         download_limit = self._download_limit(max_bytes)
-        lock = await self._retain_download_lock(url)
-        try:
-            async with lock:
-                target = self._target_path(url)
-                if self._valid_cached_file(target, max_bytes=download_limit):
-                    return target
-                current = url
-                request_kwargs = {"proxy": self.proxy} if self.proxy else {}
-                for redirect_count in range(self.MAX_REDIRECTS + 1):
-                    await self._validate_remote_url(current)
-                    async with self.session.get(
-                        current, allow_redirects=False, **request_kwargs
-                    ) as response:
-                        self._validate_response_peer(response)
-                        if response.status in {301, 302, 303, 307, 308}:
-                            location = response.headers.get("Location", "")
-                            if not location or redirect_count >= self.MAX_REDIRECTS:
-                                raise UnsafeAssetUrl("图片重定向无效或次数过多")
-                            current = urljoin(current, location)
-                            continue
-                        response.raise_for_status()
-                        content_type = response.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
-                        if content_type not in self.ALLOWED_MIME_TYPES:
-                            raise ValueError(f"不支持的图片类型：{content_type or 'unknown'}")
-                        content_length = response.content_length
-                        if content_length is not None and content_length > download_limit:
-                            raise AssetTooLarge(f"图片超过 {download_limit} 字节限制")
-                        temporary = target.with_name(f".{target.name}.{uuid4().hex}.tmp")
+        async with self._download_locks.hold(url):
+            target = self._target_path(url)
+            if self._valid_cached_file(target, max_bytes=download_limit):
+                return target
+            current = url
+            request_kwargs = {"proxy": self.proxy} if self.proxy else {}
+            for redirect_count in range(self.MAX_REDIRECTS + 1):
+                await self._validate_remote_url(current)
+                async with self.session.get(
+                    current, allow_redirects=False, **request_kwargs
+                ) as response:
+                    self._validate_response_peer(response)
+                    if response.status in {301, 302, 303, 307, 308}:
+                        location = response.headers.get("Location", "")
+                        if not location or redirect_count >= self.MAX_REDIRECTS:
+                            raise UnsafeAssetUrl("图片重定向无效或次数过多")
+                        current = urljoin(current, location)
+                        continue
+                    response.raise_for_status()
+                    content_type = response.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
+                    if content_type not in self.ALLOWED_MIME_TYPES:
+                        raise ValueError(f"不支持的图片类型：{content_type or 'unknown'}")
+                    content_length = response.content_length
+                    if content_length is not None and content_length > download_limit:
+                        raise AssetTooLarge(f"图片超过 {download_limit} 字节限制")
+                    temporary = target.with_name(f".{target.name}.{uuid4().hex}.tmp")
+                    try:
+                        written = 0
+                        with temporary.open("wb") as output:
+                            async for chunk in response.content.iter_chunked(64 * 1024):
+                                written += len(chunk)
+                                if written > download_limit:
+                                    raise AssetTooLarge(f"图片超过 {download_limit} 字节限制")
+                                output.write(chunk)
+                        with temporary.open("rb") as input_file:
+                            header = input_file.read(12)
+                        if not self._matches_image_mime(header, content_type):
+                            raise ValueError("图片内容与声明类型不一致")
+                        os.replace(temporary, target)
+                        self._maybe_prune_disk_cache()
+                        return target
+                    finally:
                         try:
-                            written = 0
-                            with temporary.open("wb") as output:
-                                async for chunk in response.content.iter_chunked(64 * 1024):
-                                    written += len(chunk)
-                                    if written > download_limit:
-                                        raise AssetTooLarge(f"图片超过 {download_limit} 字节限制")
-                                    output.write(chunk)
-                            with temporary.open("rb") as input_file:
-                                header = input_file.read(12)
-                            if not self._matches_image_mime(header, content_type):
-                                raise ValueError("图片内容与声明类型不一致")
-                            os.replace(temporary, target)
-                            self._maybe_prune_disk_cache()
-                            return target
-                        finally:
-                            try:
-                                temporary.unlink(missing_ok=True)
-                            except OSError:
-                                pass
-                raise UnsafeAssetUrl("图片重定向无效或次数过多")
-        finally:
-            await self._release_download_lock(url, lock)
+                            temporary.unlink(missing_ok=True)
+                        except OSError:
+                            pass
+            raise UnsafeAssetUrl("图片重定向无效或次数过多")
 
     def _download_limit(self, max_bytes: int | None) -> int:
         if max_bytes is None:
@@ -250,23 +246,6 @@ class AssetCache:
                 f"图片下载上限必须在 {self.MAX_DOWNLOAD_BYTES} 到 {self.MAX_LOCAL_BYTES} 字节之间"
             )
         return max_bytes
-
-    async def _retain_download_lock(self, url: str) -> asyncio.Lock:
-        async with self._download_locks_guard:
-            lock, references = self._download_locks.get(url, (asyncio.Lock(), 0))
-            self._download_locks[url] = (lock, references + 1)
-            return lock
-
-    async def _release_download_lock(self, url: str, lock: asyncio.Lock) -> None:
-        async with self._download_locks_guard:
-            current = self._download_locks.get(url)
-            if current is None or current[0] is not lock:
-                return
-            _, references = current
-            if references <= 1:
-                self._download_locks.pop(url, None)
-            else:
-                self._download_locks[url] = (lock, references - 1)
 
     def _maybe_prune_disk_cache(self) -> None:
         # 首次下载仍做一次完整清理，以处理插件重启前遗留的超限缓存；

@@ -5,19 +5,20 @@ import re
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
+from .game_data import GameDataSource
 from .http import HttpClient
 
 CN_TZ = ZoneInfo("Asia/Shanghai")
 
 
 class GachaSource:
-    TORAPPU_URL = "https://torappu.prts.wiki/gamedata/latest/excel/gacha_table.json"
     SERVER_DATA_URL = "https://weedy.prts.wiki/gacha_table.json"
-    CHARACTER_URL = "https://torappu.prts.wiki/gamedata/latest/excel/character_table.json"
 
-    def __init__(self, http: HttpClient, pool_info_url: str):
+    def __init__(self, http: HttpClient, pool_info_url: str, game_data: GameDataSource | None = None):
         self.http = http
         self.pool_info_url = pool_info_url
+        # torappu gacha_table 与角色表由 GameDataSource 统一获取，公招计算复用同一份数据。
+        self.game_data = game_data or GameDataSource(http)
         self.last_source_states: list[dict] = []
 
     async def pools(self, start: datetime, end: datetime, overview: list[dict]) -> list[dict]:
@@ -27,13 +28,17 @@ class GachaSource:
             "PRTS Gacha Server Data",
             "明日方舟角色数据",
         )
-        results = await asyncio.gather(
-            self.http.json(self.TORAPPU_URL),
+        results: list = list(await asyncio.gather(
+            self.game_data.gacha_table(),
             self.http.json(self.pool_info_url),
             self.http.json(self.SERVER_DATA_URL),
-            self.http.json(self.CHARACTER_URL),
             return_exceptions=True,
-        )
+        ))
+        # 角色表只用于把 UP 名单里的 charId 换成名字；缓存已覆盖这些 charId 时不回源。
+        server_value = results[2]
+        required_ids = self._up_char_ids(server_value) if self._valid_server_data(server_value) else set()
+        characters, character_error = await self.game_data.characters(required_ids, minimum=100)
+        results.append(character_error if character_error is not None and not characters else characters)
         validators = (
             self._valid_torappu_data,
             self._valid_pool_info,
@@ -74,6 +79,14 @@ class GachaSource:
         if not self.last_source_states[0]["ok"] and self.last_source_states[1]["ok"]:
             self.last_source_states[0]["status"] = "fallback"
             self.last_source_states[0]["message"] = "实时数据不可用，已回退到 ArknightsGachaData 时间轴"
+        if character_error is not None and self.last_source_states[3]["ok"]:
+            # 回源失败但本地角色摘要仍可用：名字可能缺最新干员，按降级处理。
+            self.last_source_states[3].update({
+                "ok": False,
+                "status": "fallback",
+                "message": f"实时更新失败，已使用本地角色缓存：{character_error}",
+                "event_key": self._event_key("明日方舟角色数据", character_error),
+            })
 
         clients = server_data.get("gachaPoolClient", [])
         server_map = {
@@ -242,6 +255,23 @@ class GachaSource:
             or name == "适合多种场合的强力干员"
             or name.strip().isdigit()
         )
+
+    @staticmethod
+    def _up_char_ids(server_data: dict) -> set[str]:
+        """服务器卡池数据里出现的全部 UP charId，用来判断角色缓存是否需要回源。"""
+        ids: set[str] = set()
+        for client in server_data.get("gachaPoolClient", []) or []:
+            if not isinstance(client, dict):
+                continue
+            detail = client.get("gachaPoolDetail", {})
+            detail = detail.get("detailInfo", {}) if isinstance(detail, dict) else {}
+            if not isinstance(detail, dict):
+                continue
+            groups = [*((detail.get("upCharInfo") or {}).get("perCharList", []) or []), *(detail.get("weightUpCharInfoList", []) or [])]
+            for group in groups:
+                if isinstance(group, dict):
+                    ids.update(str(char_id) for char_id in group.get("charIdList", []) or [])
+        return ids
 
     @staticmethod
     def _up_names(server: dict, characters: dict) -> tuple[list[str], list[str]]:

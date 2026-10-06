@@ -575,3 +575,79 @@ def test_first_seen_old_dynamic_is_treated_as_history(monkeypatch):
     asyncio.run(manager.check_and_push())
     assert source.state["dynamics"]["old"] == {"state": "ignored"}
     assert source.state["dynamics"]["new"] == {"targets": {"p:Group:1": False}}
+
+
+def test_auto_push_renders_each_dynamic_once_for_all_targets(tmp_path: Path, monkeypatch):
+    rendered = tmp_path / "rendered.png"
+    rendered.write_bytes(b"image")
+    sent = []
+
+    class Context:
+        async def send_message(self, sid, chain):
+            sent.append((sid, chain))
+            return True
+
+    renderer = FakeRenderer(rendered)
+    source = FakeSource([{
+        "id": "once", "dynamic_type": "text", "title": "New dynamic",
+        "description_text": "content", "link": "https://example.invalid/dynamic",
+    }])
+    manager = bilibili_manager.BilibiliDynamicManager(
+        source,
+        Context(),
+        {"bilibili_dynamic": {"push_enabled": True, "target_sid_list": ["p:Group:1", "p:Group:2", "p:Group:3"]}},
+        renderer=renderer,
+    )
+    monkeypatch.setattr(bilibili_manager, "platform_supports_proactive_send", lambda *_: True)
+
+    assert asyncio.run(manager.check_and_push()) == (3, 0)
+    assert renderer.calls == [True]
+    assert [chain[0].path for _, chain in sent] == [str(rendered)] * 3
+    # 组件对象按目标各自新建，不在不同会话之间共享。
+    assert sent[0][1][0] is not sent[1][1][0]
+
+
+def test_detail_query_downloads_images_only_for_selected_dynamic():
+    hydrated = []
+
+    class Source(FakeSource):
+        async def recent_dynamics(self, **kwargs):
+            assert kwargs.get("download_images") is False
+            return self.dynamics
+
+        async def hydrate_images(self, dynamic):
+            hydrated.append(dynamic["id"])
+            return {**dynamic, "cached_images": ["local.png"]}
+
+    source = Source([{"id": f"d{index}", "dynamic_type": "image"} for index in range(1, 6)])
+    manager = bilibili_manager.BilibiliDynamicManager(source, SimpleNamespace(), {"bilibili_dynamic": {}})
+
+    dynamic = asyncio.run(manager.query_detail(3, 5))
+    assert dynamic["id"] == "d3" and dynamic["cached_images"] == ["local.png"]
+    assert hydrated == ["d3"]
+
+
+def test_send_proactive_treats_rejection_and_exception_as_failure():
+    from core.platform_utils import send_proactive
+
+    logs = []
+    logger = SimpleNamespace(warning=logs.append, error=lambda message, **_k: logs.append(message))
+    platform = SimpleNamespace(meta=lambda: SimpleNamespace(name="custom", support_proactive_message=True))
+
+    class Context:
+        def __init__(self, result):
+            self.result = result
+
+        def get_platform_inst(self, _platform_id):
+            return platform
+
+        async def send_message(self, _sid, _chain):
+            if isinstance(self.result, Exception):
+                raise self.result
+            return self.result
+
+    assert asyncio.run(send_proactive(Context(None), "p:Group:1", [], logger, "测试")) is True
+    assert asyncio.run(send_proactive(Context(False), "p:Group:1", [], logger, "测试")) is False
+    assert asyncio.run(send_proactive(Context(RuntimeError("boom")), "p:Group:1", [], logger, "测试")) is False
+    assert asyncio.run(send_proactive(Context(None), "invalid", [], logger, "测试")) is False
+    assert len(logs) == 3

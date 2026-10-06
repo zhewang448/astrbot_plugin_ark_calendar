@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-import asyncio
 import time
 from pathlib import Path
 from typing import Any
+
+from .keyed_lock import KeyedLocks
 
 CalendarImageResult = tuple["Path | str", str, "dict[str, Any] | None"]
 
@@ -19,8 +20,7 @@ class CalendarImageManager:
         self.service = service
         self.config = config
         self.logger = logger
-        self._render_locks: dict[str, tuple[asyncio.Lock, int]] = {}
-        self._render_locks_guard = asyncio.Lock()
+        self._render_locks = KeyedLocks()
 
     # ── 配置读取 ──────────────────────────────────────────────
 
@@ -80,24 +80,27 @@ class CalendarImageManager:
         *,
         use_cache: bool = True,
     ) -> CalendarImageResult:
-        """获取日历图片；强制刷新时可完全绕过最终图片缓存。"""
-        if not use_cache or not self.cache_enabled():
-            return await self._render(snapshot, display_config, use_cache=use_cache)
-        cached = self.render_cache.lookup(snapshot, display_config)
+        """获取日历图片。
+
+        use_cache=False（管理员强制刷新）时跳过查缓存与降级回退，但新图照常写入缓存，
+        否则刷新后的第一次 /方舟日历 还要为同一份数据再渲染一遍。
+        """
+        if not self.cache_enabled():
+            return await self._render(snapshot, display_config, store=False, allow_fallback=False)
+        # 签名要序列化整份快照（含内嵌图片），同一次请求只算一次。
+        signature = self.render_cache.signature(snapshot, display_config)
+        if not use_cache:
+            return await self._render(snapshot, display_config, signature=signature, allow_fallback=False)
+        cached = self.render_cache.lookup(snapshot, display_config, signature=signature)
         if cached:
             self.logger.info("最终日历图片缓存命中。")
             return cached, "cache", None
-        signature = self.render_cache.signature(snapshot, display_config)
-        lock = await self._retain_lock(signature)
-        try:
-            async with lock:
-                cached = self.render_cache.lookup(snapshot, display_config)
-                if cached:
-                    self.logger.info("最终日历图片缓存由并发请求生成。")
-                    return cached, "cache", None
-                return await self._render(snapshot, display_config)
-        finally:
-            await self._release_lock(signature, lock)
+        async with self._render_locks.hold(signature):
+            cached = self.render_cache.lookup(snapshot, display_config, signature=signature)
+            if cached:
+                self.logger.info("最终日历图片缓存由并发请求生成。")
+                return cached, "cache", None
+            return await self._render(snapshot, display_config, signature=signature)
 
     def fallback_notice(self, manifest: dict[str, Any] | None, messages) -> str:
         """依据实际发出图片的 manifest 生成降级提示。"""
@@ -111,35 +114,16 @@ class CalendarImageManager:
         snapshot,
         display_config: dict[str, Any],
         *,
-        use_cache: bool = True,
+        signature: str | None = None,
+        store: bool = True,
+        allow_fallback: bool = True,
     ) -> CalendarImageResult:
         started = time.monotonic()
         self.logger.info("最终日历图片缓存未命中，开始调用渲染器。")
         try:
             rendered = await self.renderer.calendar(snapshot)
-            elapsed = time.monotonic() - started
-            warning_seconds = self._int_value("slow_render_warning_seconds", 60, minimum=1, maximum=3600)
-            if elapsed >= warning_seconds:
-                self.logger.warning(f"方舟日历渲染耗时较长：{elapsed:.2f} 秒。")
-            else:
-                self.logger.info(f"方舟日历渲染完成，耗时 {elapsed:.2f} 秒。")
-            if not use_cache or not self.cache_enabled():
-                return rendered, "rendered", None
-            cached = self.render_cache.store(
-                rendered,
-                snapshot,
-                display_config,
-                self.cache_max_age(),
-                self.cache_keep_count(),
-            )
-            self.logger.info(f"最终日历图片已保存至插件缓存：{cached}")
-            return cached, "rendered", None
         except Exception:
-            fallback = (
-                self.render_cache.fallback(self.fallback_max_age_hours())
-                if use_cache and self.cache_enabled()
-                else None
-            )
+            fallback = self.render_cache.fallback(self.fallback_max_age_hours()) if allow_fallback else None
             if fallback:
                 image, manifest = fallback
                 self.logger.warning(
@@ -147,22 +131,26 @@ class CalendarImageManager:
                 )
                 return image, "fallback", manifest
             raise
-
-    # ── 渲染锁管理 ────────────────────────────────────────────
-
-    async def _retain_lock(self, signature: str) -> asyncio.Lock:
-        async with self._render_locks_guard:
-            lock, refs = self._render_locks.get(signature, (asyncio.Lock(), 0))
-            self._render_locks[signature] = (lock, refs + 1)
-            return lock
-
-    async def _release_lock(self, signature: str, lock: asyncio.Lock) -> None:
-        async with self._render_locks_guard:
-            current = self._render_locks.get(signature)
-            if current is None or current[0] is not lock:
-                return
-            _, refs = current
-            if refs <= 1:
-                self._render_locks.pop(signature, None)
-            else:
-                self._render_locks[signature] = (lock, refs - 1)
+        elapsed = time.monotonic() - started
+        warning_seconds = self._int_value("slow_render_warning_seconds", 60, minimum=1, maximum=3600)
+        if elapsed >= warning_seconds:
+            self.logger.warning(f"方舟日历渲染耗时较长：{elapsed:.2f} 秒。")
+        else:
+            self.logger.info(f"方舟日历渲染完成，耗时 {elapsed:.2f} 秒。")
+        if not store:
+            return rendered, "rendered", None
+        # 渲染已经成功，写缓存失败（磁盘满、权限等）不能把新图丢掉去回退旧图。
+        try:
+            cached = self.render_cache.store(
+                rendered,
+                snapshot,
+                display_config,
+                self.cache_max_age(),
+                self.cache_keep_count(),
+                signature=signature,
+            )
+        except Exception:
+            self.logger.warning("最终日历图片缓存写入失败，本次直接发送渲染结果。", exc_info=True)
+            return rendered, "rendered", None
+        self.logger.info(f"最终日历图片已保存至插件缓存：{cached}")
+        return cached, "rendered", None

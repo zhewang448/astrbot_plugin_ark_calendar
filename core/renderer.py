@@ -132,13 +132,10 @@ class CalendarRenderer:
         images: list[str] = []
         if include_images:
             assert self.service.assets
+            # 兼容旧版宿主注入的 Assets 替身：没有 data_uri_local 时退回 data_uri。
+            encoder = getattr(self.service.assets, "data_uri_local", None) or self.service.assets.data_uri
             for image in dynamic.get("cached_images", []):
-                encoder = getattr(self.service.assets, "data_uri_local", None)
-                if encoder is None:
-                    encoder = self.service.assets.data_uri
-                    uri = await encoder(str(image), box=(1180, 760), quality=86)
-                else:
-                    uri = await encoder(str(image), box=(1180, 760), quality=86)
+                uri = await encoder(str(image), box=(1180, 760), quality=86)
                 if uri:
                     images.append(uri)
         data = {
@@ -287,20 +284,6 @@ class CalendarRenderer:
                 "date": (start + timedelta(days=offset)).strftime("%m.%d"),
                 "label": "TODAY" if (start + timedelta(days=offset)).date() == now.date() else (start + timedelta(days=offset)).strftime("%a").upper(),
                 "today": (start + timedelta(days=offset)).date() == now.date(),
-            }
-            for offset in sorted(offsets)
-        ]
-
-    @staticmethod
-    def _range_ticks(start: datetime, timeline_days: int) -> list[dict]:
-        step = 7 if timeline_days <= 35 else 14 if timeline_days <= 63 else 21
-        offsets = set(range(0, timeline_days, step))
-        offsets.update({0, timeline_days - 1})
-        return [
-            {
-                "left": offset / max(1, timeline_days - 1) * 100,
-                "date": (start + timedelta(days=offset)).strftime("%m.%d"),
-                "label": (start + timedelta(days=offset)).strftime("%a").upper(),
             }
             for offset in sorted(offsets)
         ]

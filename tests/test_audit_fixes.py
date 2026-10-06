@@ -384,17 +384,44 @@ def test_recruitment_source_attaches_current_profession_tags():
 def test_recruitment_source_retries_after_temporary_fetch_failure():
     class FakeHttp:
         def __init__(self):
+            self.character_calls = 0
+
+        async def json(self, url: str):
+            if url.endswith("gacha_table.json"):
+                return {"recruitDetail": "说明文字\r\n★★★★\\n干员\r\n--------------------\r\n"}
+            self.character_calls += 1
+            if self.character_calls == 1:
+                raise RuntimeError("temporary failure")
+            return {"char": {"name": "干员", "rarity": "TIER_4", "tagList": ["输出"]}}
+
+    source = RecruitmentSource(FakeHttp())
+    assert asyncio.run(source.get_recruitment_pool())["characters"] == []
+    pool = asyncio.run(source.get_recruitment_pool())
+    assert [item["name"] for item in pool["characters"]] == ["干员"]
+
+
+def test_game_data_reuses_cached_characters_until_required_id_is_missing():
+    from sources.game_data import GameDataSource
+
+    class FakeHttp:
+        def __init__(self):
             self.calls = 0
 
         async def json(self, _url: str):
             self.calls += 1
-            if self.calls == 1:
-                raise RuntimeError("temporary failure")
-            return {"char": {"name": "干员"}}
+            return {"char_a": {"name": "甲", "rarity": "TIER_6", "skills": ["大字段不进缓存"]}}
 
-    source = RecruitmentSource(FakeHttp())
-    assert asyncio.run(source._fetch_character_table()) == {}
-    assert asyncio.run(source._fetch_character_table()) == {"char": {"name": "干员"}}
+    http = FakeHttp()
+    game_data = GameDataSource(http)
+    characters, error = asyncio.run(game_data.characters({"char_a"}))
+    assert error is None and characters == {"char_a": {"name": "甲", "rarity": "TIER_6"}}
+    asyncio.run(game_data.characters({"char_a"}))
+    assert http.calls == 1
+    # 缺项触发回源，但同一缺项在重试间隔内不会反复下载整张角色表。
+    game_data._characters_attempted_at -= GameDataSource.MISSING_RETRY_INTERVAL
+    asyncio.run(game_data.characters({"char_new"}))
+    asyncio.run(game_data.characters({"char_new"}))
+    assert http.calls == 2
 
 
 def test_recruitment_aliases_sorting_and_full_output():

@@ -10,7 +10,7 @@ from astrbot.core.agent.tool import FunctionTool, ToolSet
 
 from .ai_context import compact_json_data, operator_data, snapshot_data
 from .recruitment_calculator import RecruitmentCalculator
-from .subscription import drop_paired_shops
+from .subscription import drop_paired_shops, match_by_name
 
 TOOL_NAMES = (
     "ark_calendar_today",
@@ -87,6 +87,9 @@ def build_ai_tools(plugin: Any) -> ToolSet:
         valid, invalid = calculator.normalize_tags([str(tag) for tag in tags])
         if invalid:
             return _json({"valid_tags": valid, "invalid_tags": invalid, "results": []})
+        max_tags = plugin.service.recruit_max_tags()
+        if max_tags is not None and len(valid) > max_tags:
+            return _json({"valid_tags": valid, "error": "too_many_tags", "max_tags": max_tags, "results": []})
         results = calculator.calculate(valid) if valid else []
         return _json({"valid_tags": valid, "results": results})
 
@@ -95,7 +98,8 @@ def build_ai_tools(plugin: Any) -> ToolSet:
         return _json(report)
 
     async def operator_history(event, name: str):
-        report = await plugin.service.recurrence_report("全部")
+        # 必须带 all：只写“全部”会套用默认显示数量，排行靠后的干员会被截掉。
+        report = await plugin.service.recurrence_report("全部 all")
         needle = str(name or "").strip().casefold()
         rows = [row for row in report.get("rows", []) if needle in str(row.get("name", "")).casefold()]
         return _json({
@@ -157,8 +161,7 @@ def build_ai_tools(plugin: Any) -> ToolSet:
         user_id = str(event.message_obj.sender.user_id)
         session_id = event.unified_msg_origin
         records = plugin.subscription_manager.get_user_subscriptions(user_id, session_id)
-        needle = name.casefold()
-        matches = drop_paired_shops([item for item in records if needle in item.item_name.casefold() or item.item_name.casefold() in needle])
+        matches = drop_paired_shops(match_by_name(records, name, lambda item: item.item_name))
         if not matches:
             return _json({"ok": False, "error": "subscription_not_found", "query": name})
         if len(matches) > 1:

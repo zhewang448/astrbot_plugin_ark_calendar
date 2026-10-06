@@ -21,23 +21,57 @@ def is_recruitment_easter_egg_query(text: str) -> bool:
     return text.strip().casefold() in {"all", "*"}
 
 
-# 游戏内真实存在的全部公招标签（按类别）
-ALL_TAGS = {
-    # 职业
-    "近卫干员", "狙击干员", "术师干员", "医疗干员",
-    "重装干员", "辅助干员", "特种干员", "先锋干员",
-    # 位置
-    "近战位", "远程位",
-    # 稀有度栏标签
-    "资深干员",     # 保底 5★
-    "高级资深干员",  # 保底 6★
-    "新手",
+# 游戏内一次最多显示 5 个公招标签；超过时组合数会迅速膨胀（29 个标签对应 4089 种组合）。
+# 实际上限由配置 basic.recruit_max_tags 决定，0 表示不限制。
+DEFAULT_RECRUIT_MAX_TAGS = 5
+
+# 游戏内真实存在的全部公招标签（按类别，顺序即帮助页展示顺序）
+TAG_GROUPS: dict[str, tuple[str, ...]] = {
+    "职业": ("近卫干员", "狙击干员", "术师干员", "医疗干员", "重装干员", "辅助干员", "特种干员", "先锋干员"),
+    "位置": ("近战位", "远程位"),
+    # 稀有度栏标签：资深干员保底 5★，高级资深干员保底 6★
+    "稀有度": ("新手", "资深干员", "高级资深干员"),
     # 词缀标签（与 character_table.json 中的 tagList 对应）
-    "位移", "元素", "减速", "削弱", "召唤",
-    "快速复活", "控场", "支援", "支援机械",
-    "治疗", "爆发", "生存", "群攻", "费用回复",
-    "输出", "防护",
+    "词缀": (
+        "输出", "治疗", "生存", "防护", "控场", "爆发", "支援", "减速",
+        "削弱", "群攻", "位移", "召唤", "快速复活", "费用回复", "支援机械", "元素",
+    ),
 }
+ALL_TAGS = frozenset(tag for tags in TAG_GROUPS.values() for tag in tags)
+RARITY_TAG_NOTES = {"资深干员": "保底5★", "高级资深干员": "保底6★"}
+
+
+def recruitment_help_groups() -> dict[str, list[str]]:
+    """公招帮助图的标签分组；稀有度标签附带保底说明。"""
+    return {
+        group: [f"{tag}（{RARITY_TAG_NOTES[tag]}）" if tag in RARITY_TAG_NOTES else tag for tag in tags]
+        for group, tags in TAG_GROUPS.items()
+    }
+
+
+def recruitment_help_text() -> str:
+    """公招帮助图渲染失败时的文字版，标签清单与帮助图同源。"""
+    professions = "、".join(tag.removesuffix("干员") for tag in TAG_GROUPS["职业"])
+    special = "、".join(f"{tag}（{note}）" for tag, note in RARITY_TAG_NOTES.items())
+    affixes = [f"{tag}（小车）" if tag == "支援机械" else tag for tag in TAG_GROUPS["词缀"]]
+    affix_lines = ["、".join(affixes[index:index + 8]) for index in range(0, len(affixes), 8)]
+    return (
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        "🏷️  方舟公招计算器\n"
+        "━━━━━━━━━━━━━━━━━━━━\n\n"
+        "用法：/方舟公招 <标签1> [标签2] [标签3] …\n\n"
+        "示例：\n"
+        "  /方舟公招 近卫干员 输出 生存\n"
+        "  /方舟公招 资深干员 医疗干员\n"
+        "  /方舟公招 高级资深干员\n\n"
+        "可用职业标签（也可省略「干员」两字）：\n"
+        f"  {professions}\n\n"
+        f"可用位置标签：{'、'.join(TAG_GROUPS['位置'])}\n\n"
+        f"特殊标签：{special}\n\n"
+        "词缀标签：" + "、\n          ".join(affix_lines) + "\n"
+        "━━━━━━━━━━━━━━━━━━━━"
+    )
+
 
 # 标签别名：用户可能输入的非标准写法 -> 标准标签名
 TAG_ALIASES: dict[str, str] = {
@@ -73,24 +107,6 @@ TAG_ALIASES: dict[str, str] = {
     "防御": "防护", "防护": "防护",
 }
 
-# 职业 -> 游戏数据中的英文 profession 字段（仅用于从 char_table 快速过滤）
-PROFESSION_TAG_MAP: dict[str, str] = {
-    "近卫干员": "WARRIOR",
-    "狙击干员": "SNIPER",
-    "术师干员": "CASTER",
-    "医疗干员": "MEDIC",
-    "重装干员": "TANK",
-    "辅助干员": "SUPPORT",
-    "特种干员": "SPECIAL",
-    "先锋干员": "PIONEER",
-}
-
-# 位置 -> 游戏数据中的 position 字段
-POSITION_TAG_MAP: dict[str, str] = {
-    "近战位": "MELEE",
-    "远程位": "RANGED",
-}
-
 # `/方舟公招` 固定按游戏内 9 小时招募计算。1★、2★不计入保底星级。
 NINE_HOUR_MIN_RARITY = 3
 
@@ -111,7 +127,7 @@ class RecruitmentCalculator:
             characters: 公招池干员列表，每条包含 id/name/rarity/tags
         """
         # 1★ 支援机械仍需保留在完整公招池中；计算保底时才按 9 小时规则忽略 1★、2★。
-        self._pool = [c for c in characters if c["rarity"] >= 1]
+        self._pool = list(characters)
 
         # 预计算每个干员所有有效的"检索标签"（职业 + 位置 + 词缀）
         # 游戏数据中 tagList 只有词缀，职业和位置需要从 profession/position 推算。
@@ -325,14 +341,12 @@ def format_result(
     results: list[dict[str, Any]],
     *,
     selected_tags: list[str],
-    max_operators_per_combo: int | None = None,
 ) -> str:
     """将计算结果格式化为可读文本。
 
     Args:
         results: calculate() 的返回值
         selected_tags: 用户选择的原始标签（用于展示）
-        max_operators_per_combo: 兼容旧调用方的可选限制；默认 None 表示完整输出
 
     Returns:
         格式化后的文本
@@ -370,8 +384,6 @@ def format_result(
             guarantee = f"【{stars}+】保底"
         elif min_rarity >= 5:
             guarantee = f"【{stars}】保底"
-        elif min_rarity == 4:
-            guarantee = f"【{stars}】最低"
         else:
             guarantee = f"【{stars}】最低"
 
@@ -379,18 +391,13 @@ def format_result(
 
         # 按星级分组列出干员
         by_rarity: dict[int, list[str]] = {}
-        shown_operators = operators if max_operators_per_combo is None else operators[:max_operators_per_combo]
-        for op in shown_operators:
+        for op in operators:
             by_rarity.setdefault(op["rarity"], []).append(op["name"])
 
         for rarity in sorted(by_rarity.keys(), reverse=True):
             names_str = "、".join(by_rarity[rarity])
             rarity_stars = "★" * rarity
             lines.append(f"   {rarity_stars}：{names_str}")
-
-        total = len(operators)
-        if max_operators_per_combo is not None and total > max_operators_per_combo:
-            lines.append(f"   …共 {total} 位干员")
 
         if i < len(results) - 1:
             lines.append("")
