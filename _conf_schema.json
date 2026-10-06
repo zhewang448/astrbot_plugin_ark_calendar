@@ -882,7 +882,7 @@
         "description": "启用 AI 工具",
         "type": "bool",
         "default": false,
-        "hint": "开启后，宿主 AI 可通过工具读取本插件的结构化日历数据；工具只返回文本 JSON，不发送图片。"
+        "hint": "开启后，宿主 AI 可通过工具读取本插件的结构化日历数据；除“公开招募结果图”会把结果图直接发到当前会话外，其余工具只返回文本 JSON。"
       },
       "enabled_tools": {
         "description": "启用的 AI 工具",
@@ -898,7 +898,8 @@
           "ark_calendar_bilibili",
           "ark_calendar_operator_history",
           "ark_calendar_subscribe",
-          "ark_calendar_unsubscribe"
+          "ark_calendar_unsubscribe",
+          "ark_calendar_recruitment_image"
         ],
         "labels": [
           "今日信息",
@@ -911,7 +912,8 @@
           "B站动态",
           "干员最近一次 UP",
           "添加活动/卡池订阅",
-          "取消活动/卡池订阅"
+          "取消活动/卡池订阅",
+          "公开招募结果图"
         ],
         "default": [
           "ark_calendar_today",
@@ -924,9 +926,10 @@
           "ark_calendar_bilibili",
           "ark_calendar_operator_history",
           "ark_calendar_subscribe",
-          "ark_calendar_unsubscribe"
+          "ark_calendar_unsubscribe",
+          "ark_calendar_recruitment_image"
         ],
-        "hint": "多选要暴露给宿主 AI 的函数；默认全部开启。取消全部后不会注册任何函数。"
+        "hint": "多选要暴露给宿主 AI 的函数；默认全部开启。取消全部后不会注册任何函数。从旧版本升级且保存的是当时的完整默认列表时，会自动补上新增函数。"
       },
       "allow_subscription_mutations": {
         "description": "允许 AI 修改订阅",
@@ -946,7 +949,7 @@
         "hint": "限制活动、卡池、生日和排行结果的数量，避免过大的模型上下文。"
       }
     },
-    "hint": "AI 工具默认关闭。启用后提供只读查询，不开放订阅、取消订阅和强制刷新等写操作。"
+    "hint": "AI 工具默认关闭。启用后提供查询工具；订阅添加和取消需另外开启“允许 AI 修改订阅”，强制刷新等管理员操作不开放。"
   },
   "developer_mode": {
     "description": "开发者模式",
