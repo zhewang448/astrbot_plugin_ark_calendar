@@ -1,11 +1,14 @@
-"""AstrBot LLM Tool 定义：只返回结构化文本，不发送图片。"""
+"""AstrBot LLM Tool 定义：返回结构化文本；仅公招结果图工具会额外向当前会话发送图片。"""
 
 from __future__ import annotations
 
 import json
 from dataclasses import asdict
+from pathlib import Path
 from typing import Any
 
+import astrbot.api.message_components as Comp
+from astrbot.api.event import MessageChain
 from astrbot.core.agent.tool import FunctionTool, ToolSet
 
 from .ai_context import compact_json_data, operator_data, snapshot_data
@@ -24,10 +27,13 @@ TOOL_NAMES = (
     "ark_calendar_operator_history",
     "ark_calendar_subscribe",
     "ark_calendar_unsubscribe",
+    "ark_calendar_recruitment_image",
 )
 
 MUTATION_TOOL_NAMES = {"ark_calendar_subscribe", "ark_calendar_unsubscribe"}
-LEGACY_DEFAULT_TOOL_NAMES = set(TOOL_NAMES[:8])
+# 历代"全部默认工具"列表：v0.9.8 的前 8 个、v1.2.x 的前 11 个。保存的列表恰好等于其中之一时，
+# 视为用户从未手动挑选过，升级后自动补齐新增函数。
+LEGACY_DEFAULT_TOOL_SETS = (frozenset(TOOL_NAMES[:8]), frozenset(TOOL_NAMES[:11]))
 
 
 def _enabled_names(plugin: Any) -> set[str]:
@@ -36,7 +42,7 @@ def _enabled_names(plugin: Any) -> set[str]:
         return set(TOOL_NAMES)
     selected = {str(name).strip() for name in configured if str(name).strip()} & set(TOOL_NAMES)
     # 兼容新增可选函数前已经保存的“全部默认工具”列表。
-    if selected == LEGACY_DEFAULT_TOOL_NAMES:
+    if selected in LEGACY_DEFAULT_TOOL_SETS:
         return set(TOOL_NAMES)
     return selected
 
@@ -79,19 +85,56 @@ def build_ai_tools(plugin: Any) -> ToolSet:
         operator, candidates = await plugin.service.find_operator(name)
         return _json({"operator": operator_data(operator) if operator else None, "candidates": candidates})
 
-    async def recruitment(event, tags: list[str]):
+    async def calculate_recruitment(tags: list[str]) -> tuple[dict[str, Any] | None, list[str], list[dict]]:
+        """公招文字与结果图两个工具共用的计算；第一项不为 None 时是应直接返回的错误载荷。"""
         if not plugin.recruitment_source:
-            return _json({"error": "recruitment_source_uninitialized"})
+            return {"error": "recruitment_source_uninitialized"}, [], []
         pool = await plugin.recruitment_source.get_recruitment_pool()
         calculator = RecruitmentCalculator(pool.get("characters", []))
         valid, invalid = calculator.normalize_tags([str(tag) for tag in tags])
         if invalid:
-            return _json({"valid_tags": valid, "invalid_tags": invalid, "results": []})
+            return {"valid_tags": valid, "invalid_tags": invalid, "results": []}, valid, []
         max_tags = plugin.service.recruit_max_tags()
         if max_tags is not None and len(valid) > max_tags:
-            return _json({"valid_tags": valid, "error": "too_many_tags", "max_tags": max_tags, "results": []})
-        results = calculator.calculate(valid) if valid else []
+            return {"valid_tags": valid, "error": "too_many_tags", "max_tags": max_tags, "results": []}, valid, []
+        return None, valid, calculator.calculate(valid) if valid else []
+
+    async def recruitment(event, tags: list[str]):
+        error, valid, results = await calculate_recruitment(tags)
+        if error is not None:
+            return _json(error)
         return _json({"valid_tags": valid, "results": results})
+
+    async def recruitment_image(event, tags: list[str]):
+        error, valid, results = await calculate_recruitment(tags)
+        if error is not None:
+            return _json({**error, "image_sent": False})
+        if not valid:
+            return _json({"valid_tags": [], "error": "no_valid_tags", "image_sent": False})
+        # 图片已经包含完整干员列表，返回给模型的只保留摘要，避免上下文过大。
+        summary = [
+            {
+                "tags": result.get("tag_combinations") or [result.get("tags", [])],
+                "min_rarity": result.get("min_rarity"),
+                "operators": [operator.get("name") for operator in result.get("operators", [])],
+            }
+            for result in results[:max_items]
+        ]
+        try:
+            rendered = await plugin.renderer.recruitment_result(results, valid)
+        except Exception:
+            plugin.service.logger.warning("AI 公招结果图渲染失败，改为返回文字结果。", exc_info=True)
+            rendered = None
+        if not (isinstance(rendered, (str, Path)) and Path(str(rendered)).is_file()):
+            return _json({"image_sent": False, "error": "render_failed", "valid_tags": valid, "results": summary})
+        # 直接发到当前会话后仍返回文字摘要：返回 None 会让宿主结束本轮 Agent，模型无法再补充说明。
+        await event.send(MessageChain([Comp.Image.fromFileSystem(str(rendered))]))
+        return _json({
+            "image_sent": True,
+            "valid_tags": valid,
+            "results": summary,
+            "note": "公招结果图已发送给用户，回复时简要说明即可，不必逐条复述。",
+        })
 
     async def recurrence(event, scope: str = ""):
         report = await plugin.service.recurrence_report(scope)
@@ -200,7 +243,8 @@ def build_ai_tools(plugin: Any) -> ToolSet:
         _tool("ark_calendar_today", "查询今日作战、芯片、提醒和生日。返回 JSON 文本，不包含图片。", {}, [], today),
         _tool("ark_calendar_events", "查询活动和卡池时间轴，可按名称筛选。返回 JSON 文本，不包含图片。", {"query": {"type": "string", "description": "活动或卡池名称关键词，可留空"}, "limit": {"type": "integer", "description": "最多返回条数"}}, [], events),
         _tool("ark_calendar_birthday", "查询指定干员生日和基础资料。", {"name": {"type": "string", "description": "干员名称"}}, ["name"], birthday),
-        _tool("ark_calendar_recruitment", "根据公开招募标签计算可招募干员。", {"tags": {"type": "array", "items": {"type": "string"}, "description": "游戏内公招标签列表"}}, ["tags"], recruitment),
+        _tool("ark_calendar_recruitment", "根据公开招募标签计算可招募干员，只返回文字 JSON。", {"tags": {"type": "array", "items": {"type": "string"}, "description": "游戏内公招标签列表"}}, ["tags"], recruitment),
+        _tool("ark_calendar_recruitment_image", "根据公开招募标签计算可招募干员，并把招募终端结果图直接发送给用户；返回文字摘要。用户想看结果图时使用，只要文字答案时用 ark_calendar_recruitment。", {"tags": {"type": "array", "items": {"type": "string"}, "description": "游戏内公招标签列表"}}, ["tags"], recruitment_image),
         _tool("ark_calendar_recurrence", "查询干员未复刻排行，可填写六星、五星、标准、中坚或数量。", {"scope": {"type": "string", "description": "排行筛选条件，可留空"}}, [], recurrence),
         _tool("ark_calendar_operator_history", "查询指定干员最近一次 UP 结束日期和累计 UP 次数，不包含进店历史。", {"name": {"type": "string", "description": "干员名称"}}, ["name"], operator_history),
         _tool("ark_calendar_subscriptions", "查询当前用户在当前会话中的活动和卡池订阅。", {}, [], subscriptions),
