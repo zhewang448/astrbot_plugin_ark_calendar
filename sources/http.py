@@ -54,7 +54,7 @@ class PublicResolver(AbstractResolver):
 class HttpClient:
     RETRY_STATUSES = {429, 500, 502, 503, 504}
     MAX_RETRY_AFTER_SECONDS = 60.0
-    # character_table.json 已接近 8 MB 且不压缩传输，留出增长余量。
+    # 上限按解压后的字节计算（aiohttp 透明解压 gzip/deflate）；character_table.json 已接近 8 MB，留出增长余量。
     MAX_RESPONSE_BYTES = 32 * 1024 * 1024
     CHUNK_BYTES = 64 * 1024
     MAX_REDIRECTS = 3
@@ -82,7 +82,7 @@ class HttpClient:
         request_kwargs = dict(kwargs)
         request_kwargs.pop("allow_redirects", None)
         headers = dict(request_kwargs.pop("headers", {}))
-        headers.setdefault("Accept-Encoding", "identity")
+        headers.setdefault("Accept-Encoding", "gzip, deflate")
         request_kwargs["headers"] = headers
         if self.proxy and "proxy" not in request_kwargs:
             request_kwargs["proxy"] = self.proxy

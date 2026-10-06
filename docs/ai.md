@@ -24,20 +24,20 @@
 | `ark_calendar_today` | 今日作战、芯片、提醒和生日 |
 | `ark_calendar_events` | 活动与卡池时间轴，可按名称筛选 |
 | `ark_calendar_birthday` | 干员生日与基础资料 |
-| `ark_calendar_recruitment` | 根据公招标签计算结果 |
+| `ark_calendar_recruitment` | 根据公招标签计算结果；有效标签数超过“公招最多输入标签数”（默认 5，0 不限制）时返回 `too_many_tags` |
 | `ark_calendar_recurrence` | 未复刻排行 |
 | `ark_calendar_subscriptions` | 当前用户、当前会话的订阅列表 |
 | `ark_calendar_status` | 数据源状态、刷新质量和缓存状态 |
 | `ark_calendar_bilibili` | 官方 B 站动态的文字摘要和链接 |
-| `ark_calendar_operator_history` | 指定干员最近一次 UP 和累计 UP 次数，不包含进店历史 |
-| `ark_calendar_subscribe` | 添加活动或卡池订阅（需配置允许并二次确认） |
+| `ark_calendar_operator_history` | 指定干员最近一次 UP 和累计 UP 次数，搜索全部五星、六星记录，不包含进店历史 |
+| `ark_calendar_subscribe` | 添加活动或卡池订阅（需配置允许并二次确认）；只匹配尚未结束的项目 |
 | `ark_calendar_unsubscribe` | 取消活动或卡池订阅（需配置允许并二次确认） |
 
 ## 数据来源与裁剪
 
 工具通过 `CalendarService`、`SubscriptionManager` 和 `BilibiliDynamicManager` 读取运行时缓存，主要来源包括：
 
-- `cache/snapshot.json` 与 `last_known_good_snapshot.json`
+- `cache/last_known_good_snapshot.json`（运行时快照在内存中，落盘的是最近一次完整快照）
 - `cache/gacha_pools.json`、`recurrence_overview.json`、`event_detail_*.json`
 - `subscriptions/subscriptions.json`
 - `cache/bilibili_dynamic_state.json`
@@ -59,4 +59,4 @@ AI 上下文会附带快照时间、刷新质量和来源状态，并移除图�
 
 ## 边界
 
-订阅写操作默认关闭。开启“允许 AI 修改订阅”并勾选对应函数后，工具第一次调用只返回匹配项和确认预览，只有用户明确确认、且后续调用传入 `confirmed=true` 才会执行现有订阅方法。强制刷新等管理员操作仍不开放给 AI。
+订阅写操作默认关闭。开启“允许 AI 修改订阅”并勾选对应函数后，工具第一次调用只返回匹配项和确认预览，只有用户明确确认、且后续调用传入 `confirmed=true` 才会执行现有订阅方法。名称匹配规则与 `/方舟订阅`、`/方舟取消订阅` 相同：有完全一致的名称时只取精确项，否则按包含关系模糊匹配。强制刷新等管理员操作仍不开放给 AI。

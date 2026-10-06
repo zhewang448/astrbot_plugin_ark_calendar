@@ -66,11 +66,6 @@ def validate_rendered_image(rendered: str | Path | bytes, expected_type: str = "
         raise ValueError(f"渲染器未返回 {expected_type.upper()} 图片")
 
 
-def validate_rendered_png(rendered: str | Path | bytes) -> None:
-    """兼容旧调用方的 PNG 校验入口。"""
-    validate_rendered_image(rendered, "png")
-
-
 def write_image(rendered: str | Path | bytes, target: Path, expected_type: str = "png") -> None:
     validate_rendered_image(rendered, expected_type)
     if isinstance(rendered, bytes):
@@ -122,12 +117,20 @@ class CalendarImageCache:
             ]
         return payload
 
-    def lookup(self, snapshot: CalendarSnapshot, display_config: dict[str, Any], now: datetime | None = None) -> Path | None:
+    def lookup(
+        self,
+        snapshot: CalendarSnapshot,
+        display_config: dict[str, Any],
+        now: datetime | None = None,
+        *,
+        signature: str | None = None,
+    ) -> Path | None:
+        """signature 可由调用方预先算好传入，避免同一次请求里重复序列化整份快照。"""
         manifest = self._load_manifest()
         if not manifest:
             return None
         current = now or datetime.now(CN_TZ)
-        if manifest.get("signature") != self.signature(snapshot, display_config):
+        if manifest.get("signature") != (signature or self.signature(snapshot, display_config)):
             return None
         if not self._is_manifest_current(manifest, current):
             return None
@@ -163,8 +166,10 @@ class CalendarImageCache:
         display_config: dict[str, Any],
         max_age_minutes: int,
         keep_count: int,
+        *,
+        signature: str | None = None,
     ) -> Path:
-        signature = self.signature(snapshot, display_config)
+        signature = signature or self.signature(snapshot, display_config)
         image_type = str(display_config.get("render_image_type", "png") or "png").lower()
         _magic_for(image_type)
         extension = "jpg" if image_type == "jpeg" else "png"
@@ -272,10 +277,6 @@ class CalendarImageCache:
         except (FileNotFoundError, TypeError, ValueError):
             return None
         return image
-
-    @staticmethod
-    def _has_png_magic(path: Path) -> bool:
-        return has_png_magic(path)
 
     @staticmethod
     def _is_manifest_current(manifest: dict[str, Any], now: datetime) -> bool:

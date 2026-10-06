@@ -5,11 +5,10 @@
 
 from __future__ import annotations
 
-import asyncio
 import re
-from datetime import datetime, timedelta
 from typing import Any
 
+from .game_data import GameDataSource
 from .http import HttpClient
 
 
@@ -48,16 +47,10 @@ class RecruitmentSource:
     公招名单；同类开源计算器普遍维护的静态名单也以此为准。
     """
 
-    CHARACTER_TABLE_URL = "https://torappu.prts.wiki/gamedata/latest/excel/character_table.json"
-    GACHA_TABLE_URL = "https://torappu.prts.wiki/gamedata/latest/excel/gacha_table.json"
-
-    def __init__(self, http: HttpClient):
-        self.http = http
-        self._characters_cache: dict[str, dict[str, Any]] | None = None
-        self._gacha_table_cache: dict[str, Any] | None = None
-        self._characters_cache_expires_at: datetime | None = None
-        self._gacha_table_cache_expires_at: datetime | None = None
-        self.cache_ttl = timedelta(hours=24)
+    def __init__(self, http: HttpClient, game_data: GameDataSource | None = None):
+        # 角色表与 gacha_table 由 GameDataSource 统一获取并只缓存所需字段，
+        # 与卡池时间轴共用，避免同一份 8 MB 角色表被两处各自下载、整份常驻内存。
+        self.game_data = game_data or GameDataSource(http)
 
     async def get_recruitment_pool(self) -> dict[str, Any]:
         """获取公招池干员数据。
@@ -68,7 +61,7 @@ class RecruitmentSource:
                     {
                         "id": "char_xxx",
                         "name": "干员名",
-                        "rarity": 6,  # 2-7
+                        "rarity": 6,  # 1-6
                         "tags": ["标签1", "标签2"],
                     },
                     ...
@@ -76,13 +69,12 @@ class RecruitmentSource:
                 "tags": ["全部标签"],
             }
         """
-        chars_table, gacha_table = await asyncio.gather(
-            self._fetch_character_table(),
-            self._fetch_gacha_table(),
-        )
-        recruit_names = self._recruit_names(gacha_table.get("recruitDetail", ""))
-        if not chars_table or not recruit_names:
-            return {"characters": [], "tags": set()}
+        recruit_names = self._recruit_names(await self.game_data.recruit_detail())
+        if not recruit_names:
+            return {"characters": [], "tags": []}
+        chars_table, _ = await self.game_data.characters(required_names=recruit_names)
+        if not chars_table:
+            return {"characters": [], "tags": []}
 
         recruitment_chars = []
         all_tags = set()
@@ -126,36 +118,6 @@ class RecruitmentSource:
             "tags": sorted(all_tags),
         }
 
-    async def _fetch_character_table(self) -> dict[str, Any]:
-        """获取角色表，带缓存。"""
-        if self._characters_cache is not None and self._characters_cache_valid():
-            return self._characters_cache
-
-        try:
-            data = await self.http.json(self.CHARACTER_TABLE_URL)
-            if not isinstance(data, dict):
-                return {}
-            self._characters_cache = data
-            self._characters_cache_expires_at = datetime.now() + self.cache_ttl
-            return data
-        except Exception:
-            return {}
-
-    async def _fetch_gacha_table(self) -> dict[str, Any]:
-        """获取含当前公招白名单的抽卡表，带内存缓存。"""
-        if self._gacha_table_cache is not None and self._gacha_table_cache_valid():
-            return self._gacha_table_cache
-
-        try:
-            data = await self.http.json(self.GACHA_TABLE_URL)
-            if not isinstance(data, dict):
-                return {}
-            self._gacha_table_cache = data
-            self._gacha_table_cache_expires_at = datetime.now() + self.cache_ttl
-            return data
-        except Exception:
-            return {}
-
     @staticmethod
     def _recruit_names(recruit_detail: Any) -> set[str]:
         """从 gacha_table.recruitDetail 解析客户端展示的公招名单。"""
@@ -174,20 +136,5 @@ class RecruitmentSource:
         return names
 
     def clear_cache(self) -> None:
-        """清空缓存。"""
-        self._characters_cache = None
-        self._gacha_table_cache = None
-        self._characters_cache_expires_at = None
-        self._gacha_table_cache_expires_at = None
-
-    def _characters_cache_valid(self) -> bool:
-        return (
-            self._characters_cache_expires_at is not None
-            and datetime.now() < self._characters_cache_expires_at
-        )
-
-    def _gacha_table_cache_valid(self) -> bool:
-        return (
-            self._gacha_table_cache_expires_at is not None
-            and datetime.now() < self._gacha_table_cache_expires_at
-        )
+        """清空缓存：下次计算时重新获取角色表与公招名单。"""
+        self.game_data.invalidate()

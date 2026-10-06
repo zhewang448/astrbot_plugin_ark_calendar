@@ -3,13 +3,29 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, TypeVar
 from zoneinfo import ZoneInfo
 
 from .cache import JsonCache
 from .models import TimelineItem, parse_iso
 
 CN_TZ = ZoneInfo("Asia/Shanghai")
+
+T = TypeVar("T")
+
+
+def match_by_name(items: list[T], name: str, key: Callable[[T], str]) -> list[T]:
+    """按名称查找：有精确匹配（忽略大小写）只返回精确项，否则返回双向包含的模糊项。
+
+    订阅、取消订阅的指令与 AI 工具共用这一规则，避免同一输入在不同入口命中不同结果。
+    """
+    needle = name.strip().casefold()
+    if not needle:
+        return []
+    exact = [item for item in items if key(item).casefold() == needle]
+    if exact:
+        return exact
+    return [item for item in items if needle in key(item).casefold() or key(item).casefold() in needle]
 
 
 @dataclass(slots=True)
@@ -132,8 +148,8 @@ class SubscriptionManager:
         session_id: str | None = None,
     ) -> list[Subscription]:
         """获取用户的所有未过期订阅。"""
-        self.cleanup_expired()
         subs = self._load_all_subscriptions()
+        self._drop_expired(subs, datetime.now(CN_TZ))
         result = []
         for sub in subs.values():
             if sub.user_id == user_id:
@@ -161,9 +177,10 @@ class SubscriptionManager:
     def get_next_reminder_at(self, now: datetime | None = None) -> datetime | None:
         """返回下一次需要投递的时间；已到期记录会在这里被清理。"""
         current = (now or datetime.now(CN_TZ)).astimezone(CN_TZ)
-        self.cleanup_expired(current)
+        subs = self._load_all_subscriptions()
+        self._drop_expired(subs, current)
         candidates: list[datetime] = []
-        for sub in self._load_all_subscriptions().values():
+        for sub in subs.values():
             if sub.notified:
                 continue
             try:
@@ -178,15 +195,23 @@ class SubscriptionManager:
 
     def mark_notified(self, subscription: Subscription) -> None:
         """标记订阅已通知"""
+        self.mark_notified_many([subscription])
+
+    def mark_notified_many(self, subscriptions: list[Subscription]) -> None:
+        """批量标记已通知，一批提醒只重写一次订阅文件。"""
         subs = self._load_all_subscriptions()
-        key = self._subscription_key(
-            subscription.item_id,
-            subscription.user_id,
-            subscription.session_id,
-        )
-        if key in subs:
-            subs[key].notified = True
-            subs[key].retry_at = ""
+        changed = False
+        for subscription in subscriptions:
+            key = self._subscription_key(
+                subscription.item_id,
+                subscription.user_id,
+                subscription.session_id,
+            )
+            if key in subs:
+                subs[key].notified = True
+                subs[key].retry_at = ""
+                changed = True
+        if changed:
             self._save_all_subscriptions(subs)
 
     def defer_reminders(self, subscriptions: list[Subscription], retry_at: datetime) -> None:
@@ -203,7 +228,10 @@ class SubscriptionManager:
     def cleanup_expired(self, now: datetime | None = None) -> int:
         """清理已过结束时间的订阅，不读取活动快照。"""
         current = (now or datetime.now(CN_TZ)).astimezone(CN_TZ)
-        subs = self._load_all_subscriptions()
+        return self._drop_expired(self._load_all_subscriptions(), current)
+
+    def _drop_expired(self, subs: dict[str, Subscription], current: datetime) -> int:
+        """从已加载的订阅里删掉过期项并落盘，调用方可继续使用同一份字典。"""
         expired_keys: list[str] = []
         for key, sub in subs.items():
             try:
@@ -381,10 +409,18 @@ class OperatorWatchManager:
         return hits
 
     def mark_notified(self, watch: dict[str, Any], pool_id: str) -> None:
+        self.mark_notified_many([(watch, pool_id)])
+
+    def mark_notified_many(self, hits: list[tuple[dict[str, Any], str]]) -> None:
+        """批量记录已提醒的 (蹲池记录, 卡池 ID)，只重写一次文件。"""
         watches = self._load()
-        key = f"{watch['operator']}:{watch['user_id']}:{watch['session_id']}"
-        if key in watches and pool_id not in watches[key]["notified_pools"]:
-            watches[key]["notified_pools"].append(pool_id)
+        changed = False
+        for watch, pool_id in hits:
+            key = f"{watch['operator']}:{watch['user_id']}:{watch['session_id']}"
+            if key in watches and pool_id not in watches[key]["notified_pools"]:
+                watches[key]["notified_pools"].append(pool_id)
+                changed = True
+        if changed:
             self._save(watches)
 
     def _load(self) -> dict[str, dict[str, Any]]:

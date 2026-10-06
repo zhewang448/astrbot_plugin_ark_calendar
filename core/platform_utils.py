@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from typing import Any
+
+import astrbot.api.message_components as Comp
+from astrbot.api.event import MessageChain
 from astrbot.api.platform import MessageType
 
 # 发送侧确认会把 Comp.At 转成平台原生提醒的适配器类型（PlatformMetadata.name）。
@@ -73,3 +77,33 @@ def platform_supports_proactive_send(session_id: str, context) -> bool:
         return getattr(metadata, "name", "") != "qq_official"
     except Exception:
         return False
+
+
+async def send_proactive(context, session_id: str, components: list[Any], logger, label: str) -> bool:
+    """主动投递一条消息链；平台不支持、发送异常或平台拒收时记日志并返回 False。
+
+    `send_message()` 返回 False 表示 SID 对应的平台适配器没有接收，与异常一样视为失败，
+    由调用方决定重试或计入失败列表。
+    """
+    if not platform_supports_proactive_send(session_id, context):
+        logger.warning(f"{label}不支持主动投递至 {session_id}。")
+        return False
+    try:
+        dispatched = await context.send_message(session_id, MessageChain(components))
+    except Exception:
+        logger.error(f"{label}发送至 {session_id} 失败。", exc_info=True)
+        return False
+    if dispatched is False:
+        logger.warning(f"{label}未投递至 {session_id}：请确认该 SID 对应的平台适配器仍在运行。")
+        return False
+    return True
+
+
+def mention_parts(session_id: str, user_id: str, context) -> tuple[list[Any], str]:
+    """返回 (前置 At 组件, 正文前缀)。
+
+    白名单平台由 At 组件负责提醒，正文不再拼 @；其他群聊退化为纯文本 @，私聊不提醒。
+    """
+    if platform_supports_at(session_id, context):
+        return [Comp.At(qq=user_id, name=user_id)], ""
+    return [], f"@{user_id} " if is_group_session(session_id) else ""

@@ -6,6 +6,9 @@ import hashlib
 import io
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
+
+from .keyed_lock import KeyedLocks
 
 # 缩放逻辑版本；改动尺寸计算、编码参数时 +1，让磁盘上的旧缓存自然失效。
 SCALE_VERSION = 3
@@ -44,8 +47,7 @@ class ImageScaler:
         self.logger = logger
         self._memory: dict[str, str] = {}
         self._memory_order: list[str] = []
-        self._locks: dict[str, asyncio.Lock] = {}
-        self._locks_guard = asyncio.Lock()
+        self._locks = KeyedLocks()
         self._unavailable_logged = False
 
     async def data_uri(self, path: Path, box: tuple[int, int], *, quality: int | None = None, fit: str = "cover", force_webp: bool = False) -> str:
@@ -62,28 +64,23 @@ class ImageScaler:
         if cached is not None:
             return cached
 
-        lock = await self._retain_lock(key)
-        try:
-            async with lock:
-                # 等锁期间可能已由并发渲染建好。
-                cached = self._memory.get(key)
-                if cached is not None:
-                    return cached
-                try:
-                    payload = await asyncio.to_thread(
-                        self._load_or_build, key, path, width, height, quality, fit, force_webp
-                    )
-                except Exception as exc:
-                    self._log_unavailable_once(exc)
-                    return ""
-                if not payload:
-                    return ""
-                value = f"data:image/webp;base64,{base64.b64encode(payload).decode('ascii')}"
-                self._remember(key, value)
-                return value
-        finally:
-            # 锁已释放后再回收，否则 locked() 恒为真、字典只增不减。
-            await self._release_lock(key)
+        async with self._locks.hold(key):
+            # 等锁期间可能已由并发渲染建好。
+            cached = self._memory.get(key)
+            if cached is not None:
+                return cached
+            try:
+                payload = await asyncio.to_thread(
+                    self._load_or_build, key, path, width, height, quality, fit, force_webp
+                )
+            except Exception as exc:
+                self._log_unavailable_once(exc)
+                return ""
+            if not payload:
+                return ""
+            value = f"data:image/webp;base64,{base64.b64encode(payload).decode('ascii')}"
+            self._remember(key, value)
+            return value
 
     def _cache_key(self, path: Path, width: int, height: int, quality: int | None, fit: str, force_webp: bool) -> str | None:
         try:
@@ -111,7 +108,7 @@ class ImageScaler:
 
         try:
             self.cache_dir.mkdir(parents=True, exist_ok=True)
-            temporary = target.with_name(f".{target.name}.tmp")
+            temporary = target.with_name(f".{target.name}.{uuid4().hex}.tmp")
             temporary.write_bytes(payload)
             temporary.replace(target)
             self._prune_disk()
@@ -210,17 +207,3 @@ class ImageScaler:
         self.logger.warning(
             f"图片缩放不可用，已回退到内嵌原图（请求体会明显变大）：{exc}"
         )
-
-    async def _retain_lock(self, key: str) -> asyncio.Lock:
-        async with self._locks_guard:
-            lock = self._locks.get(key)
-            if lock is None:
-                lock = asyncio.Lock()
-                self._locks[key] = lock
-            return lock
-
-    async def _release_lock(self, key: str) -> None:
-        async with self._locks_guard:
-            lock = self._locks.get(key)
-            if lock is not None and not lock.locked():
-                self._locks.pop(key, None)

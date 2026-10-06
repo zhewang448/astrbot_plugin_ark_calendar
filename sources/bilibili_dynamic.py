@@ -38,9 +38,6 @@ class BilibiliDynamicSource:
         self.logger = getattr(asset_cache, "logger", None)
         self.last_fetch_ok = True
         self.last_error = ""
-        self.last_failed_instance = ""
-        self.last_success_at: datetime | None = None
-        self.consecutive_failures = 0
         self.rsshub_instances = self.DEFAULT_RSSHUB_INSTANCES.copy()
 
     def set_custom_rsshub_url(self, base_url: str) -> None:
@@ -121,15 +118,11 @@ class BilibiliDynamicSource:
         if feeds:
             self.last_fetch_ok = True
             self.last_error = ""
-            self.last_success_at = datetime.now(CN_TZ)
-            self.consecutive_failures = 0
             return feeds
 
         self.last_fetch_ok = False
-        self.consecutive_failures += 1
         if failures:
-            self.last_failed_instance, error = failures[-1]
-            self.last_error = str(error)
+            self.last_error = str(failures[-1][1])
         return []
 
     async def hydrate_images(self, dynamic: dict) -> dict:
@@ -219,30 +212,6 @@ class BilibiliDynamicSource:
         if images:
             return "image"
         return "text"
-
-    @staticmethod
-    def format_relative_time(pub_date: datetime | None) -> str:
-        """将发布时间格式化为相对时间（如"2小时前"）。"""
-        if not pub_date:
-            return "未知时间"
-
-        now = datetime.now(CN_TZ)
-        delta_seconds = (now - pub_date.astimezone(CN_TZ)).total_seconds()
-        if delta_seconds < 0:
-            return "刚刚"
-
-        if delta_seconds > 7 * 86400:
-            return pub_date.strftime("%Y-%m-%d")
-        elif delta_seconds >= 86400:
-            return f"{int(delta_seconds // 86400)}天前"
-        elif delta_seconds >= 3600:
-            hours = int(delta_seconds // 3600)
-            return f"{hours}小时前"
-        elif delta_seconds >= 60:
-            minutes = int(delta_seconds // 60)
-            return f"{minutes}分钟前"
-        else:
-            return "刚刚"
 
     def should_push(self, dynamic: dict, push_types: list[str]) -> bool:
         """判断该动态是否应该推送。
