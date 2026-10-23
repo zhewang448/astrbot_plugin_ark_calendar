@@ -8,9 +8,9 @@
   <a href="https://count.getloli.com/"><img src="https://count.getloli.com/get/@:astrbot_plugin_ark_calendar?theme=rule34" alt="访问统计"></a>
 </p>
 
-明日方舟信息聚合与查询插件。插件聚合 PRTS、anything-ics、Torappu 与 ArknightsGachaData，生成罗德岛风格的活动、寻访和作战图片，并提供订阅、生日、B站动态和公开招募工具。
+明日方舟信息聚合与查询插件。插件聚合 PRTS、anything-ics 与 Torappu，生成罗德岛风格的活动、寻访和作战图片，并提供订阅、生日、B站动态和公开招募工具。
 
-当前版本：`v1.3.0`
+当前版本：`v1.3.1`
 
 ## 文档导航
 
@@ -102,7 +102,7 @@ QQ 手机端可能会对较短的长图采用不同的预览缩放策略，导�
 - [PRTS Wiki](https://prts.wiki)：首页今日信息、活动详情、卡池表格、干员资料、未复刻历史与图片。
 - [anything-ics](https://github.com/SmallZombie/anything-ics)：活动时间与干员生日。
 - [Torappu / Arknights Asset Storage](https://torappu.prts.wiki/gamedata/latest/excel/gacha_table.json)：最新卡池开关时间、规则类型、卡池 ID 和公开招募名单；角色表用于 UP 干员名称与公招词条。
-- [ArknightsGachaData](https://github.com/s-yh-china/ArknightsGachaData)：补充正式名称、历史类型和 ID，并作为时间轴回退源。
+- [ArknightsGachaData](https://github.com/s-yh-china/ArknightsGachaData)（已失效）：曾用于补充正式名称、历史类型和 ID，并作为时间轴回退源。原仓库及数据地址已返回 404，默认停用；已保存的旧默认地址也会自动跳过。可配置兼容 `pool_info.json` 的镜像作为回退源。未配置镜像时，PRTS 提供的常驻标准寻访和中坚轮换期号会结合 Torappu 卡池类型显示为“常驻标准寻访-第196期”“中坚寻访-第76期”。
 - [PRTS Gacha Server Data](https://weedy.prts.wiki/)：补全卡池六星 UP 信息。
 - [astrbot_plugin_parser](https://github.com/Zhalslar/astrbot_plugin_parser)：为 B站视频动态提供可选的视频解析与下载能力。
 

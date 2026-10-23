@@ -144,7 +144,7 @@ class CalendarService:
             self.value(
                 "data_sources",
                 "gacha_data_url",
-                "https://raw.githubusercontent.com/s-yh-china/ArknightsGachaData/master/data/pool_info.json",
+                "",
                 "gacha_data_url",
             ),
             game_data=self.game_data,

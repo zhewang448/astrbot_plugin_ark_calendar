@@ -57,5 +57,5 @@ data/plugin_data/astrbot_plugin_ark_calendar/
 - [PRTS Wiki](https://prts.wiki)：首页今日信息、活动详情、卡池表格、干员资料与图片。
 - [anything-ics](https://github.com/SmallZombie/anything-ics)：活动时间与干员生日。
 - [Torappu / Arknights Asset Storage](https://torappu.prts.wiki/gamedata/latest/excel/gacha_table.json)：最新卡池开关时间、规则类型、卡池 ID 和公开招募名单；角色表用于 UP 干员名称与公招词条。
-- [ArknightsGachaData](https://github.com/s-yh-china/ArknightsGachaData)：卡池时间、类型和 ID。
+- 卡池元数据回退源（可选）：在 `data_sources.gacha_data_url` 填写兼容 ArknightsGachaData `pool_info.json` 的镜像，可补充正式名称并作为时间轴回退源；留空不请求。原 `s-yh-china/ArknightsGachaData` 仓库已返回 404，已保存的旧默认地址会自动停用。未配置镜像时，PRTS 提供的常驻标准寻访和中坚轮换数字期号会结合 Torappu 类型还原为“常驻标准寻访-第196期”“中坚寻访-第76期”；Torappu 失败仍会正常告警并尝试现有缓存回退。
 - [PRTS Gacha Server Data](https://weedy.prts.wiki/)：补全卡池六星 UP 信息。
