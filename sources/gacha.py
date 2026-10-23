@@ -13,10 +13,14 @@ CN_TZ = ZoneInfo("Asia/Shanghai")
 
 class GachaSource:
     SERVER_DATA_URL = "https://weedy.prts.wiki/gacha_table.json"
+    RETIRED_POOL_INFO_URL = "https://raw.githubusercontent.com/s-yh-china/ArknightsGachaData/master/data/pool_info.json"
 
-    def __init__(self, http: HttpClient, pool_info_url: str, game_data: GameDataSource | None = None):
+    def __init__(self, http: HttpClient, pool_info_url: str = "", game_data: GameDataSource | None = None):
         self.http = http
-        self.pool_info_url = pool_info_url
+        # 原仓库已不可访问；兼容升级前已保存的默认地址，自定义镜像仍按配置请求。
+        self.pool_info_url = (pool_info_url or "").strip()
+        if self.pool_info_url == self.RETIRED_POOL_INFO_URL:
+            self.pool_info_url = ""
         # torappu gacha_table 与角色表由 GameDataSource 统一获取，公招计算复用同一份数据。
         self.game_data = game_data or GameDataSource(http)
         self.last_source_states: list[dict] = []
@@ -28,60 +32,59 @@ class GachaSource:
             "PRTS Gacha Server Data",
             "明日方舟角色数据",
         )
-        results: list = list(await asyncio.gather(
-            self.game_data.gacha_table(),
-            self.http.json(self.pool_info_url),
-            self.http.json(self.SERVER_DATA_URL),
-            return_exceptions=True,
-        ))
+        requests = {labels[0]: self.game_data.gacha_table()}
+        if self.pool_info_url:
+            requests[labels[1]] = self.http.json(self.pool_info_url)
+        requests[labels[2]] = self.http.json(self.SERVER_DATA_URL)
+        results = dict(zip(requests, await asyncio.gather(*requests.values(), return_exceptions=True)))
         # 角色表只用于把 UP 名单里的 charId 换成名字；缓存已覆盖这些 charId 时不回源。
-        server_value = results[2]
+        server_value = results[labels[2]]
         required_ids = self._up_char_ids(server_value) if self._valid_server_data(server_value) else set()
         characters, character_error = await self.game_data.characters(required_ids, minimum=100)
-        results.append(character_error if character_error is not None and not characters else characters)
-        validators = (
-            self._valid_torappu_data,
-            self._valid_pool_info,
-            self._valid_server_data,
-            self._valid_character_table,
-        )
-        normalized: list[dict] = []
+        results[labels[3]] = character_error if character_error is not None and not characters else characters
+        validators = dict(zip(labels, (
+            self._valid_torappu_data, self._valid_pool_info,
+            self._valid_server_data, self._valid_character_table,
+        )))
+        normalized: dict[str, dict] = {}
+        states: dict[str, dict] = {}
         self.last_source_states = []
-        for label, value, validator in zip(labels, results, validators):
+        for label, value in results.items():
             error: Exception | None = value if isinstance(value, Exception) else None
-            if error is None and not validator(value):
+            if error is None and not validators[label](value):
                 error = ValueError(f"{label} 返回的数据结构异常")
             if error is not None:
-                normalized.append({})
-                self.last_source_states.append({
+                normalized[label] = {}
+                states[label] = {
                     "name": label,
                     "ok": False,
                     "message": str(error),
                     "event_key": self._event_key(label, error),
                     "status": "failed",
-                })
+                }
             else:
-                normalized.append(value)
-                self.last_source_states.append({
+                normalized[label] = value
+                states[label] = {
                     "name": label,
                     "ok": True,
                     "message": "",
                     "event_key": "",
                     "status": "fresh",
-                })
+                }
 
-        torappu_data, pool_info, server_data, character_table = normalized
-        if not self.last_source_states[0]["ok"] and not self.last_source_states[1]["ok"]:
-            original = results[0] if isinstance(results[0], Exception) else results[1]
+        self.last_source_states = list(states.values())
+        torappu_data, pool_info, server_data, character_table = (normalized.get(label, {}) for label in labels)
+        if not states[labels[0]]["ok"] and not pool_info:
+            original = results[labels[0]]
             if isinstance(original, Exception):
                 raise original
-            raise ValueError("Torappu 与 ArknightsGachaData 均返回了异常数据")
-        if not self.last_source_states[0]["ok"] and self.last_source_states[1]["ok"]:
-            self.last_source_states[0]["status"] = "fallback"
-            self.last_source_states[0]["message"] = "实时数据不可用，已回退到 ArknightsGachaData 时间轴"
-        if character_error is not None and self.last_source_states[3]["ok"]:
+            raise ValueError("卡池时间轴不可用：Torappu 数据异常，且无可用的卡池元数据回退源")
+        if not states[labels[0]]["ok"] and pool_info:
+            states[labels[0]]["status"] = "fallback"
+            states[labels[0]]["message"] = "实时数据不可用，已回退到 ArknightsGachaData 时间轴"
+        if character_error is not None and states[labels[3]]["ok"]:
             # 回源失败但本地角色摘要仍可用：名字可能缺最新干员，按降级处理。
-            self.last_source_states[3].update({
+            states[labels[3]].update({
                 "ok": False,
                 "status": "fallback",
                 "message": f"实时更新失败，已使用本地角色缓存：{character_error}",
@@ -101,7 +104,7 @@ class GachaSource:
                 for item in pool_info.get("pool", {}).values()
                 if isinstance(item, dict) and item.get("id")
             }
-        if self.last_source_states[0]["ok"] and isinstance(torappu_data, dict):
+        if states[labels[0]]["ok"] and isinstance(torappu_data, dict):
             base_pools = torappu_data.get("gachaPoolClient", [])
         else:
             base_pools = list(legacy_map.values())
@@ -134,6 +137,16 @@ class GachaSource:
             # PRTS 的卡池一览名称有时会被压缩成“甄选14”“联合行动23”等短名，
             # 因此只有在正式名称缺失或属于占位值时，才用 PRTS 名称补齐。
             display_name = legacy.get("name") or raw_pool.get("gachaPoolName", "")
+            # PRTS 对常驻标准池和中坚轮换池使用纯数字期号；配合卡池类型还原可读名称。
+            if self._is_placeholder_name(display_name) and match:
+                overview_name = match.get("name", "").strip()
+                if overview_name.isdigit():
+                    if pool_type == "DOUBLE":
+                        display_name = f"常驻标准寻访-第{overview_name}期"
+                    elif pool_type in {"CLASSIC", "CLASSIC_DOUBLE"}:
+                        display_name = f"中坚寻访-第{overview_name}期"
+                    elif pool_type == "FESCLASSIC":
+                        display_name = f"中坚甄选-第{overview_name}期"
             if (
                 self._is_placeholder_name(display_name)
                 and match

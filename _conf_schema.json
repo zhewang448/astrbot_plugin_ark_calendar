@@ -865,10 +865,10 @@
         "obvious_hint": true
       },
       "gacha_data_url": {
-        "description": "ArknightsGachaData 卡池元数据回退地址",
+        "description": "卡池元数据回退地址（可选）",
         "type": "string",
-        "default": "https://raw.githubusercontent.com/s-yh-china/ArknightsGachaData/master/data/pool_info.json",
-        "hint": "Torappu 解包数据负责最新卡池时间轴；此地址用于补充旧卡池名称、类型和 ID，并在 Torappu 不可用时回退。非必要不要修改。",
+        "default": "",
+        "hint": "留空则仅使用 Torappu 时间轴与 PRTS 名称、UP 信息。可填写兼容 ArknightsGachaData pool_info.json 的镜像，用于补充正式名称并在 Torappu 不可用时回退。原 s-yh-china 仓库地址已失效，旧配置中的该地址会自动停用。",
         "obvious_hint": true
       }
     },
