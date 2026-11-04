@@ -1,7 +1,11 @@
 import asyncio
+from datetime import datetime, timedelta
+import json
 import sys
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
+
+import pytest
 
 
 def _install_astrbot_stubs() -> None:
@@ -366,9 +370,9 @@ def test_auto_push_retries_only_failed_target(monkeypatch):
     monkeypatch.setattr(bilibili_manager, "platform_supports_proactive_send", lambda *_: True)
 
     assert asyncio.run(manager.check_and_push()) == (1, 1)
-    assert source.state["dynamics"]["partial"] == {
-        "targets": {"p:Group:1": True, "p:Group:2": False}
-    }
+    partial = source.state["dynamics"]["partial"]
+    assert partial["targets"] == {"p:Group:1": True, "p:Group:2": False}
+    assert datetime.fromisoformat(partial["first_seen_at"]).tzinfo is not None
     assert asyncio.run(manager.check_and_push()) == (1, 0)
     assert sent == ["p:Group:1", "p:Group:2", "p:Group:2"]
     assert source.state["dynamics"]["partial"] == {
@@ -574,7 +578,173 @@ def test_first_seen_old_dynamic_is_treated_as_history(monkeypatch):
 
     asyncio.run(manager.check_and_push())
     assert source.state["dynamics"]["old"] == {"state": "ignored"}
-    assert source.state["dynamics"]["new"] == {"targets": {"p:Group:1": False}}
+    assert source.state["dynamics"]["new"]["targets"] == {"p:Group:1": False}
+
+
+@pytest.fixture
+def push_clock(monkeypatch):
+    class Clock(datetime):
+        current = datetime(2026, 11, 3, 8, tzinfo=bilibili_manager.CN_TZ)
+
+        @classmethod
+        def now(cls, tz=None):
+            return cls.fromisoformat(cls.current.astimezone(tz or bilibili_manager.CN_TZ).isoformat())
+
+    async def no_sleep(_seconds):
+        pass
+
+    monkeypatch.setattr(bilibili_manager, "datetime", Clock)
+    monkeypatch.setattr(bilibili_manager, "platform_supports_proactive_send", lambda *_: True)
+    monkeypatch.setattr(bilibili_manager.asyncio, "sleep", no_sleep)
+    return Clock
+
+
+@pytest.mark.parametrize("with_pub_date", [True, False])
+@pytest.mark.parametrize("reload_manager", [True, False])
+def test_day_long_outage_drops_pending_but_delivers_fresh_dynamic(push_clock, with_pub_date, reload_manager):
+    sent = []
+    connected = False
+
+    class Context:
+        async def send_message(self, _sid, chain):
+            if not connected:
+                return False
+            sent.append(chain[0].text)
+            return True
+
+    old = {"id": "old", "dynamic_type": "text", "title": "outage old"}
+    if with_pub_date:
+        old["pub_date"] = push_clock.now(bilibili_manager.CN_TZ)
+    source = FakeSource([old])
+    config = {"bilibili_dynamic": {"push_enabled": True, "target_sid_list": ["p:Group:1"]}}
+    manager = bilibili_manager.BilibiliDynamicManager(source, Context(), config)
+    assert asyncio.run(manager.check_and_push()) == (0, 1)
+    first_seen_at = source.state["dynamics"]["old"]["first_seen_at"]
+
+    # 模拟状态写盘/重读，以及只重连适配器和同时重载插件这两种恢复方式。
+    source.state = json.loads(json.dumps(source.state))
+    push_clock.current += timedelta(days=1)
+    if reload_manager:
+        manager = bilibili_manager.BilibiliDynamicManager(source, Context(), config, require_baseline=True)
+        assert asyncio.run(manager.initialize_state()) is True
+    else:
+        assert source.state["dynamics"]["old"]["first_seen_at"] == first_seen_at
+    source.dynamics = [{
+        "id": "fresh", "dynamic_type": "text", "title": "fresh dynamic",
+        "pub_date": push_clock.now(bilibili_manager.CN_TZ),
+    }, old]
+    connected = True
+
+    assert asyncio.run(manager.check_and_push()) == (1, 0)
+    assert len(sent) == 1 and "fresh dynamic" in sent[0]
+    assert source.state["dynamics"]["old"] == {"state": "ignored"}
+    assert asyncio.run(manager.check_and_push()) == (0, 0)
+
+
+@pytest.mark.parametrize("first_seen_at", [None, "invalid timestamp"])
+def test_legacy_pending_without_valid_dates_is_discarded(push_clock, first_seen_at):
+    record = {"targets": {"p:Group:1": False}}
+    if first_seen_at is not None:
+        record["first_seen_at"] = first_seen_at
+    source = FakeSource([{"id": "legacy", "dynamic_type": "text"}], {
+        "baseline_established": True, "push_enabled": True, "dynamics": {"legacy": record},
+    })
+    manager = bilibili_manager.BilibiliDynamicManager(source, SimpleNamespace(), {
+        "bilibili_dynamic": {"push_enabled": True, "target_sid_list": ["p:Group:1"]},
+    })
+
+    assert asyncio.run(manager.check_and_push()) == (0, 0)
+    assert source.state["dynamics"]["legacy"] == {"state": "ignored"}
+
+
+def test_reload_does_not_queue_first_seen_stale_dynamic(push_clock):
+    source = FakeSource([{
+        "id": "delayed-feed", "dynamic_type": "text",
+        "pub_date": push_clock.now(bilibili_manager.CN_TZ) - timedelta(hours=6),
+    }], {"baseline_established": True, "push_enabled": True, "dynamics": {}})
+    manager = bilibili_manager.BilibiliDynamicManager(source, SimpleNamespace(), {
+        "bilibili_dynamic": {"push_enabled": True, "target_sid_list": ["p:Group:1"]},
+    }, require_baseline=True)
+
+    assert asyncio.run(manager.initialize_state()) is True
+    assert source.state["dynamics"]["delayed-feed"] == {"state": "ignored"}
+    assert asyncio.run(manager.check_and_push()) == (0, 0)
+
+
+def test_pending_retry_at_configured_expiry_is_discarded(push_clock):
+    class Context:
+        async def send_message(self, _sid, _chain):
+            return False
+
+    source = FakeSource([{
+        "id": "expiry", "dynamic_type": "text",
+        "pub_date": push_clock.now(bilibili_manager.CN_TZ),
+    }])
+    manager = bilibili_manager.BilibiliDynamicManager(source, Context(), {
+        "bilibili_dynamic": {
+            "push_enabled": True, "target_sid_list": ["p:Group:1"], "max_push_age_minutes": 15,
+        },
+    })
+    assert asyncio.run(manager.check_and_push()) == (0, 1)
+    push_clock.current += timedelta(minutes=14)
+    assert asyncio.run(manager.check_and_push()) == (0, 1)
+    push_clock.current += timedelta(minutes=1)
+    assert asyncio.run(manager.check_and_push()) == (0, 0)
+    assert source.state["dynamics"]["expiry"] == {"state": "ignored"}
+
+
+def test_reload_retains_retry_window_and_only_retries_failed_targets(push_clock):
+    sent = []
+    recovered = False
+
+    class Context:
+        async def send_message(self, sid, _chain):
+            if sid == "p:Group:2" and not recovered:
+                raise ConnectionError("fixture: adapter offline")
+            sent.append(sid)
+            return True
+
+    source = FakeSource([{"id": "partial-retry", "dynamic_type": "text"}])
+    config = {"bilibili_dynamic": {"push_enabled": True, "target_sid_list": ["p:Group:1", "p:Group:2"]}}
+    manager = bilibili_manager.BilibiliDynamicManager(source, Context(), config)
+    assert asyncio.run(manager.check_and_push()) == (1, 1)
+    first_seen_at = source.state["dynamics"]["partial-retry"]["first_seen_at"]
+    source.state = json.loads(json.dumps(source.state))
+    push_clock.current += timedelta(minutes=15)
+    manager = bilibili_manager.BilibiliDynamicManager(source, Context(), config, require_baseline=True)
+    assert asyncio.run(manager.initialize_state()) is True
+    assert source.state["dynamics"]["partial-retry"]["first_seen_at"] == first_seen_at
+    recovered = True
+
+    assert asyncio.run(manager.check_and_push()) == (1, 0)
+    assert sent == ["p:Group:1", "p:Group:2"]
+    assert asyncio.run(manager.check_and_push()) == (0, 0)
+
+
+def test_dynamic_expiring_during_render_is_not_sent(push_clock):
+    sent = []
+
+    class Context:
+        async def send_message(self, sid, _chain):
+            sent.append(sid)
+            return True
+
+    source = FakeSource([{
+        "id": "slow-render", "dynamic_type": "text",
+        "pub_date": push_clock.now(bilibili_manager.CN_TZ) - timedelta(minutes=55),
+    }])
+    manager = bilibili_manager.BilibiliDynamicManager(source, Context(), {
+        "bilibili_dynamic": {"push_enabled": True, "target_sid_list": ["p:Group:1"]},
+    })
+
+    async def render(_dynamic):
+        push_clock.current += timedelta(minutes=10)
+        return None
+
+    manager._render_dynamic = render
+    assert asyncio.run(manager.check_and_push()) == (0, 0)
+    assert sent == []
+    assert source.state["dynamics"]["slow-render"] == {"state": "ignored"}
 
 
 def test_auto_push_renders_each_dynamic_once_for_all_targets(tmp_path: Path, monkeypatch):
@@ -651,3 +821,36 @@ def test_send_proactive_treats_rejection_and_exception_as_failure():
     assert asyncio.run(send_proactive(Context(RuntimeError("boom")), "p:Group:1", [], logger, "测试")) is False
     assert asyncio.run(send_proactive(Context(None), "invalid", [], logger, "测试")) is False
     assert len(logs) == 3
+
+
+def test_banner_capture_runs_for_baseline_and_already_seen_dynamics():
+    observed = []
+    source = FakeSource([{"id": "history", "dynamic_type": "image"}])
+
+    async def capture(dynamics):
+        observed.append([dynamic["id"] for dynamic in dynamics])
+
+    manager = bilibili_manager.BilibiliDynamicManager(
+        source, SimpleNamespace(), {"bilibili_dynamic": {}},
+        require_baseline=True, banner_callback=capture,
+    )
+    assert asyncio.run(manager.initialize_state()) is True
+    assert asyncio.run(manager.check_and_push()) == (0, 0)
+    assert observed == [["history"], ["history"]]
+
+
+def test_banner_cache_failure_does_not_block_push(monkeypatch):
+    class Context:
+        async def send_message(self, _sid, _chain):
+            return True
+
+    async def capture(_dynamics):
+        raise OSError("fixture: cache unavailable")
+
+    manager = bilibili_manager.BilibiliDynamicManager(
+        FakeSource([{"id": "new", "dynamic_type": "text"}]), Context(),
+        {"bilibili_dynamic": {"push_enabled": True, "target_sid_list": ["p:Group:1"]}},
+        banner_callback=capture,
+    )
+    monkeypatch.setattr(bilibili_manager, "platform_supports_proactive_send", lambda *_: True)
+    assert asyncio.run(manager.check_and_push()) == (1, 0)

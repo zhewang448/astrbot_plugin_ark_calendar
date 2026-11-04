@@ -75,10 +75,14 @@ def test_bilibili_config_order_and_video_delivery_description():
     ]
     items = schema["bilibili_dynamic"]["items"]
     assert list(items) == [
-        "push_enabled", "target_sid_list", "check_interval_minutes", "push_types",
+        "push_enabled", "target_sid_list", "check_interval_minutes", "max_push_age_minutes", "cache_gacha_banner", "push_types",
         "send_video_via_parser", "render_image_count_threshold", "use_forward_on_qq",
         "list_default_count", "rsshub_base_url",
     ]
+    assert items["max_push_age_minutes"]["type"] == "int"
+    assert items["max_push_age_minutes"]["default"] == 60
+    assert items["cache_gacha_banner"]["type"] == "bool"
+    assert items["cache_gacha_banner"]["default"] is False
     assert "转发动态优先按转发分类" in items["push_types"]["hint"]
     video_item = items["send_video_via_parser"]
     assert video_item["type"] == "bool"

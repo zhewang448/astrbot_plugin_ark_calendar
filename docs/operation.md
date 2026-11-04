@@ -43,14 +43,19 @@ data/plugin_data/astrbot_plugin_ark_calendar/
 |---|---|
 | `cache/last_known_good_snapshot.json` | 最近一次完整快照，数据源刷新失败时用于回退。 |
 | `cache/character_summary.json` | 角色摘要（名称、星级、职业、位置、词缀），卡池时间轴与公招计算共用，24 小时后或出现未收录干员时重新获取。 |
+| `cache/bilibili_dynamic_state.json` | B站动态历史基线、各目标投递状态和待发动态的首次发现时间；重连或重载时据此去重并限制失败重试的有效期。 |
+| `cache/bilibili_gacha_banners.json` | 启用卡池公告图补全后保存的公告来源、寻访类型、起止时间与裁剪参数。 |
 | `cache/*.json` 其余文件 | 各数据源的原始数据缓存，实时请求失败时兜底。 |
 | `render/` | 最终日报图、帮助图和字体子集缓存。 |
 | `assets/` | 网络图片及其缩放结果。 |
+| `bilibili_gacha_banners/` | 裁剪后的官方卡池公告图，最多保留 32 条记录；后续轮询会清理已结束卡池的记录和图片。 |
 | `subscriptions/` | 活动订阅与干员蹲池记录。 |
 
 从 v1.2.2 及更早版本升级后，`cache/snapshot.json` 与 `cache/snapshot-degraded.json` 不再写入，可手动删除。
 
 数据源请求启用 gzip/deflate 压缩传输；单个响应上限 32 MB 按解压后的大小计算。
+
+B站卡池公告图补全默认关闭，需要同时启用 B站定时推送并配置目标 SID。图片只用于补全已有卡池日程；正文缺少完整起止时间、包含多组时间或无法匹配对应卡池的公告会跳过。原数据源图片可用时优先使用原图，具体开关和裁剪规则见[配置与定时任务](configuration.md#b站动态推送)。
 
 ## 数据来源
 
