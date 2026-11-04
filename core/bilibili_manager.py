@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -21,8 +22,6 @@ if TYPE_CHECKING:
     from ..sources.bilibili_dynamic import BilibiliDynamicSource
 
 CN_TZ = ZoneInfo("Asia/Shanghai")
-# 首次见到时发布已超过该时长的动态不再推送。
-STALE_DYNAMIC_AGE = timedelta(hours=24)
 # 推送循环里"尚未渲染"的哨兵；渲染失败的结果是 None，同样需要被复用。
 _NOT_RENDERED = object()
 
@@ -44,6 +43,7 @@ class BilibiliDynamicManager:
         renderer: Any | None = None,
         require_baseline: bool = False,
         notification_manager: Any | None = None,
+        banner_callback: Callable[[list[dict]], Awaitable[None]] | None = None,
     ) -> None:
         """初始化管理器。
 
@@ -57,6 +57,7 @@ class BilibiliDynamicManager:
         self.config = config
         self.renderer = renderer
         self.notification_manager = notification_manager
+        self.banner_callback = banner_callback
         self._push_lock = asyncio.Lock()
         self._baseline_ready = not require_baseline
 
@@ -84,6 +85,8 @@ class BilibiliDynamicManager:
                 logger.warning("B站动态基线未建立：本次未取到任何动态，将在下次重载时重试。")
                 return False
 
+            await self._cache_gacha_banners(dynamics)
+
             queue_new_dynamics = baseline_established and previous_push_enabled and push_enabled
             push_types = self._push_types()
             # 早期 v0.9.1 曾把重载期间的新动态记为 pushed=False、但未冻结目标；
@@ -97,6 +100,9 @@ class BilibiliDynamicManager:
                     )
             for dyn in dynamics:
                 dyn_id = str(dyn["id"])
+                if self._is_stale_dynamic(dyn, records.get(dyn_id)):
+                    records[dyn_id] = {"state": "ignored"}
+                    continue
                 if dyn_id in records:
                     continue
                 records[dyn_id] = self._new_record(
@@ -135,6 +141,14 @@ class BilibiliDynamicManager:
         """获取列表默认显示条数。"""
         return config_int(self.config, "bilibili_dynamic", "list_default_count", 5, minimum=1, maximum=20)
 
+    async def _cache_gacha_banners(self, dynamics: list[dict]) -> None:
+        if self.banner_callback is None:
+            return
+        try:
+            await self.banner_callback(dynamics)
+        except Exception:
+            logger.warning("B站卡池公告图缓存失败，不影响动态推送。", exc_info=True)
+
     def _push_targets(self) -> list[str]:
         """获取推送目标SID列表。"""
         raw = self.config.get("bilibili_dynamic", {}).get("target_sid_list", [])
@@ -147,6 +161,13 @@ class BilibiliDynamicManager:
     def _render_image_count_threshold(self) -> int:
         """图片数不超过此值时，将文字与全部图片绘制进一张终端图。"""
         return config_int(self.config, "bilibili_dynamic", "render_image_count_threshold", 1, minimum=0, maximum=9)
+
+    def _max_push_age(self) -> timedelta:
+        """自动推送和失败重试共用的有效期。"""
+        minutes = config_int(
+            self.config, "bilibili_dynamic", "max_push_age_minutes", 60, minimum=1, maximum=1440,
+        )
+        return timedelta(minutes=minutes)
 
     def _push_types(self) -> list[str]:
         """获取允许自动推送的动态类型。空列表表示不做类型过滤。"""
@@ -182,6 +203,8 @@ class BilibiliDynamicManager:
                     if str(sid).strip()
                 }
                 records[str(dyn_id)] = {"targets": targets} if targets else {"state": "ignored"}
+                if targets and isinstance(raw_record.get("first_seen_at"), str):
+                    records[str(dyn_id)]["first_seen_at"] = raw_record["first_seen_at"]
                 continue
 
             # 兼容 v0.9.1 早期的 delivered_to / eligible_targets 状态，并在本次保存时删除冗余字段。
@@ -212,22 +235,32 @@ class BilibiliDynamicManager:
         push_types: list[str],
     ) -> dict[str, Any]:
         """为首次检测到的动态冻结状态和可投递目标。"""
-        if not queue_new_dynamics or not targets:
+        if not queue_new_dynamics or not targets or self._is_stale_dynamic(dynamic):
             return {"state": "ignored"}
         if not self.source.should_push(dynamic, push_types):
             return {"state": "suppressed"}
-        return {"targets": {sid: False for sid in targets}}
+        return {
+            "targets": {sid: False for sid in targets},
+            "first_seen_at": datetime.now(CN_TZ).isoformat(),
+        }
 
-    @staticmethod
-    def _is_stale_dynamic(dynamic: dict[str, Any]) -> bool:
-        """首次见到但发布已久的动态（镜像回灌、状态裁剪后重现）视为历史。"""
+    def _is_stale_dynamic(self, dynamic: dict[str, Any], record: dict[str, Any] | None = None) -> bool:
+        """首次发现、失败重试和实际发送都检查时效，缺少发布日期时使用首次发现时间。"""
+        timestamps: list[datetime] = []
         pub_date = dynamic.get("pub_date")
-        if not isinstance(pub_date, datetime):
-            return False
-        if pub_date.tzinfo is None:
-            pub_date = pub_date.replace(tzinfo=CN_TZ)
-        # ponytail: 固定 24 小时窗口；插件停机超过一天时，停机期间的动态也不会补推。
-        return datetime.now(CN_TZ) - pub_date > STALE_DYNAMIC_AGE
+        if isinstance(pub_date, datetime):
+            timestamps.append(pub_date)
+        if record:
+            try:
+                timestamps.append(datetime.fromisoformat(record.get("first_seen_at", "")))
+            except (TypeError, ValueError):
+                pass
+        if not timestamps:
+            # 旧待发记录没有任何时间依据，升级时保守丢弃，避免重新获得完整重试窗口。
+            targets = record.get("targets") if record else None
+            return isinstance(targets, dict) and any(not sent for sent in targets.values())
+        timestamps = [stamp.replace(tzinfo=CN_TZ) if stamp.tzinfo is None else stamp for stamp in timestamps]
+        return datetime.now(CN_TZ) - min(timestamps) >= self._max_push_age()
 
     @staticmethod
     def _remove_unsubscribed_targets(records: dict[str, dict[str, Any]], targets: list[str]) -> None:
@@ -293,6 +326,7 @@ class BilibiliDynamicManager:
             try:
                 # 先获取元数据，过滤后再下载真正需要投递的图片。
                 dynamics = await self.source.recent_dynamics(limit=20, download_images=False)
+                await self._cache_gacha_banners(dynamics)
                 state = self.source.load_state()
                 records = self._normalized_records(state)
                 targets = self._push_targets()
@@ -302,12 +336,11 @@ class BilibiliDynamicManager:
                 for dynamic in dynamics:
                     dyn_id = str(dynamic["id"])
                     record = records.get(dyn_id)
+                    if self._is_stale_dynamic(dynamic, record):
+                        records[dyn_id] = {"state": "ignored"}
+                        continue
                     if record is None:
-                        record = (
-                            {"state": "ignored"}
-                            if self._is_stale_dynamic(dynamic)
-                            else self._new_record(dynamic, targets, push_enabled, push_types)
-                        )
+                        record = self._new_record(dynamic, targets, push_enabled, push_types)
                         records[dyn_id] = record
                     pending_targets = record.get("targets")
                     if isinstance(pending_targets, dict) and any(not sent for sent in pending_targets.values()):
@@ -353,6 +386,11 @@ class BilibiliDynamicManager:
                         try:
                             if rendered is _NOT_RENDERED:
                                 rendered = await self._render_dynamic(dynamic)
+                            # 下载、解析、渲染和其他目标的发送均可能耗时；交给适配器前再检查。
+                            if self._is_stale_dynamic(dynamic, record):
+                                records[dyn_id] = {"state": "ignored"}
+                                logger.info(f"B站动态已过期，停止剩余投递：动态={dyn_id}")
+                                break
                             components = self._message_components(dynamic, rendered)
                             dispatched = await self.context.send_message(sid, MessageChain(components))
                             if dispatched is False:
@@ -370,6 +408,8 @@ class BilibiliDynamicManager:
                             logger.error(f"B站动态推送失败：动态={dyn_id}，目标={sid}", exc_info=True)
                             failed_count += 1
 
+                    if pending_targets and all(pending_targets.values()):
+                        record.pop("first_seen_at", None)
                     if video_failures:
                         await self._notify_video_send_failed(dynamic, video_failures)
                     self.source.save_state(state)

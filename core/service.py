@@ -14,6 +14,7 @@ from zoneinfo import ZoneInfo
 import aiohttp
 
 from .assets import AssetCache
+from .bilibili_gacha_banner import BilibiliGachaBannerCache
 from .cache import JsonCache
 from .config import config_int, config_report_sections, config_value
 from .recruitment_calculator import DEFAULT_RECRUIT_MAX_TAGS
@@ -88,6 +89,7 @@ class CalendarService:
         self.logger = logger
         self.plugin_version = self._read_plugin_version()
         self.cache = JsonCache(data_dir / "cache")
+        self.bilibili_banners = BilibiliGachaBannerCache(data_dir / "bilibili_gacha_banners", self.cache, config, logger)
         self.session: aiohttp.ClientSession | None = None
         self.http: HttpClient | None = None
         self.assets: AssetCache | None = None
@@ -279,6 +281,7 @@ class CalendarService:
             "include_long_term": "long_term" in sections,
             "pool_detail_cards": "pool_details" in sections,
             "show_unpublished_pools": self.show_unpublished_pools(),
+            "bilibili_gacha_banners": self.bilibili_banners.signature() if getattr(self, "bilibili_banners", None) else "",
             "anything_ics_base_url": str(self.value("data_sources", "anything_ics_base_url", "", "anything_ics_base_url") or ""),
             "prts_base_url": str(self.value("data_sources", "prts_base_url", "", "prts_base_url") or ""),
             "gacha_data_url": str(self.value("data_sources", "gacha_data_url", "", "gacha_data_url") or ""),
@@ -959,19 +962,36 @@ class CalendarService:
                     return pools, states
             raise
 
+    async def cache_bilibili_gacha_banners(self, dynamics: list[dict]) -> None:
+        if self.assets:
+            count = await self.bilibili_banners.capture(dynamics, self.assets)
+            if count:
+                self.logger.info(f"已缓存 {count} 张 B站卡池公告图，下一次日报将使用更新后的图片。")
+
+    async def _gacha_image(self, pool: dict, box: tuple[int, int], **options) -> str:
+        assert self.assets
+        image = await self.assets.data_uri(pool.get("image", ""), box=box, **options)
+        if image:
+            return image
+        banners = getattr(self, "bilibili_banners", None)
+        path = banners.for_pool(pool) if banners else None
+        if path:
+            return await self.assets.data_uri_local(path, box=box, trusted_roots=(banners.root,), **options)
+        return ""
+
     async def _build_gacha_items(self, pools_raw: list[dict]) -> list[TimelineItem]:
         assert self.prts and self.gacha and self.assets
         previous = {item.id: item for item in self.last_snapshot.gacha_pools} if self.last_snapshot else {}
         primary_images = await asyncio.gather(
             *(
-                self.assets.data_uri(pool.get("image", ""), box=TIMELINE_IMAGE_BOX)
+                self._gacha_image(pool, TIMELINE_IMAGE_BOX)
                 for pool in pools_raw
             ),
         )
         detail_images = []
         if "pool_details" in self.report_sections():
             detail_images = await asyncio.gather(
-                *(self.assets.data_uri(pool.get("image", ""), box=POOL_DETAIL_IMAGE_BOX, quality=100, fit="contain", force_webp=True) for pool in pools_raw),
+                *(self._gacha_image(pool, POOL_DETAIL_IMAGE_BOX, quality=100, fit="contain", force_webp=True) for pool in pools_raw),
             )
         else:
             detail_images = [""] * len(pools_raw)
