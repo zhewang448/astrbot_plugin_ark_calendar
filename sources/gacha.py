@@ -154,6 +154,12 @@ class GachaSource:
                 and not self._is_placeholder_name(match.get("name"))
             ):
                 display_name = match["name"]
+            # 自选六星寻访的客户端名称仍可能是占位文案；已有可选名单时应正常展示。
+            if self._is_placeholder_name(display_name) and pool_type == "GACHAWITHSPECIFIED6":
+                meta = raw_pool.get("dynMeta")
+                choices = meta.get("charIdList") if isinstance(meta, dict) else None
+                if isinstance(choices, list) and choices:
+                    display_name = f"{self.label(pool_type)}（{len(choices)}选1）"
             unpublished = self._is_placeholder_name(display_name)
             if unpublished:
                 display_name = "未知卡池"
@@ -317,6 +323,7 @@ class GachaSource:
             "DOUBLE": "标准寻访", "CLASSIC_DOUBLE": "中坚寻访",
             "CLASSIC": "中坚寻访", "FESCLASSIC": "中坚甄选", "BACKFLOW": "归航寻访",
             "SPECIAL": "特殊寻访", "ATTAIN": "定向寻访",
+            "GACHAWITHSPECIFIED6": "自选寻访",
         }.get(pool_type, f"未知卡池（{pool_type or '未标注类型'}）")
         if not unpublished:
             return label
