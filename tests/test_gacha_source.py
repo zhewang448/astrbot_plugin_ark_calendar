@@ -1,9 +1,12 @@
 import asyncio
 from datetime import datetime
+from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
 import pytest
 
+from core.models import TimelineItem
+from core.renderer import CalendarRenderer
 from sources.gacha import GachaSource
 
 
@@ -267,3 +270,73 @@ def test_custom_legacy_failure_is_still_reported():
 
 def test_fesclassic_is_labeled_as_core_selection():
     assert GachaSource.label("FESCLASSIC") == "中坚甄选"
+
+
+def _specified_six_pool(**changes):
+    return {
+        **_torappu_pool(),
+        "gachaRuleType": "GACHAWITHSPECIFIED6",
+        "dynMeta": {"charIdList": [f"char_{index}" for index in range(10)]},
+        **changes,
+    }
+
+
+def _load_specified_six_pool(raw_pool, overview=None):
+    source = GachaSource(FakeHttp({"gachaPoolClient": [raw_pool]}, {}))
+    pools = asyncio.run(source.pools(
+        datetime(2026, 8, 18, tzinfo=CN_TZ),
+        datetime(2026, 9, 2, tzinfo=CN_TZ),
+        overview or [],
+    ))
+    assert len(pools) == 1
+    return pools[0]
+
+
+@pytest.mark.parametrize("name", ["适合多种场合的强力干员", "", "123"])
+@pytest.mark.parametrize("count", [6, 10])
+def test_specified_six_pool_is_visible_with_placeholder_name(name, count):
+    pool = _load_specified_six_pool(_specified_six_pool(
+        gachaPoolName=name,
+        dynMeta={"charIdList": [f"char_{index}" for index in range(count)]},
+    ))
+
+    assert pool["name"] == f"自选寻访（{count}选1）"
+    assert pool["unpublished"] is False
+    item = TimelineItem(
+        id=pool["id"], name=pool["name"], category="gacha",
+        item_type=GachaSource.label(pool["type"], pool["name"], pool["unpublished"]),
+        start=pool["start"].isoformat(), end=pool["end"].isoformat(),
+    )
+    renderer = CalendarRenderer.__new__(CalendarRenderer)
+    renderer.service = SimpleNamespace(show_unpublished_pools=lambda: False)
+    assert renderer._visible_gacha_pools([item]) == [item]
+
+
+@pytest.mark.parametrize("use_overview", [False, True])
+def test_specified_six_pool_preserves_confirmed_name(use_overview):
+    raw = _specified_six_pool() if use_overview else _specified_six_pool(gachaPoolName="正式名称")
+    overview = [{
+        "name": "PRTS正式名称", "start": "2026-08-18 16:00",
+        "end": "2026-09-01 03:59", "six": [], "image": "",
+    }] if use_overview else []
+    pool = _load_specified_six_pool(raw, overview)
+
+    assert pool["name"] == ("PRTS正式名称" if use_overview else "正式名称")
+    assert pool["unpublished"] is False
+
+
+@pytest.mark.parametrize("metadata", [None, {}, {"charIdList": []}, {"charIdList": "invalid"}, "invalid"])
+def test_specified_six_pool_without_choices_stays_unpublished(metadata):
+    pool = _load_specified_six_pool(_specified_six_pool(dynMeta=metadata))
+
+    assert pool["name"] == "未知卡池"
+    assert pool["unpublished"] is True
+    assert GachaSource.label(pool["type"], pool["name"], True) == "未公布自选卡池"
+
+
+@pytest.mark.parametrize("pool_type", ["NORMAL", "FUTURE_RULE"])
+def test_other_placeholder_pools_are_not_confirmed_by_choices(pool_type):
+    pool = _load_specified_six_pool(_specified_six_pool(gachaRuleType=pool_type))
+
+    assert pool["name"] == "未知卡池"
+    assert pool["unpublished"] is True
